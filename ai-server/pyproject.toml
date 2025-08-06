@@ -7,4 +7,5 @@ requires-python = ">=3.12"
 dependencies = [
     "langchain>=0.3.26",
     "langgraph>=0.5.4",
+    "paho-mqtt>=2.1.0",
 ]
