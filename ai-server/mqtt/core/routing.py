@@ -40,13 +40,6 @@ class MessageRouter:
         self._message_count += 1
         binary_data = None
         
-        # TODO: PERFORMANCE OPTIMIZATION - FlatBuffers Integration Point
-        # Once we identify high-frequency bottlenecks, add binary payload detection here:
-        # if self._is_high_frequency_topic(topic) and self._is_flatbuffer_payload(payload):
-        #     parsed_payload = self._parse_flatbuffer(payload)
-        # else:
-        #     # Fall back to JSON for control messages and debugging
-        
         # Fast JSON parsing with fallback
         try:
             parsed_payload = json.loads(payload)
@@ -72,52 +65,79 @@ class MessageRouter:
         )
     
     def _parse_topic(self, topic: str) -> dict:
-        """Topic parsing according to NAILA protocol"""
+        """
+        Parse MQTT topic according to NAILA protocol structure.
+        
+        Topic formats:
+        - naila/devices/{device_id}/{message_type}/{subtype}
+        - naila/ai/processing/{processing_type}/{device_id}
+        - naila/ai/orchestration/{orchestration_type}
+        - naila/ai/responses/{response_type}/{device_id}
+        - naila/system/{system_type}/{subtype}
+        """
         parts = topic.split('/')
         
+        # Initialize result dictionary
+        result = {
+            "category": None,
+            "device_id": None,
+            "message_type": None,
+            "subtype": None
+        }
+        
+        # Validate basic structure: must start with "naila" and have at least 3 parts
         if len(parts) < 3 or parts[0] != "naila":
-            return {
-                "category": None,
-                "device_id": None,
-                "message_type": None,
-                "subtype": None
-            }
+            return result
         
-        category_str = parts[1]
-        category = None
-        device_id = None
-        message_type = None
-        subtype = None
+        # Topic structure indexes
+        PROTOCOL_PREFIX = 0  # "naila"
+        CATEGORY = 1         # "devices", "ai", "system"
         
+        # Parse category
+        category_str = parts[CATEGORY]
         try:
             category = TopicCategory(category_str)
         except ValueError:
-            pass
+            return result
         
-        if category == TopicCategory.DEVICES and len(parts) >= 5:
-            device_id = parts[2]
-            message_type = parts[3]
-            subtype = parts[4] if len(parts) > 4 else None
-        elif category == TopicCategory.AI and len(parts) >= 4:
-            message_type = parts[2]
-            if parts[2] == "processing" and len(parts) >= 5:
-                subtype = parts[3]
-                device_id = parts[4] if len(parts) > 4 else None
-            elif parts[2] == "orchestration" and len(parts) >= 4:
-                subtype = parts[3]
-            elif parts[2] == "responses" and len(parts) >= 5:
-                subtype = parts[3]
-                device_id = parts[4] if len(parts) > 4 else None
-        elif category == TopicCategory.SYSTEM and len(parts) >= 4:
-            message_type = parts[2]
-            subtype = parts[3] if len(parts) > 3 else None
+        result["category"] = category
         
-        return {
-            "category": category,
-            "device_id": device_id,
-            "message_type": message_type,
-            "subtype": subtype
-        }
+        # Parse based on category type
+        if category == TopicCategory.DEVICES:
+            # Format: naila/devices/{device_id}/{message_type}/{subtype}
+            if len(parts) >= 5:
+                result["device_id"] = parts[2]
+                result["message_type"] = parts[3]
+                result["subtype"] = parts[4]
+                
+        elif category == TopicCategory.AI:
+            # AI topics have different structures based on message type
+            if len(parts) >= 3:
+                ai_type = parts[2]
+                result["message_type"] = ai_type
+                
+                if ai_type == "processing" and len(parts) >= 5:
+                    # Format: naila/ai/processing/{processing_type}/{device_id}
+                    result["subtype"] = parts[3]
+                    result["device_id"] = parts[4]
+                    
+                elif ai_type == "orchestration" and len(parts) >= 4:
+                    # Format: naila/ai/orchestration/{orchestration_type}
+                    result["subtype"] = parts[3]
+                    
+                elif ai_type == "responses" and len(parts) >= 5:
+                    # Format: naila/ai/responses/{response_type}/{device_id}
+                    result["subtype"] = parts[3]
+                    result["device_id"] = parts[4]
+                    
+        elif category == TopicCategory.SYSTEM:
+            # Format: naila/system/{system_type}/{subtype}
+            if len(parts) >= 3:
+                result["message_type"] = parts[2]
+                if len(parts) >= 4:
+                    result["subtype"] = parts[3]
+        
+        return result
     
     async def route_message(self, message: MQTTMessage):
         """Route message to appropriate handlers with caching"""
@@ -149,10 +169,22 @@ class MessageRouter:
             self.logger.debug(f"No handler found for topic: {message.topic}")
     
     def _topic_matches(self, actual_topic: str, pattern: str) -> bool:
-        """Topic matching with wildcards"""
+        """
+        Check if an actual topic matches a pattern with MQTT wildcards.
+        
+        MQTT wildcards:
+        - '+' matches exactly one topic level (e.g., naila/devices/+/sensors/temperature)
+        - '#' matches zero or more topic levels, must be at end (e.g., naila/devices/#)
+        
+        Examples:
+        - Pattern: naila/devices/+/sensors/+ matches naila/devices/robot1/sensors/temperature
+        - Pattern: naila/devices/# matches naila/devices/robot1/sensors/temperature
+        """
+        # Exact match is fastest
         if pattern == actual_topic:
             return True
         
+        # No wildcards means no match possible
         if '+' not in pattern and '#' not in pattern:
             return False
         
@@ -162,21 +194,41 @@ class MessageRouter:
         return self._match_topic_parts(topic_parts, pattern_parts)
     
     def _match_topic_parts(self, topic_parts: List[str], pattern_parts: List[str]) -> bool:
-        """Fast topic part matching"""
+        """
+        Match topic parts against pattern parts with wildcard support.
+        
+        Algorithm:
+        - Iterate through both lists simultaneously
+        - '#' wildcard matches everything remaining (multi-level wildcard)
+        - '+' wildcard matches exactly one level (single-level wildcard)
+        - Regular strings must match exactly
+        - Both lists must be fully consumed for a match (unless '#' is encountered)
+        
+        Args:
+            topic_parts: The actual topic split into parts (e.g., ['naila', 'devices', 'robot1'])
+            pattern_parts: The pattern split into parts (e.g., ['naila', 'devices', '+'])
+            
+        Returns:
+            True if the topic matches the pattern, False otherwise
+        """
         i = j = 0
         
         while i < len(topic_parts) and j < len(pattern_parts):
             if pattern_parts[j] == '#':
+                # Multi-level wildcard matches everything remaining
                 return True
             elif pattern_parts[j] == '+':
+                # Single-level wildcard matches exactly one level
                 i += 1
                 j += 1
             elif pattern_parts[j] == topic_parts[i]:
+                # Exact string match required
                 i += 1
                 j += 1
             else:
                 return False
         
+        # Both lists must be fully consumed for a match
         return i == len(topic_parts) and j == len(pattern_parts)
     
     def get_routing_stats(self) -> dict:

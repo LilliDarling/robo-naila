@@ -80,10 +80,9 @@ class NailaMQTTService:
         except Exception as e:
             self.logger.error(f"Message handling error for {topic}: {e}")
     
-    def publish_device_action(self, device_id: str, action_type: str, subtype: str, 
-                             data: dict, qos: int = None):
-        """Publish action command to device"""
-        return self.publisher.publish_device_action(device_id, action_type, subtype, data, qos)
+    def publish_ai_response(self, response_type: str, device_id: str, data: dict, qos: int = None):
+        """Publish AI-generated response to device"""
+        return self.publisher.publish_ai_response(response_type, device_id, data, qos)
     
     def publish_ai_processing_result(self, processing_type: str, device_id: str, 
                                    data: dict, qos: int = None):
@@ -93,10 +92,6 @@ class NailaMQTTService:
     def publish_ai_orchestration(self, orchestration_type: str, data: dict, qos: int = None):
         """Publish AI orchestration message"""
         return self.publisher.publish_ai_orchestration(orchestration_type, data, qos)
-    
-    def publish_ai_response(self, response_type: str, device_id: str, data: dict, qos: int = None):
-        """Publish AI response to device"""
-        return self.publisher.publish_ai_response(response_type, device_id, data, qos)
     
     def publish_system_message(self, system_type: str, subtype: str, data: dict, qos: int = None):
         """Publish system message"""

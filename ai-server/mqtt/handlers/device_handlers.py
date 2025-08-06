@@ -5,6 +5,15 @@ from mqtt.core.models import MQTTMessage
 from .base import BaseHandler
 
 
+# Topic patterns for device messages
+TOPIC_DEVICE_SENSORS = "naila/devices/+/sensors/+"
+TOPIC_DEVICE_WAKE_WORD = "naila/devices/+/audio/wake_word"
+TOPIC_DEVICE_AUDIO_STREAM = "naila/devices/+/audio/stream"
+TOPIC_DEVICE_VISION_EVENT = "naila/devices/+/vision/event"
+TOPIC_DEVICE_VISION_FRAME = "naila/devices/+/vision/frame"
+TOPIC_DEVICE_HEARTBEAT = "naila/devices/+/status/heartbeat"
+
+
 class DeviceHandlers(BaseHandler):
     """Handlers for device-related MQTT messages (sensors, audio, vision, status)"""
     
@@ -15,12 +24,12 @@ class DeviceHandlers(BaseHandler):
     def register_handlers(self):
         """Register all device-related handlers"""
         handlers = {
-            "naila/devices/+/sensors/+": self.handle_sensor_data,
-            "naila/devices/+/audio/wake_word": self.handle_wake_word,
-            "naila/devices/+/audio/stream": self.handle_audio_stream,
-            "naila/devices/+/vision/event": self.handle_vision_event,
-            "naila/devices/+/vision/frame": self.handle_vision_frame,
-            "naila/devices/+/status/heartbeat": self.handle_device_heartbeat,
+            TOPIC_DEVICE_SENSORS: self.handle_sensor_data,
+            TOPIC_DEVICE_WAKE_WORD: self.handle_wake_word,
+            TOPIC_DEVICE_AUDIO_STREAM: self.handle_audio_stream,
+            TOPIC_DEVICE_VISION_EVENT: self.handle_vision_event,
+            TOPIC_DEVICE_VISION_FRAME: self.handle_vision_frame,
+            TOPIC_DEVICE_HEARTBEAT: self.handle_device_heartbeat,
         }
         
         for topic, handler in handlers.items():
@@ -31,26 +40,16 @@ class DeviceHandlers(BaseHandler):
         if not message.device_id or not message.subtype:
             return
         
-        # TODO: PERFORMANCE OPTIMIZATION - High-Frequency Sensor Data
-        # Some sensors (IMU, proximity) can send 10-100 Hz data streams
-        # These would benefit from FlatBuffers for:
-        # - Batch sensor readings in single message
-        # - Zero-copy access to sensor arrays
-        # - Smaller payloads for better wireless performance
-        
         device_state = await self._get_or_create_device_state(message.device_id)
         await device_state.update_sensor(message.subtype, message.payload, message.timestamp)
         
-        # Only process special sensor events, not all sensor data
-        if message.subtype == "touch" and message.payload.get("state") == "pressed":
-            await self._handle_touch_interaction(message.device_id, message.payload)
-        elif message.subtype == "proximity" and message.payload.get("distance", 100) < 20:
-            await self._handle_proximity_alert(message.device_id, message.payload)
-        elif message.subtype == "battery" and message.payload.get("percentage", 100) < 20:
-            await self._handle_low_battery(message.device_id, message.payload)
+        # Store sensor data for AI context, but don't trigger direct actions
+        # Battery monitoring could trigger AI notifications
+        if message.subtype == "battery" and message.payload.get("percentage", 100) < 20:
+            await self._handle_low_battery_for_ai(message.device_id, message.payload)
     
     async def handle_wake_word(self, message: MQTTMessage):
-        """Handle wake word detection - fast response critical"""
+        """Handle wake word detection - trigger AI listening mode"""
         if not message.device_id or not message.payload.get("detected"):
             return
         
@@ -59,29 +58,25 @@ class DeviceHandlers(BaseHandler):
             return
         
         self.logger.info(f"Wake word detected: {message.device_id} ({confidence:.2f})")
-
-        command_data = {
-            "command_id": f"cmd_{int(datetime.now(timezone.utc).timestamp() * 1000)}",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "action": "start_listening",
-            "timeout_seconds": 10
-        }
         
-        # Non-blocking publish
-        self.mqtt_service.publish_device_action(
-            message.device_id, "audio", "control", command_data, qos=1
-        )
+        # Update conversation context to indicate listening mode
+        context = await self._get_or_create_conversation_context(message.device_id)
+        context.listening_mode = True
+        context.wake_word_timestamp = message.timestamp
+        
+        # AI orchestration will handle the response
+        orchestration_data = {
+            "event": "wake_word_detected",
+            "device_id": message.device_id,
+            "confidence": confidence,
+            "timestamp": message.timestamp
+        }
+        self.mqtt_service.publish_ai_orchestration("wake_word", orchestration_data, qos=1)
     
     async def handle_audio_stream(self, message: MQTTMessage):
         """Handle incoming audio stream data"""
         if not message.device_id or not message.binary_data:
             return
-        
-        # TODO: PERFORMANCE OPTIMIZATION - Audio Stream FlatBuffers
-        # High-frequency audio chunks (50-100 msg/sec) would benefit most from FlatBuffers:
-        # - Zero-copy audio data access
-        # - ~10x faster parsing than JSON
-        # - Smaller payload size for better network utilization
         
         # Queue for async processing to avoid blocking
         try:
@@ -110,12 +105,6 @@ class DeviceHandlers(BaseHandler):
         """Handle incoming vision frames - queue for async processing"""
         if not message.device_id or not message.binary_data:
             return
-        
-        # TODO: PERFORMANCE OPTIMIZATION - Vision Frame FlatBuffers
-        # High-frequency vision frames (30 fps) are second-highest priority for FlatBuffers:
-        # - Large binary image data (JPEG/raw pixels)
-        # - Zero-copy access to image buffer
-        # - Metadata (resolution, format, timestamp) without separate parsing
 
         try:
             await self._task_queue.put_nowait({
@@ -142,57 +131,25 @@ class DeviceHandlers(BaseHandler):
         if device_state.status == "offline":
             self.logger.warning(f"Device {message.device_id} went offline")
     
-    async def _handle_touch_interaction(self, device_id: str, touch_data: Dict[str, Any]):
-        """Handle touch sensor interactions - fast response"""
-        duration = touch_data.get("duration", 0)
-        if duration < 100:  # Ignore very short touches (noise)
-            return
-        
-        command_data = {
-            "command_id": f"cmd_{int(datetime.now(timezone.utc).timestamp() * 1000)}",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "expression": "happy",
-            "intensity": 0.7,
-            "duration_ms": 1500
-        }
-        
-        self.mqtt_service.publish_device_action(
-            device_id, "display", "expression", command_data, qos=1
-        )
-    
-    async def _handle_proximity_alert(self, device_id: str, proximity_data: Dict[str, Any]):
-        """Handle proximity sensor alerts - fast alert response"""
-        distance = proximity_data.get("distance", 100)
-        if distance > 15:  # Only very close objects
-            return
-        
-        command_data = {
-            "command_id": f"cmd_{int(datetime.now(timezone.utc).timestamp() * 1000)}",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "expression": "alert",
-            "intensity": 0.9,
-            "duration_ms": 800
-        }
-        
-        self.mqtt_service.publish_device_action(
-            device_id, "display", "expression", command_data, qos=1
-        )
-    
-    async def _handle_low_battery(self, device_id: str, battery_data: Dict[str, Any]):
-        """Handle low battery alerts - system alert"""
+    async def _handle_low_battery_for_ai(self, device_id: str, battery_data: Dict[str, Any]):
+        """Handle low battery - trigger AI to generate appropriate response"""
         percentage = battery_data.get("percentage", 100)
         if percentage > 20:  # Only actual low battery
             return
         
-        alert_data = {
+        # Trigger AI to generate a low battery notification/response
+        ai_task_data = {
+            "task_id": f"battery_{int(datetime.now(timezone.utc).timestamp() * 1000)}",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "alert_type": "low_battery",
             "device_id": device_id,
+            "task_type": "battery_alert",
             "battery_percentage": percentage,
-            "severity": "critical" if percentage < 10 else "medium"
+            "severity": "critical" if percentage < 10 else "warning",
+            "priority": "high" if percentage < 10 else "normal"
         }
         
-        self.mqtt_service.publish_system_message("health", "alert", alert_data, qos=1)
+        # Let AI orchestration handle generating appropriate user notification
+        self.mqtt_service.publish_ai_orchestration("system_alert", ai_task_data, qos=1)
     
     async def get_performance_stats(self) -> Dict[str, Any]:
         """Get device handler performance statistics"""

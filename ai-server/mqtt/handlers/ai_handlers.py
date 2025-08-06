@@ -4,16 +4,23 @@ from mqtt.core.models import MQTTMessage
 from .base import BaseHandler
 
 
+# Topic patterns for AI processing and orchestration
+TOPIC_AI_STT_RESULT = "naila/ai/processing/stt/+"
+TOPIC_AI_VISION_ANALYSIS = "naila/ai/processing/vision/+"
+TOPIC_AI_MAIN_TASK = "naila/ai/orchestration/main/task"
+TOPIC_AI_PERSONALITY_RESPONSE = "naila/ai/orchestration/personality/response"
+
+
 class AIHandlers(BaseHandler):
     """Handlers for AI processing and orchestration messages"""
     
     def register_handlers(self):
         """Register all AI-related handlers"""
         handlers = {
-            "naila/ai/processing/stt/+": self.handle_stt_result,
-            "naila/ai/processing/vision/+": self.handle_vision_analysis,
-            "naila/ai/orchestration/main/task": self.handle_main_task,
-            "naila/ai/orchestration/personality/response": self.handle_personality_response,
+            TOPIC_AI_STT_RESULT: self.handle_stt_result,
+            TOPIC_AI_VISION_ANALYSIS: self.handle_vision_analysis,
+            TOPIC_AI_MAIN_TASK: self.handle_main_task,
+            TOPIC_AI_PERSONALITY_RESPONSE: self.handle_personality_response,
         }
         
         for topic, handler in handlers.items():

@@ -5,7 +5,7 @@ from .ai_handlers import AIHandlers
 from .system_handlers import SystemHandlers
 
 
-class ProtocolHandlerCoordinator:
+class ProtocolHandler:
     """Coordinates all MQTT protocol handlers - clean, focused entry point"""
     
     def __init__(self, mqtt_service: NailaMQTTService):

@@ -15,10 +15,10 @@ class MQTTPublisher:
         self._publish_count = 0
         self._publish_errors = 0
     
-    def publish_device_action(self, device_id: str, action_type: str, subtype: str, 
-                             data: dict, qos: Optional[int] = None) -> bool:
-        """Publish action command to device"""
-        topic = f"naila/devices/{device_id}/actions/{action_type}/{subtype}"
+    def publish_ai_response(self, response_type: str, device_id: str, data: dict, 
+                          qos: Optional[int] = None) -> bool:
+        """Publish AI-generated response to device (TTS audio, generated text, etc)"""
+        topic = f"naila/ai/responses/{response_type}/{device_id}"
         return self._publish_fast(topic, data, qos)
     
     def publish_ai_processing_result(self, processing_type: str, device_id: str, 
@@ -31,12 +31,6 @@ class MQTTPublisher:
                                qos: Optional[int] = None) -> bool:
         """Publish AI orchestration message"""
         topic = f"naila/ai/orchestration/{orchestration_type}"
-        return self._publish_fast(topic, data, qos)
-    
-    def publish_ai_response(self, response_type: str, device_id: str, data: dict, 
-                          qos: Optional[int] = None) -> bool:
-        """Publish AI response to device"""
-        topic = f"naila/ai/responses/{response_type}/{device_id}"
         return self._publish_fast(topic, data, qos)
     
     def publish_system_message(self, system_type: str, subtype: str, data: dict, 
@@ -63,13 +57,6 @@ class MQTTPublisher:
         self._publish_count += 1
         
         try:
-            # TODO: PERFORMANCE OPTIMIZATION - FlatBuffers Serialization Point
-            # For high-frequency topics (audio/vision streams), consider FlatBuffers:
-            # if self._is_high_frequency_topic(topic):
-            #     payload = self._serialize_flatbuffer(data, topic)
-            # else:
-            #     payload = json.dumps(data, separators=(',', ':'))  # Compact JSON for control
-            
             payload = json.dumps(data, separators=(',', ':'))  # Compact JSON
             return self.connection.publish(topic, payload, qos)
             

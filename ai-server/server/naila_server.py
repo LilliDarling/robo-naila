@@ -1,7 +1,7 @@
 import logging
 from config.mqtt_config import MQTTConfig
 from mqtt.core.service_coordinator import NailaMQTTService
-from mqtt.handlers.coordinator import ProtocolHandlerCoordinator
+from mqtt.handlers.coordinator import ProtocolHandler
 from .lifecycle import ServerLifecycleManager
 
 
@@ -15,7 +15,7 @@ class NailaAIServer:
         # Initialize core components
         self.config = MQTTConfig.from_env()
         self.mqtt_service = NailaMQTTService(self.config)
-        self.protocol_handlers = ProtocolHandlerCoordinator(self.mqtt_service)
+        self.protocol_handlers = ProtocolHandler(self.mqtt_service)
         
         # Initialize lifecycle manager
         self.lifecycle = ServerLifecycleManager(self.mqtt_service, self.protocol_handlers)
