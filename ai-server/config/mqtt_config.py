@@ -20,8 +20,8 @@ class MQTTConfig:
       broker_host=os.getenv("MQTT_BROKER_HOST", "localhost"),
       broker_port=int(os.getenv("MQTT_BROKER_PORT", "1883")),
       client_id=os.getenv("MQTT_CLIENT_ID", "ai-server"),
-      username=os.getenv("MQTT_USERNAME", "user"),
-      password=os.getenv("MQTT_PASSWORD", "password"),
+      username=os.getenv("MQTT_USERNAME"),
+      password=os.getenv("MQTT_PASSWORD"),
       keepalive=int(os.getenv("MQTT_KEEPALIVE", "60")),
       qos=int(os.getenv("MQTT_QOS", "1")),
       clean_session=os.getenv("MQTT_CLEAN_SESSION", "true").lower() == "true"

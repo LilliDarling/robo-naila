@@ -110,7 +110,7 @@ These instructions assume you have `uv` installed. If not, follow the `uv` insta
 
 2.  **Start the main AI server:**
     ```bash
-    python main.py
+    uv run main.py
     ```
     The server will start listening for connections from the robot and initializing the AI models. You should see log messages indicating that the services are starting up.
 
