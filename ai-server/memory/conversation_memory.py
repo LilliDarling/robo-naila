@@ -35,11 +35,18 @@ class ConversationMemory:
     def _start_background_cleanup(self):
         """Start background cleanup task"""
         try:
-            loop = asyncio.get_event_loop()
+            # Try to get running loop first (modern approach)
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # No running loop, try to get event loop (fallback)
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
             self._cleanup_task = loop.create_task(self._background_cleanup())
-        except RuntimeError:
-            # No event loop running - cleanup will be manual
-            logger.info("No event loop found - background cleanup disabled")
+        except Exception as e:
+            # No event loop available - cleanup will be manual
+            logger.info(f"Background cleanup disabled: {e}")
     
     async def _background_cleanup(self):
         """Background task for memory cleanup"""

@@ -26,6 +26,9 @@ class InputProcessor(BaseAgent):
     
     async def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Process input based on type"""
+        import time
+        start_time = time.time()
+        
         self.log_state(state, "start")
         
         input_type = state.get("input_type", "text")
@@ -43,12 +46,16 @@ class InputProcessor(BaseAgent):
         # Basic intent detection
         intent = self._detect_intent(processed_text)
         
+        # Calculate processing time
+        processing_time_ms = int((time.time() - start_time) * 1000)
+        
         # Update state
         state["processed_text"] = processed_text
         state["intent"] = intent
         state["timestamp"] = datetime.now(timezone.utc).isoformat()
+        state["processing_time_ms"] = processing_time_ms
         
-        self.logger.info(f"Processed: '{processed_text}' -> intent: {intent}")
+        self.logger.info(f"Processed: '{processed_text}' -> intent: {intent} ({processing_time_ms}ms)")
         return state
     
     def _setup_model(self):
@@ -143,9 +150,11 @@ class InputProcessor(BaseAgent):
     
     def _detect_intent_patterns(self, text: str) -> str:
         """Fast pattern-based fallback"""
-        text_lower = text.lower()
+        text_lower = text.lower().strip()
+        words = text_lower.split()
         
-        if any(greeting in text_lower for greeting in ["hello", "hi", "hey"]):
+        # Check for specific greeting words (as separate words to avoid false matches)
+        if any(word in ["hello", "hi", "hey"] for word in words):
             return "greeting"
         elif "time" in text_lower:
             return "time_query"

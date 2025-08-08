@@ -92,7 +92,8 @@ class ResponseGenerator(BaseAgent):
         response = self._generate_base_response(intent, text, context, history)
         self._cache_response(cache_key, response)
         
-        return response
+        # Apply personalization to new responses too
+        return self._personalize_response(response, context)
     
     def _generate_clarification_response(self, text: str, confidence: float) -> str:
         """Generate response for low-confidence input"""
