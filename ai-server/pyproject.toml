@@ -8,4 +8,10 @@ dependencies = [
     "langchain>=0.3.26",
     "langgraph>=0.5.4",
     "paho-mqtt>=2.1.0",
+    "sentence-transformers>=2.2.0",
+    "torch>=2.0.0",
+    "numpy>=1.24.0",
+    "accelerate>=0.20.0",
+    "psutil>=5.9.0",
+    "py-cpuinfo>=9.0.0",
 ]
