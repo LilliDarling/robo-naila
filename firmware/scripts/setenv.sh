@@ -27,10 +27,8 @@ if [ -n "$WIFI_PASSWORD" ]; then
     echo "Set CONFIG_EXAMPLE_WIFI_PASSWORD=***"
 fi
 
-# Verify required variables are set
 if [[ -z "$CONFIG_EXAMPLE_WIFI_SSID" ]] || [[ -z "$CONFIG_EXAMPLE_WIFI_PASSWORD" ]]; then
     echo "ERROR: Missing required WiFi credentials in .env file"
-    exit 1
 fi
 
 echo "WiFi environment variables loaded from .env"

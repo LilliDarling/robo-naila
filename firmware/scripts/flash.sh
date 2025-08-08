@@ -58,10 +58,10 @@ fi
 cd "$(dirname "$0")/.."
 
 # Get ESP-IDF environment
-if [ -f "/Users/j/esp/esp-idf/export.sh" ]; then
-    source "/Users/j/esp/esp-idf/export.sh"
+if [ -f "/Users/j/code/esp/esp-idf/export.sh" ]; then
+    source "/Users/j/code/esp/esp-idf/export.sh"
 else
-    echo "ERROR: ESP-IDF not found at /Users/j/esp/esp-idf/export.sh"
+    echo "ERROR: ESP-IDF not found at /Users/j/code/esp/esp-idf/export.sh"
     exit 1
 fi
 

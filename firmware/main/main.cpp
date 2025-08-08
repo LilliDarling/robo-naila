@@ -3,93 +3,113 @@
 #include <esp_log.h>
 #include <esp_netif.h>
 #include <esp_system.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <nvs_flash.h>
-
-#include <tensorflow/lite/micro/micro_interpreter.h>
-#include <tensorflow/lite/micro/micro_mutable_op_resolver.h>
-#include <tensorflow/lite/schema/schema_generated.h>
+// ADDED: signal.h for potential shutdown handling - can be removed if causing issues
+#include <signal.h>
+// END ADDED
 
 extern "C" {
-#include "../components/wifi/include/manager.h"
-#include "config.h"
+#include "app_manager.h"
+#include "common_types.h"
+#include "config_manager.h"
+#include "error_handling.h"
+#include "naila_log.h"
 }
 
-// Tag for ESP_LOG messages
 static const char *TAG = "MAIN_APP";
 
-// --- Global TFLM Objects ---
+// Application callback functions
+static void on_state_change(app_state_t old_state, app_state_t new_state) {
+  NAILA_LOGI(TAG, "Application state changed: %d -> %d", old_state, new_state);
+}
 
-// --- Global Instances ---
+static void on_wifi_connected(void) {
+  NAILA_LOGI(TAG, "WiFi connection established");
+}
 
-// WiFi initialization function
-static esp_err_t initialize_wifi() {
-  // Initialize NVS
+static void on_wifi_disconnected(void) {
+  NAILA_LOGW(TAG, "WiFi connection lost");
+}
+
+static void on_error(naila_err_t error) {
+  NAILA_LOGE(TAG, "Application error occurred: %s", naila_err_to_string(error));
+}
+
+static naila_err_t initialize_system(void) {
+  NAILA_LOG_FUNC_ENTER(TAG);
+
+  // Initialize NVS flash for system configuration
   esp_err_t ret = nvs_flash_init();
   if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
       ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    ESP_ERROR_CHECK(nvs_flash_erase());
+    NAILA_ESP_CHECK(nvs_flash_erase(), TAG, "NVS flash erase");
     ret = nvs_flash_init();
   }
-  ESP_ERROR_CHECK(ret);
+  NAILA_ESP_CHECK(ret, TAG, "NVS flash init");
 
   // Initialize network interface
-  ESP_ERROR_CHECK(esp_netif_init());
-  ESP_ERROR_CHECK(esp_event_loop_create_default());
+  NAILA_ESP_CHECK(esp_netif_init(), TAG, "Network interface init");
+  NAILA_ESP_CHECK(esp_event_loop_create_default(), TAG, "Event loop create");
 
-  // Initialize WiFi and scan networks
-  ESP_LOGI(TAG, "Initializing WiFi...");
-  ESP_ERROR_CHECK(wifi_manager_init());
-
-  // Scan for available networks first
-  ESP_LOGI(TAG, "Scanning for available networks...");
-  ESP_ERROR_CHECK(wifi_manager_scan_networks());
-
-  wifi_config_simple_t wifi_config = {.ssid = CONFIG_WIFI_SSID,
-      .password = CONFIG_WIFI_PASSWORD,
-      .max_retry = CONFIG_WIFI_MAXIMUM_RETRY};
-
-  ESP_LOGI(TAG, "Connecting to WiFi SSID: %s", wifi_config.ssid);
-  esp_err_t wifi_result = wifi_manager_connect(&wifi_config);
-  if (wifi_result != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to connect to WiFi (error: 0x%x)", wifi_result);
-    return wifi_result;
-  }
-  ESP_LOGI(TAG, "WiFi connected successfully!");
-
-  return ESP_OK;
+  NAILA_LOG_FUNC_EXIT(TAG);
+  return NAILA_OK;
 }
 
-// Main Entry Point
 extern "C" void app_main() {
-  ESP_LOGI(TAG, "Starting AI Robot Application...");
+  NAILA_LOGI(TAG, "Starting NAILA Robot Application...");
+  NAILA_TIME_START(total_init);
 
-  // 1. Initialize WiFi and networking
-  ESP_LOGI(TAG, "Initializing WiFi...");
-  if (initialize_wifi() != ESP_OK) {
-    ESP_LOGE(TAG, "WiFi initialization failed!");
+  // Initialize basic system components
+  naila_err_t result = initialize_system();
+  if (result != NAILA_OK) {
+    NAILA_LOGE(
+        TAG, "System initialization failed: %s", naila_err_to_string(result));
     return;
   }
 
-  // 2. Allocate tensor arena from PSRAM (SPIRAM)
+  // Setup application manager callbacks
+  app_callbacks_t callbacks = {.on_state_change = on_state_change,
+      .on_wifi_connected = on_wifi_connected,
+      .on_wifi_disconnected = on_wifi_disconnected,
+      .on_error = on_error};
 
-  // 3. Load the Model
-
-  // 4. Populate the OpResolver with necessary operations
-
-  // 5. Build an Interpreter
-
-  // 6. Initialize Audio and Feature Providers
-
-  // 7. Main Inference Loop
-  while (1) {
-    if (wifi_manager_is_connected()) {
-      ESP_LOGI(TAG, "WiFi connected, ready for AI processing");
-      // TODO: Add TensorFlow Lite model inference here
-    } else {
-      ESP_LOGE(TAG, "WiFi disconnected!");
-    }
-    vTaskDelay(pdMS_TO_TICKS(10000)); // Check every 10 seconds
+  // Initialize application manager
+  result = app_manager_init(&callbacks);
+  if (result != NAILA_OK) {
+    NAILA_LOGE(TAG, "Application manager initialization failed: %s",
+        naila_err_to_string(result));
+    return;
   }
+
+  // Start application services
+  result = app_manager_start();
+  if (result != NAILA_OK) {
+    NAILA_LOGE(
+        TAG, "Application start failed: %s", naila_err_to_string(result));
+    return;
+  }
+
+  NAILA_TIME_END(TAG, total_init);
+  NAILA_LOGI(TAG, "NAILA Robot Application started successfully");
+
+  // Run main application loop
+  result = app_manager_run_main_loop();
+  if (result != NAILA_OK) {
+    NAILA_LOGE(
+        TAG, "Main loop exited with error: %s", naila_err_to_string(result));
+  }
+
+  // ADDED: Enhanced shutdown sequence with timing delays - can be removed if causing issues
+  // Clean shutdown with graceful WiFi cleanup
+  NAILA_LOGI(TAG, "Initiating graceful application shutdown");
+  app_manager_stop();
+  
+  // Small delay to ensure cleanup completes
+  vTaskDelay(pdMS_TO_TICKS(1000));
+  
+  NAILA_LOGI(TAG, "NAILA Robot Application shutdown complete");
+  // END ADDED
 }

@@ -5,15 +5,6 @@ set -e  # Exit on any error
 
 echo "🔧 Building ESP32 firmware..."
 
-# Get ESP-IDF environment
-echo "Setting up ESP-IDF environment..."
-if [ -f "/Users/j/esp/esp-idf/export.sh" ]; then
-    source "/Users/j/esp/esp-idf/export.sh"
-else
-    echo "ERROR: ESP-IDF not found at /Users/j/esp/esp-idf/export.sh"
-    exit 1
-fi
-
 # Change to firmware directory (parent of scripts)
 cd "$(dirname "$0")/.."
 
@@ -23,13 +14,9 @@ if [ -d "build" ]; then
     rm -rf build
 fi
 
-# Load environment variables
-echo "Loading WiFi credentials..."
-source ./scripts/setenv.sh
-
-# Build the project
-echo "Building project..."
-idf.py build
+# Get ESP-IDF environment, load credentials, and build in same shell context
+echo "Setting up ESP-IDF environment, loading WiFi credentials, and building..."
+source "/Users/j/code/esp/esp-idf/export.sh" && source ./scripts/setenv.sh && idf.py build
 
 echo "✅ Build completed successfully!"
 echo "Run './flash.sh' to flash to device"
