@@ -43,39 +43,90 @@ This is a standard ESP-IDF project structure aligned with the new multi-agent ar
 * **`CMakeLists.txt`**: The build system configuration file for this project. It defines how source files are compiled and linked.
 * **`sdkconfig.defaults`**: Default configuration options for `menuconfig`. Useful for maintaining consistent settings.
 
+## Configuration Setup
+
+Before building, you need to configure WiFi credentials:
+
+1. **Create environment file:**
+   Create a `.env` file in the project root (`../env`) with your WiFi credentials:
+   ```bash
+   # WiFi Configuration
+   WIFI_SSID="your_network_name"
+   WIFI_PASSWORD="your_password"
+   ```
+   
+   ⚠️ **Important**: The `.env` file is gitignored and should never be committed to version control.
+
 ## Building and Flashing
 
-Once your ESP-IDF environment is set up and active, follow these steps to build and flash the firmware onto your ESP32-S3 Sense board.
+This project includes automated build scripts that handle ESP-IDF environment setup and WiFi configuration.
 
-1.  **Navigate to this project directory:**
-    ```bash
-    cd robo_naila/firmware/
-    ```
+### Quick Start (Automated)
 
-2.  **Set the target chip:**
-    This specifies that you are building for the ESP32-S3.
-    ```bash
-    idf.py set-target esp32s3
-    ```
+1. **Navigate to the firmware directory:**
+   ```bash
+   cd firmware/
+   ```
 
-3.  **Connect your ESP32-S3 board:**
-    Connect the board to your computer via a USB cable.
+2. **Connect your ESP32-S3 board** via USB cable.
 
-5.  **Identify the serial port:**
-    Determine the serial port your board is connected to.
-    * **Linux:** Typically `/dev/ttyUSB0`, `/dev/ttyACM0`. Use `ls /dev/tty*` before and after connecting the board.
-    * **macOS:** Typically `/dev/cu.usbserial-XXXX` or `/dev/cu.usbmodemXXXX`. Use `ls /dev/cu.*`.
-    * **Windows:** Typically `COMx` (e.g., `COM3`). Check Device Manager.
+3. **Build and flash (recommended):**
+   ```bash
+   ./scripts/flash.sh
+   ```
+   This script will:
+   - Set up the ESP-IDF environment
+   - Load WiFi credentials from `.env`
+   - Clean and build the project
+   - Auto-detect the USB port
+   - Flash firmware and start serial monitor
 
-    *Permissions Note for Linux:* If you encounter permission errors when flashing, you might need to add your user to the `dialout` group:
-    `sudo usermod -a -G dialout $USER` (then log out and log back in).
+4. **Just build (no flashing):**
+   ```bash
+   ./scripts/build.sh
+   ```
 
-6.  **Build, Flash, and Monitor:**
-    This command will build the firmware, flash it to your ESP32-S3, and then open a serial monitor to display output from the board. **Replace `/dev/ttyUSB0` with your actual serial port.**
-    ```bash
-    idf.py -p /dev/ttyUSB0 flash monitor
-    ```
-    To exit the serial monitor, press `Ctrl+]`.
+5. **Quick flash (skip build):**
+   ```bash
+   ./scripts/flash.sh --skip-build
+   ```
+   Useful for rapid iterations when the build hasn't changed.
+
+### Manual Build Process
+
+If you prefer manual control or need to troubleshoot:
+
+1. **Set up ESP-IDF environment:**
+   ```bash
+   source /path/to/esp-idf/export.sh
+   ```
+
+2. **Set target chip:**
+   ```bash
+   idf.py set-target esp32s3
+   ```
+
+3. **Load WiFi credentials:**
+   ```bash
+   source scripts/setenv.sh
+   ```
+
+4. **Build:**
+   ```bash
+   idf.py build
+   ```
+
+5. **Flash and monitor:**
+   ```bash
+   idf.py -p /dev/cu.usbmodem* flash monitor
+   ```
+   
+   **Port Detection:**
+   - **Linux:** `/dev/ttyUSB0`, `/dev/ttyACM0`
+   - **macOS:** `/dev/cu.usbserial-*` or `/dev/cu.usbmodem*`
+   - **Windows:** `COM3`, `COM4`, etc.
+
+   To exit the serial monitor, press `Ctrl+]`.
 
 ## Over-The-Air (OTA) Updates
 
@@ -83,3 +134,25 @@ This firmware is designed to support OTA updates from the local AI server. The `
 
 * The `communications/ota_updater.c` module handles the client-side logic for checking for updates, downloading new firmware from the AI orchestration server (via HTTP), and rebooting into the new image.
 * The AI orchestration system (in the `../ai-server/` directory) manages OTA updates through its device management component. Refer to the server's documentation for triggering OTA updates.
+
+## Build Scripts
+
+The `scripts/` directory contains automation tools for development:
+
+* **`setenv.sh`**: Loads WiFi credentials from `../.env` and exports them as environment variables
+* **`build.sh`**: Complete build automation - sets up ESP-IDF, loads credentials, cleans old builds, and compiles
+* **`flash.sh`**: Build + flash + monitor with auto USB port detection
+  * Use `--skip-build` flag for faster iterations when build hasn't changed
+
+### Development Workflow
+
+```bash
+# Full build and flash (recommended)
+./scripts/flash.sh
+
+# Quick flash without rebuilding
+./scripts/flash.sh --skip-build
+
+# Build only (no flashing)
+./scripts/build.sh
+```
