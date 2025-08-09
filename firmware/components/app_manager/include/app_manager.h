@@ -37,7 +37,6 @@ naila_err_t app_manager_start(void);
 naila_err_t app_manager_stop(void);
 app_state_t app_manager_get_state(void);
 naila_err_t app_manager_get_stats(app_stats_t *stats);
-naila_err_t app_manager_run_main_loop(void);
 
 // State management
 naila_err_t app_manager_set_state(app_state_t new_state);

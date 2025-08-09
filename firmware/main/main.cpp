@@ -7,9 +7,6 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <nvs_flash.h>
-// ADDED: signal.h for potential shutdown handling - can be removed if causing issues
-#include <signal.h>
-// END ADDED
 
 extern "C" {
 #include "app_manager.h"
@@ -94,22 +91,4 @@ extern "C" void app_main() {
 
   NAILA_TIME_END(TAG, total_init);
   NAILA_LOGI(TAG, "NAILA Robot Application started successfully");
-
-  // Run main application loop
-  result = app_manager_run_main_loop();
-  if (result != NAILA_OK) {
-    NAILA_LOGE(
-        TAG, "Main loop exited with error: %s", naila_err_to_string(result));
-  }
-
-  // ADDED: Enhanced shutdown sequence with timing delays - can be removed if causing issues
-  // Clean shutdown with graceful WiFi cleanup
-  NAILA_LOGI(TAG, "Initiating graceful application shutdown");
-  app_manager_stop();
-  
-  // Small delay to ensure cleanup completes
-  vTaskDelay(pdMS_TO_TICKS(1000));
-  
-  NAILA_LOGI(TAG, "NAILA Robot Application shutdown complete");
-  // END ADDED
 }
