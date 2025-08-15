@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timezone
 from mqtt.core.models import MQTTMessage
 from .base import BaseHandler
+from agents.orchestrator import NAILAOrchestrator
 
 
 # Topic patterns for AI processing and orchestration
@@ -13,6 +14,10 @@ TOPIC_AI_PERSONALITY_RESPONSE = "naila/ai/orchestration/personality/response"
 
 class AIHandlers(BaseHandler):
     """Handlers for AI processing and orchestration messages"""
+    
+    def __init__(self, mqtt_service):
+        super().__init__(mqtt_service)
+        self.orchestrator = NAILAOrchestrator(mqtt_service)
     
     def register_handlers(self):
         """Register all AI-related handlers"""
@@ -68,7 +73,7 @@ class AIHandlers(BaseHandler):
         }
     
     async def handle_main_task(self, message: MQTTMessage):
-        """Handle main orchestration tasks - placeholder for AI agent integration"""
+        """Handle main orchestration tasks with LangGraph integration"""
         task_id = message.payload.get("task_id")
         device_id = message.payload.get("device_id")
         transcription = message.payload.get("transcription", "")
@@ -78,34 +83,22 @@ class AIHandlers(BaseHandler):
         
         self.logger.info(f"Task {task_id}: {device_id} -> {transcription}")
         
-        # TODO: Replace with actual AI agent integration
-        # For now, simple pattern matching for demo
-        response_text = self._generate_simple_response(transcription)
-        
-        # Fast response generation
-        response_data = {
-            "task_id": task_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "response_text": response_text,
-            "audio_format": "wav",
-            "sample_rate": 16000
-        }
-        
-        # Non-blocking responses
-        self.mqtt_service.publish_ai_response("audio", device_id, response_data, qos=1)
-    
-    def _generate_simple_response(self, transcription: str) -> str:
-        """Fast pattern matching for common queries"""
-        text_lower = transcription.lower()
-        
-        if "time" in text_lower:
-            return f"The current time is {datetime.now().strftime('%I:%M %p')}"
-        elif any(word in text_lower for word in ["hello", "hi", "hey"]):
-            return "Hello! How can I help you today?"
-        elif "weather" in text_lower:
-            return "I don't have access to weather data yet, but I'm working on it!"
-        else:
-            return "I heard you, but I'm still learning how to respond to that."
+        # Process with LangGraph orchestrator
+        try:
+            result = await self.orchestrator.process_task(message.payload)
+            self.logger.info(f"Task {task_id} processed successfully")
+        except Exception as e:
+            self.logger.error(f"Error processing task {task_id}: {e}")
+            
+            # Fallback response
+            response_data = {
+                "task_id": task_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "response_text": "I encountered an issue processing your request. Please try again.",
+                "audio_format": "wav",
+                "sample_rate": 16000
+            }
+            self.mqtt_service.publish_ai_response("audio", device_id, response_data, qos=1)
     
     async def handle_personality_response(self, message: MQTTMessage):
         """Handle personality-adjusted responses - placeholder"""

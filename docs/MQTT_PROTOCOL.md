@@ -23,18 +23,18 @@ naila/
 │   │   ├── vision/         # Computer vision analysis
 │   │   ├── emotion/        # Emotion detection results
 │   │   └── agents/         # Inter-agent communication
-│   ├── orchestration/
-│   │   ├── main/           # Main agent coordination
-│   │   ├── personality/    # Personality management
-│   │   ├── context/        # Context tracking
-│   │   ├── memory/         # Memory operations
-│   │   ├── planning/       # Task planning
-│   │   └── tooling/        # External tool integration
-│   └── responses/
-│       ├── audio/          # Generated speech audio
-│       ├── actions/        # Device action commands
-│       ├── emotions/       # Emotional expressions
-│       └── display/        # Screen/LED commands
+│   └── orchestration/
+│       ├── main/           # Main agent coordination
+│       ├── personality/    # Personality management
+│       ├── context/        # Context tracking
+│       ├── memory/         # Memory operations
+│       ├── planning/       # Task planning
+│       └── tooling/        # External tool integration
+├── command/
+│   ├── request             # Command requests from AI server
+│   ├── batch               # Batch command requests
+│   ├── status              # Command execution status
+│   └── result              # Command execution results
 └── system/
     ├── health/             # System monitoring
     ├── updates/            # OTA and configuration
@@ -354,6 +354,164 @@ Retain: false
       "value": "slight_nod"
     }
   ]
+}
+```
+
+## Command Server Topics
+
+The Command Server acts as a centralized command dispatcher to prevent race conditions and ensure proper command sequencing to devices.
+
+### AI Server → Command Server
+
+#### Command Request
+```
+Topic: naila/command/request
+Payload: JSON
+QoS: 1
+Retain: false
+```
+
+**Command Request Payload:**
+```json
+{
+  "task_id": "task_1234567890",
+  "source": "ai_server",
+  "target_device": "naila_robot_001",
+  "timestamp": "2025-01-15T10:30:50Z",
+  "priority": "normal",
+  "response": {
+    "text": "The current time is 10:30 AM",
+    "intent": "time_query",
+    "confidence": 0.95
+  },
+  "commands": [
+    {
+      "type": "tts",
+      "sequence": 1,
+      "payload": {
+        "text": "The current time is 10:30 AM",
+        "format": "wav",
+        "sample_rate": 16000,
+        "voice": "default"
+      }
+    },
+    {
+      "type": "led",
+      "sequence": 2,
+      "payload": {
+        "pattern": "pulse",
+        "color": "blue",
+        "duration_ms": 2000
+      }
+    },
+    {
+      "type": "motor",
+      "sequence": 3,
+      "payload": {
+        "motor_group": "head",
+        "action": "nod",
+        "speed": 40
+      }
+    }
+  ]
+}
+```
+
+#### Batch Commands
+```
+Topic: naila/command/batch
+Payload: JSON
+QoS: 1
+Retain: false
+```
+
+**Batch Command Payload:**
+```json
+{
+  "batch_id": "batch_001",
+  "timestamp": "2025-01-15T10:30:50Z",
+  "commands": [
+    {
+      "target_device": "naila_robot_001",
+      "command": { /* command structure */ }
+    },
+    {
+      "target_device": "security_drone_001",
+      "command": { /* command structure */ }
+    }
+  ]
+}
+```
+
+### Command Server → Devices
+
+The Command Server translates high-level commands into device-specific MQTT messages:
+
+- TTS commands → `naila/devices/{device_id}/actions/audio/play`
+- Motor commands → `naila/devices/{device_id}/actions/motors/{group}`
+- LED commands → `naila/devices/{device_id}/actions/display/led`
+- Display commands → `naila/devices/{device_id}/actions/display/expression`
+
+### Command Server → AI Server
+
+#### Command Status
+```
+Topic: naila/command/status
+Payload: JSON
+QoS: 1
+Retain: false
+```
+
+**Command Status Payload:**
+```json
+{
+  "task_id": "task_1234567890",
+  "device_id": "naila_robot_001",
+  "timestamp": "2025-01-15T10:30:51Z",
+  "status": "executing",
+  "current_command": 2,
+  "total_commands": 3,
+  "progress": 0.67
+}
+```
+
+#### Command Result
+```
+Topic: naila/command/result
+Payload: JSON
+QoS: 1
+Retain: false
+```
+
+**Command Result Payload:**
+```json
+{
+  "task_id": "task_1234567890",
+  "device_id": "naila_robot_001",
+  "timestamp": "2025-01-15T10:30:55Z",
+  "status": "completed",
+  "execution_time_ms": 4500,
+  "results": [
+    {
+      "command_sequence": 1,
+      "type": "tts",
+      "status": "success",
+      "duration_ms": 2100
+    },
+    {
+      "command_sequence": 2,
+      "type": "led",
+      "status": "success",
+      "duration_ms": 2000
+    },
+    {
+      "command_sequence": 3,
+      "type": "motor",
+      "status": "success",
+      "duration_ms": 400
+    }
+  ],
+  "errors": []
 }
 ```
 

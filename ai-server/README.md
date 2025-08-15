@@ -34,6 +34,21 @@ Refer to the firmware's documentation for setup details:
     * `ota_http_server.py`: The script to run this local web server.
     * `firmware_bins/`: Directory where the firmware `.bin` files are stored, typically organized by version.
 
+## Hardware Requirements
+
+The AI server is **hardware-agnostic** and automatically detects optimal hardware configurations:
+
+### **Supported Hardware:**
+- **CPU**: Intel, AMD, ARM (including Raspberry Pi)
+- **NVIDIA GPUs**: Any CUDA-compatible GPU (GTX 1060+, RTX series, etc.)
+- **Apple Silicon**: M1/M2/M3 with Metal Performance Shaders (MPS)
+- **Memory**: 4GB minimum, 8GB+ recommended for optimal performance
+
+### **Performance by Hardware:**
+- **High-end GPU** (8GB+ VRAM): ~50-200ms response time, aggressive optimizations
+- **Mid-range GPU** (4-8GB VRAM): ~100-500ms response time, standard optimizations  
+- **CPU only**: ~200-1000ms response time, optimized threading
+
 ## Setup Instructions
 
 These instructions assume you have `uv` installed. If not, follow the `uv` installation guide: [uv Install](https://docs.astral.sh/uv/getting-started/installation/)
@@ -54,10 +69,25 @@ These instructions assume you have `uv` installed. If not, follow the `uv` insta
     ```
 
 3.  **Install Python dependencies:**
-    Install all required Python packages using `uv`. This will use `requirements.txt` and generate/use `uv.lock`.
+    The default installation includes all hardware support and will auto-detect your setup:
     ```bash
-    uv pip install -r requirements.txt
+    uv sync
     ```
+
+### **Optional: CUDA GPU Optimization**
+
+For **maximum GPU performance**, CUDA users can optionally install CUDA-optimized PyTorch:
+
+```bash
+# After basic installation, upgrade to CUDA-optimized version
+uv run pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+# Or for different CUDA versions:
+# CUDA 11.8: https://download.pytorch.org/whl/cu118
+# CUDA 12.1: https://download.pytorch.org/whl/cu121
+```
+
+**Note:** The server will work without this step - CUDA optimization is optional for maximum performance.
 
 4.  **Download AI Models:**
     The AI services rely on large pre-trained models. You will need to manually download these into the `models/` subdirectory.
@@ -112,7 +142,28 @@ These instructions assume you have `uv` installed. If not, follow the `uv` insta
     ```bash
     uv run main.py
     ```
-    The server will start listening for connections from the robot and initializing the AI models. You should see log messages indicating that the services are starting up.
+    The server will start listening for connections from the robot and initializing the AI models. 
+
+### **Hardware Detection Logs**
+
+On startup, you'll see hardware detection logs similar to:
+
+```
+INFO | Hardware Configuration:
+INFO |   Device Type: cuda
+INFO |   Device Name: NVIDIA GeForce RTX 4090 (24.0GB, compute 8.9)
+INFO |   Optimization Level: aggressive
+```
+
+Or for CPU-only systems:
+```
+INFO | Hardware Configuration:
+INFO |   Device Type: cpu  
+INFO |   Device Name: Intel Core i7-12700K (16 cores, 32.0GB RAM)
+INFO |   Optimization Level: standard
+```
+
+The server automatically optimizes for your hardware.
 
 3.  **Start the OTA Update Server (in a separate terminal):**
     The OTA server needs to run concurrently to serve firmware files.
