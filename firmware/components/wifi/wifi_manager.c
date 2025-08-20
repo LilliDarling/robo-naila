@@ -77,28 +77,12 @@ static void event_handler(void *arg,
     int32_t event_id,
     void *event_data) {
   if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-    ESP_LOGI(TAG, "WiFi started - waiting for manual connection command...");
-
-    // Get and log WiFi MAC address
-    uint8_t mac[6];
-    esp_wifi_get_mac(WIFI_IF_STA, mac);
-    ESP_LOGI(TAG, "Station MAC: %02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1],
-        mac[2], mac[3], mac[4], mac[5]);
-
-    // Don't auto-connect - let our scan logic handle it
   } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
-    wifi_event_sta_connected_t *connected =
-        (wifi_event_sta_connected_t *)event_data;
-    ESP_LOGI(TAG, "Connected to AP! SSID: %s, Channel: %d, Auth: %d",
-        connected->ssid, connected->channel, connected->authmode);
   } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_AUTHMODE_CHANGE) {
-    wifi_event_sta_authmode_change_t *authmode_change = (wifi_event_sta_authmode_change_t *)event_data;
-    ESP_LOGI(TAG, "WiFi authmode changed: old=%d, new=%d", authmode_change->old_mode, authmode_change->new_mode);
   } else if (event_base == WIFI_EVENT &&
              event_id == WIFI_EVENT_STA_DISCONNECTED) {
     wifi_event_sta_disconnected_t *disconnected_event =
         (wifi_event_sta_disconnected_t *)event_data;
-    ESP_LOGI(TAG, "WiFi disconnected, reason: %d", disconnected_event->reason);
 
     // Log the specific disconnect reason with detailed explanations
     const wifi_disconnect_reason_t* reason_info = find_disconnect_reason(disconnected_event->reason);
@@ -109,43 +93,20 @@ static void event_handler(void *arg,
     }
 
     if (retry_count < max_retries) {
-      ESP_LOGI(
-          TAG, "Retrying WiFI connection %d/%d", retry_count + 1, max_retries);
       retry_count++;
-      
-      // Add progressive delay for hotspot association issues
-      int delay_ms = 2000 + (retry_count * 1000);  // 2s, 3s, 4s, 5s, 6s
-      ESP_LOGI(TAG, "Waiting %d ms before retry for association timeout", delay_ms);
+      int delay_ms = 2000 + (retry_count * 1000);
       vTaskDelay(pdMS_TO_TICKS(delay_ms));
-      
       esp_wifi_connect();
     } else {
-      ESP_LOGE(TAG, "WiFi connection failed after %d retries", max_retries);
       xEventGroupSetBits(wifi_event_group, FAIL_BIT);
     }
   } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-    ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
-    ESP_LOGI(TAG, "Successfully connected! Got IP address: " IPSTR,
-        IP2STR(&event->ip_info.ip));
     retry_count = 0;
     xEventGroupSetBits(wifi_event_group, CONNECTED_BIT);
   }
 }
 
 naila_err_t wifi_manager_init(void) {
-  NAILA_LOG_FUNC_ENTER(TAG);
-
-  // Enable maximum WiFi debugging
-  esp_log_level_set("wifi", ESP_LOG_VERBOSE);
-  esp_log_level_set("wifi_init", ESP_LOG_VERBOSE);
-  esp_log_level_set("phy_init", ESP_LOG_VERBOSE);
-  esp_log_level_set("wifi_station", ESP_LOG_VERBOSE);
-  esp_log_level_set("wifi_conn", ESP_LOG_VERBOSE);
-  esp_log_level_set("wpa", ESP_LOG_VERBOSE);
-  esp_log_level_set("wpa_supplicant", ESP_LOG_VERBOSE);
-  esp_log_level_set("net80211", ESP_LOG_VERBOSE);
-  esp_log_level_set("ieee80211", ESP_LOG_VERBOSE);
-  esp_log_level_set("wpa2", ESP_LOG_VERBOSE);
 
   if (g_state == COMPONENT_STATE_INITIALIZED) {
     return NAILA_ERR_ALREADY_INITIALIZED;
@@ -154,10 +115,7 @@ naila_err_t wifi_manager_init(void) {
   g_state = COMPONENT_STATE_INITIALIZING;
   g_info.state = COMPONENT_STATE_INITIALIZING;
 
-  // ADDED: Reset connection state completely to handle previous unclean shutdowns - can be removed if causing issues
-  NAILA_LOGI(TAG, "Resetting WiFi state for clean initialization");
   wifi_manager_reset_connection_state();
-  // END ADDED
 
   wifi_event_group = xEventGroupCreate();
   NAILA_CHECK_NULL(wifi_event_group, TAG, "Failed to create WiFi event group");
@@ -167,9 +125,6 @@ naila_err_t wifi_manager_init(void) {
   wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
   NAILA_ESP_CHECK(esp_wifi_init(&cfg), TAG, "WiFi init");
 
-  // Set country code for proper RF regulatory compliance
-  // This is crucial for ESP32-S3 association issues
-  NAILA_LOGI(TAG, "Setting WiFi country code to US");
   NAILA_ESP_CHECK(
       esp_wifi_set_country_code("US", true), TAG, "Set country code");
 
@@ -182,13 +137,10 @@ naila_err_t wifi_manager_init(void) {
 
   g_state = COMPONENT_STATE_INITIALIZED;
   g_info.state = COMPONENT_STATE_INITIALIZED;
-  NAILA_LOGI(TAG, "WiFi manager initialized successfully");
-  NAILA_LOG_FUNC_EXIT(TAG);
   return NAILA_OK;
 }
 
 naila_err_t wifi_manager_connect(const wifi_config_simple_t *config) {
-  NAILA_LOG_FUNC_ENTER(TAG);
   NAILA_CHECK_NULL(config, TAG, "Config pointer is null");
   NAILA_CHECK_INIT(g_state, TAG, "wifi_manager");
 
@@ -209,13 +161,11 @@ naila_err_t wifi_manager_connect(const wifi_config_simple_t *config) {
   strlcpy((char *)wifi_config.sta.ssid, config->ssid, sizeof(wifi_config.sta.ssid));
   strlcpy((char *)wifi_config.sta.password, config->password, sizeof(wifi_config.sta.password));
 
-  NAILA_LOGI(TAG, "WiFi config - SSID: %s, Password: '%s' (length: %d)",
-      wifi_config.sta.ssid, wifi_config.sta.password, strlen((char *)wifi_config.sta.password));
+  NAILA_LOGI(TAG, "Connecting to SSID: %s", wifi_config.sta.ssid);
 
   max_retries = config->max_retry;
   retry_count = 0;
 
-  NAILA_LOGI(TAG, "Using minimal WiFi settings for hotspot compatibility");
   
   // Only disable power saving - let ESP32 use optimal defaults for everything else
   esp_wifi_set_ps(WIFI_PS_NONE);
@@ -227,19 +177,14 @@ naila_err_t wifi_manager_connect(const wifi_config_simple_t *config) {
   // Brief delay for WiFi to initialize
   vTaskDelay(pdMS_TO_TICKS(1000));
   
-  NAILA_LOGI(TAG, "Attempting connection with default settings...");
   esp_wifi_connect();
 
-  NAILA_LOGI(TAG, "Connection initiated, waiting for result...");
 
   // Wait for connection result
   EventBits_t bits = xEventGroupWaitBits(wifi_event_group,
       CONNECTED_BIT | FAIL_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
 
-  naila_err_t result = (bits & CONNECTED_BIT) ? NAILA_OK : NAILA_ERR_WIFI_NOT_CONNECTED;
-
-  NAILA_LOG_FUNC_EXIT(TAG);
-  return result;
+  return (bits & CONNECTED_BIT) ? NAILA_OK : NAILA_ERR_WIFI_NOT_CONNECTED;
 }
 
 bool wifi_manager_is_connected(void) {
@@ -248,18 +193,11 @@ bool wifi_manager_is_connected(void) {
 }
 
 naila_err_t wifi_manager_disconnect(void) {
-  NAILA_LOG_FUNC_ENTER(TAG);
   NAILA_CHECK_INIT(g_state, TAG, "wifi_manager");
 
-  // ADDED: Enhanced graceful disconnection to fix hotspot connection persistence - can be removed if causing issues
-  // First disconnect gracefully to send deauth frames
   esp_err_t disconnect_result = esp_wifi_disconnect();
   if (disconnect_result == ESP_OK) {
-    NAILA_LOGI(TAG, "Graceful WiFi disconnect initiated");
-    // Wait briefly for deauth frames to be sent
     vTaskDelay(pdMS_TO_TICKS(500));
-  } else {
-    NAILA_LOGW(TAG, "Graceful disconnect failed: %s, forcing stop", esp_err_to_name(disconnect_result));
   }
 
   NAILA_ESP_CHECK(esp_wifi_stop(), TAG, "Stop WiFi");
@@ -272,23 +210,17 @@ naila_err_t wifi_manager_disconnect(void) {
   // Reset retry counter
   retry_count = 0;
   
-  NAILA_LOGI(TAG, "WiFi disconnected and state cleared");
-  // END ADDED
-  NAILA_LOG_FUNC_EXIT(TAG);
   return NAILA_OK;
 }
 
 // ADDED: Complete WiFi deinit function for proper cleanup - can be removed if causing issues
 naila_err_t wifi_manager_deinit(void) {
-  NAILA_LOG_FUNC_ENTER(TAG);
   
   if (g_state == COMPONENT_STATE_UNINITIALIZED) {
     return NAILA_OK;
   }
 
-  // Gracefully disconnect if connected
   if (wifi_manager_is_connected()) {
-    NAILA_LOGI(TAG, "Disconnecting WiFi before deinit");
     wifi_manager_disconnect();
   }
 
@@ -310,15 +242,12 @@ naila_err_t wifi_manager_deinit(void) {
   g_info.state = COMPONENT_STATE_UNINITIALIZED;
   retry_count = 0;
 
-  NAILA_LOGI(TAG, "WiFi manager deinitialized");
-  NAILA_LOG_FUNC_EXIT(TAG);
   return NAILA_OK;
 }
 // END ADDED
 
 // ADDED: WiFi connection state reset function for reliable reconnection - can be removed if causing issues
 naila_err_t wifi_manager_reset_connection_state(void) {
-  NAILA_LOG_FUNC_ENTER(TAG);
 
   // Reset retry counter
   retry_count = 0;
@@ -328,17 +257,11 @@ naila_err_t wifi_manager_reset_connection_state(void) {
     xEventGroupClearBits(wifi_event_group, CONNECTED_BIT | FAIL_BIT);
   }
 
-  // Force WiFi to stop and reset internal state
-  esp_err_t stop_result = esp_wifi_stop();
-  if (stop_result != ESP_OK && stop_result != ESP_ERR_WIFI_NOT_INIT) {
-    NAILA_LOGW(TAG, "WiFi stop during reset failed: %s", esp_err_to_name(stop_result));
-  }
+  esp_wifi_stop();
 
   // Brief delay to ensure WiFi stack resets
   vTaskDelay(pdMS_TO_TICKS(1000));
 
-  NAILA_LOGI(TAG, "WiFi connection state reset completed");
-  NAILA_LOG_FUNC_EXIT(TAG);
   return NAILA_OK;
 }
 // END ADDED
