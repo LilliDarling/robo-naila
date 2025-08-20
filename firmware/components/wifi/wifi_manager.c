@@ -1,10 +1,13 @@
 #include "wifi_manager.h"
+#include "config_manager.h"
 #include "error_handling.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/task.h"
 #include "naila_log.h"
 #include "lwip/err.h"
 #include "lwip/sys.h"
@@ -20,6 +23,11 @@ static component_state_t g_state = COMPONENT_STATE_UNINITIALIZED;
 static component_info_t g_info = {.name = "wifi_manager",
     .version = "1.0.0",
     .state = COMPONENT_STATE_UNINITIALIZED};
+
+// Task management
+static TaskHandle_t wifi_task_handle = NULL;
+static wifi_event_callbacks_t task_callbacks = {0};
+static bool task_should_stop = false;
 
 typedef struct {
   wifi_err_reason_t reason;
@@ -273,4 +281,110 @@ naila_err_t wifi_manager_get_info(component_info_t *info) {
   memcpy(info, &g_info, sizeof(component_info_t));
   info->state = g_state;
   return NAILA_OK;
+}
+
+// Task management implementation
+static void wifi_management_task(void *parameters) {
+  const naila_config_t *config = config_manager_get();
+  if (config == NULL) {
+    if (task_callbacks.on_error) {
+      task_callbacks.on_error(NAILA_ERR_INVALID_ARG);
+    }
+    wifi_task_handle = NULL;
+    vTaskDelete(NULL);
+    return;
+  }
+
+  wifi_config_simple_t wifi_config = {
+    .ssid = config->wifi.ssid,
+    .password = config->wifi.password,
+    .max_retry = config->wifi.max_retry
+  };
+
+  bool first_connection = true;
+  bool was_connected = false;
+
+  while (!task_should_stop) {
+    bool is_connected = wifi_manager_is_connected();
+    
+    // Handle connection state changes
+    if (is_connected && !was_connected) {
+      if (task_callbacks.on_connected) {
+        task_callbacks.on_connected();
+      }
+      if (task_callbacks.on_state_change) {
+        task_callbacks.on_state_change(1); // Connected state
+      }
+      was_connected = true;
+    } else if (!is_connected && was_connected) {
+      if (task_callbacks.on_disconnected) {
+        task_callbacks.on_disconnected();
+      }
+      if (task_callbacks.on_state_change) {
+        task_callbacks.on_state_change(0); // Disconnected state
+      }
+      was_connected = false;
+      wifi_manager_reset_connection_state();
+    }
+
+    // Handle reconnection
+    if (!is_connected) {
+      naila_err_t connect_result = wifi_manager_connect(&wifi_config);
+      if (connect_result != NAILA_OK && first_connection) {
+        if (task_callbacks.on_error) {
+          task_callbacks.on_error(NAILA_ERR_WIFI_NOT_CONNECTED);
+        }
+      }
+      first_connection = false;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(5000)); // Check every 5 seconds
+  }
+
+  wifi_task_handle = NULL;
+  vTaskDelete(NULL);
+}
+
+naila_err_t wifi_manager_start_task(const wifi_event_callbacks_t *callbacks) {
+  NAILA_CHECK_INIT(g_state, TAG, "wifi_manager");
+  
+  if (wifi_task_handle != NULL) {
+    return NAILA_ERR_ALREADY_INITIALIZED;
+  }
+
+  if (callbacks) {
+    task_callbacks = *callbacks;
+  }
+  
+  task_should_stop = false;
+  
+  BaseType_t result = xTaskCreate(
+      wifi_management_task,
+      "wifi_mgmt",
+      4096,
+      NULL,
+      5,
+      &wifi_task_handle);
+  
+  return (result == pdPASS) ? NAILA_OK : NAILA_ERR_NO_MEM;
+}
+
+naila_err_t wifi_manager_stop_task(void) {
+  if (wifi_task_handle == NULL) {
+    return NAILA_OK;
+  }
+  
+  task_should_stop = true;
+  vTaskDelay(pdMS_TO_TICKS(1000)); // Wait for task to exit
+  
+  if (wifi_task_handle != NULL) {
+    vTaskDelete(wifi_task_handle);
+    wifi_task_handle = NULL;
+  }
+  
+  return NAILA_OK;
+}
+
+bool wifi_manager_is_task_running(void) {
+  return wifi_task_handle != NULL;
 }

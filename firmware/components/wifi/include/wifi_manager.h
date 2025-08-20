@@ -25,6 +25,18 @@ naila_err_t wifi_manager_reset_connection_state(void);
 // END ADDED
 naila_err_t wifi_manager_get_info(component_info_t *info);
 
+// Task management functions
+typedef struct {
+  void (*on_connected)(void);
+  void (*on_disconnected)(void);
+  void (*on_error)(naila_err_t error);
+  void (*on_state_change)(int new_state);
+} wifi_event_callbacks_t;
+
+naila_err_t wifi_manager_start_task(const wifi_event_callbacks_t *callbacks);
+naila_err_t wifi_manager_stop_task(void);
+bool wifi_manager_is_task_running(void);
+
 #ifdef __cplusplus
 }
 #endif

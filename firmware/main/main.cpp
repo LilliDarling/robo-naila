@@ -34,7 +34,8 @@ static void on_error(naila_err_t error) {
 }
 
 static naila_err_t initialize_system(void) {
-  NAILA_LOG_FUNC_ENTER(TAG);
+  // Initialize logging system first
+  naila_log_init();
 
   // Initialize NVS flash for system configuration
   esp_err_t ret = nvs_flash_init();

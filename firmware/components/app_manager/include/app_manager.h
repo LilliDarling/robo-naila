@@ -25,14 +25,11 @@ typedef struct {
   void (*on_error)(naila_err_t error);
 } app_callbacks_t;
 
-// Application statistics
+// Application statistics  
 typedef struct {
-  uint32_t uptime_sec;
   uint32_t wifi_reconnect_count;
   uint32_t inference_count;
   uint32_t error_count;
-  size_t free_heap_bytes;
-  size_t min_free_heap_bytes;
 } app_stats_t;
 
 // Application manager API
