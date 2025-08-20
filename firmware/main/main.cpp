@@ -8,13 +8,11 @@
 #include <freertos/task.h>
 #include <nvs_flash.h>
 
-extern "C" {
 #include "app_manager.h"
 #include "common_types.h"
 #include "config_manager.h"
 #include "error_handling.h"
 #include "naila_log.h"
-}
 
 static const char *TAG = "MAIN_APP";
 

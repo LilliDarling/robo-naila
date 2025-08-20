@@ -3,6 +3,10 @@
 
 #include "common_types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Application states
 typedef enum {
   APP_STATE_INITIALIZING,
@@ -41,5 +45,9 @@ naila_err_t app_manager_get_stats(app_stats_t *stats);
 // State management
 naila_err_t app_manager_set_state(app_state_t new_state);
 bool app_manager_is_running(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

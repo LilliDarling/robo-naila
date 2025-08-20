@@ -4,6 +4,10 @@
 #include "common_types.h"
 #include "naila_log.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Enhanced error checking macros
 #define NAILA_CHECK(condition, tag, err_code, format, ...)                     \
   do {                                                                         \
@@ -50,5 +54,9 @@
 
 // Function to convert naila_err_t to string
 const char *naila_err_to_string(naila_err_t err);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

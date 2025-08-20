@@ -4,6 +4,10 @@
 #include "common_types.h"
 #include "esp_log.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Enhanced logging macros with component context
 #define NAILA_LOGE(tag, format, ...)                                           \
   ESP_LOGE(tag, "[ERROR] " format, ##__VA_ARGS__)
@@ -34,5 +38,9 @@
 #define NAILA_TIME_END(tag, name)                                              \
   NAILA_LOGD(tag, "Timing [%s]: %lld μs", #name,                               \
       esp_timer_get_time() - time_start_##name)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

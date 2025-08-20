@@ -4,6 +4,10 @@
 #include "esp_err.h"
 #include "esp_log.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Standard error codes for NAILA components
 typedef enum {
   NAILA_OK = ESP_OK,
@@ -34,5 +38,9 @@ typedef struct {
   const char *version;
   component_state_t state;
 } component_info_t;
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -3,6 +3,10 @@
 
 #include "common_types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // WiFi Configuration
 typedef struct {
   char ssid[32];
@@ -54,5 +58,9 @@ naila_err_t config_manager_validate(const naila_config_t *config);
 const naila_config_t *config_manager_get(void);
 naila_err_t config_manager_update_wifi(const wifi_config_t *wifi_config);
 naila_err_t config_manager_update_mqtt(const mqtt_config_t *mqtt_config);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

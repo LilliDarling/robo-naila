@@ -5,6 +5,10 @@
 #include "esp_err.h"
 #include <stdbool.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
   const char *ssid;
   const char *password;
@@ -20,5 +24,9 @@ naila_err_t wifi_manager_deinit(void);
 naila_err_t wifi_manager_reset_connection_state(void);
 // END ADDED
 naila_err_t wifi_manager_get_info(component_info_t *info);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
