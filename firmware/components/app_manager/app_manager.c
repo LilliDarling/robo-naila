@@ -215,7 +215,7 @@ static void stats_monitoring_task(void *parameters) {
     }
 
     // Log status periodically
-    if (g_stats.uptime_sec % 30 == 0 && g_stats.uptime_sec > 0) { // Every 30 seconds
+    if (g_stats.uptime_sec % 360 == 0 && g_stats.uptime_sec > 0) { // Every 5 min
       NAILA_LOGI(TAG, "System status - Uptime: %lu sec, Free heap: %zu bytes",
           g_stats.uptime_sec, g_stats.free_heap_bytes);
     }
