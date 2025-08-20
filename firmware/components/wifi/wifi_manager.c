@@ -21,6 +21,57 @@ static component_info_t g_info = {.name = "wifi_manager",
     .version = "1.0.0",
     .state = COMPONENT_STATE_UNINITIALIZED};
 
+typedef struct {
+  wifi_err_reason_t reason;
+  esp_log_level_t log_level;
+  const char* message;
+} wifi_disconnect_reason_t;
+
+static const wifi_disconnect_reason_t disconnect_reasons[] = {
+  {WIFI_REASON_AUTH_EXPIRE, ESP_LOG_ERROR, "Authentication expired - auth timeout"},
+  {WIFI_REASON_AUTH_LEAVE, ESP_LOG_ERROR, "Authentication leave - deauth from AP"},
+  {WIFI_REASON_ASSOC_EXPIRE, ESP_LOG_ERROR, "Association expired - assoc timeout"},
+  {WIFI_REASON_ASSOC_TOOMANY, ESP_LOG_ERROR, "Too many associations - AP at capacity"},
+  {WIFI_REASON_NOT_AUTHED, ESP_LOG_ERROR, "Not authenticated - auth required first"},
+  {WIFI_REASON_NOT_ASSOCED, ESP_LOG_ERROR, "Not associated - assoc required first"},
+  {WIFI_REASON_ASSOC_LEAVE, ESP_LOG_ERROR, "Association leave - disassoc from AP"},
+  {WIFI_REASON_ASSOC_NOT_AUTHED, ESP_LOG_ERROR, "Association not authenticated"},
+  {WIFI_REASON_DISASSOC_PWRCAP_BAD, ESP_LOG_ERROR, "Disassoc due to bad power capability"},
+  {WIFI_REASON_DISASSOC_SUPCHAN_BAD, ESP_LOG_ERROR, "Disassoc due to bad supported channels"},
+  {WIFI_REASON_BSS_TRANSITION_DISASSOC, ESP_LOG_ERROR, "BSS transition disassociation"},
+  {WIFI_REASON_IE_INVALID, ESP_LOG_ERROR, "Invalid information element"},
+  {WIFI_REASON_MIC_FAILURE, ESP_LOG_ERROR, "MIC failure - encryption issue"},
+  {WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT, ESP_LOG_ERROR, "4-way handshake timeout - WPA issue"},
+  {WIFI_REASON_GROUP_KEY_UPDATE_TIMEOUT, ESP_LOG_ERROR, "Group key update timeout"},
+  {WIFI_REASON_IE_IN_4WAY_DIFFERS, ESP_LOG_ERROR, "IE in 4-way handshake differs"},
+  {WIFI_REASON_GROUP_CIPHER_INVALID, ESP_LOG_ERROR, "Invalid group cipher"},
+  {WIFI_REASON_PAIRWISE_CIPHER_INVALID, ESP_LOG_ERROR, "Invalid pairwise cipher"},
+  {WIFI_REASON_AKMP_INVALID, ESP_LOG_ERROR, "Invalid AKMP (auth/key mgmt)"},
+  {WIFI_REASON_UNSUPP_RSN_IE_VERSION, ESP_LOG_ERROR, "Unsupported RSN IE version"},
+  {WIFI_REASON_INVALID_RSN_IE_CAP, ESP_LOG_ERROR, "Invalid RSN IE capabilities"},
+  {WIFI_REASON_802_1X_AUTH_FAILED, ESP_LOG_ERROR, "802.1X authentication failed"},
+  {WIFI_REASON_CIPHER_SUITE_REJECTED, ESP_LOG_ERROR, "Cipher suite rejected"},
+  {WIFI_REASON_BEACON_TIMEOUT, ESP_LOG_ERROR, "Beacon timeout - lost connection to AP"},
+  {WIFI_REASON_NO_AP_FOUND, ESP_LOG_ERROR, "No AP found - SSID not visible"},
+  {WIFI_REASON_AUTH_FAIL, ESP_LOG_ERROR, "Authentication failed - wrong credentials"},
+  {WIFI_REASON_ASSOC_FAIL, ESP_LOG_ERROR, "Association failed - AP rejected association"},
+  {WIFI_REASON_HANDSHAKE_TIMEOUT, ESP_LOG_ERROR, "Handshake timeout - general timeout"},
+  {WIFI_REASON_CONNECTION_FAIL, ESP_LOG_ERROR, "Connection failed - general failure"},
+  {WIFI_REASON_AP_TSF_RESET, ESP_LOG_ERROR, "AP TSF reset"},
+  {WIFI_REASON_ROAMING, ESP_LOG_INFO, "Roaming to another AP"}
+};
+
+static const size_t disconnect_reasons_count = sizeof(disconnect_reasons) / sizeof(disconnect_reasons[0]);
+
+static const wifi_disconnect_reason_t* find_disconnect_reason(wifi_err_reason_t reason) {
+  for (size_t i = 0; i < disconnect_reasons_count; i++) {
+    if (disconnect_reasons[i].reason == reason) {
+      return &disconnect_reasons[i];
+    }
+  }
+  return NULL;
+}
+
 static void event_handler(void *arg,
     esp_event_base_t event_base,
     int32_t event_id,
@@ -50,104 +101,11 @@ static void event_handler(void *arg,
     ESP_LOGI(TAG, "WiFi disconnected, reason: %d", disconnected_event->reason);
 
     // Log the specific disconnect reason with detailed explanations
-    switch (disconnected_event->reason) {
-    case WIFI_REASON_AUTH_EXPIRE:
-      ESP_LOGE(TAG, "Authentication expired - auth timeout");
-      break;
-    case WIFI_REASON_AUTH_LEAVE:
-      ESP_LOGE(TAG, "Authentication leave - deauth from AP");
-      break;
-    case WIFI_REASON_ASSOC_EXPIRE:
-      ESP_LOGE(TAG, "Association expired - assoc timeout");
-      break;
-    case WIFI_REASON_ASSOC_TOOMANY:
-      ESP_LOGE(TAG, "Too many associations - AP at capacity");
-      break;
-    case WIFI_REASON_NOT_AUTHED:
-      ESP_LOGE(TAG, "Not authenticated - auth required first");
-      break;
-    case WIFI_REASON_NOT_ASSOCED:
-      ESP_LOGE(TAG, "Not associated - assoc required first");
-      break;
-    case WIFI_REASON_ASSOC_LEAVE:
-      ESP_LOGE(TAG, "Association leave - disassoc from AP");
-      break;
-    case WIFI_REASON_ASSOC_NOT_AUTHED:
-      ESP_LOGE(TAG, "Association not authenticated");
-      break;
-    case WIFI_REASON_DISASSOC_PWRCAP_BAD:
-      ESP_LOGE(TAG, "Disassoc due to bad power capability");
-      break;
-    case WIFI_REASON_DISASSOC_SUPCHAN_BAD:
-      ESP_LOGE(TAG, "Disassoc due to bad supported channels");
-      break;
-    case WIFI_REASON_BSS_TRANSITION_DISASSOC:
-      ESP_LOGE(TAG, "BSS transition disassociation");
-      break;
-    case WIFI_REASON_IE_INVALID:
-      ESP_LOGE(TAG, "Invalid information element");
-      break;
-    case WIFI_REASON_MIC_FAILURE:
-      ESP_LOGE(TAG, "MIC failure - encryption issue");
-      break;
-    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
-      ESP_LOGE(TAG, "4-way handshake timeout - WPA issue");
-      break;
-    case WIFI_REASON_GROUP_KEY_UPDATE_TIMEOUT:
-      ESP_LOGE(TAG, "Group key update timeout");
-      break;
-    case WIFI_REASON_IE_IN_4WAY_DIFFERS:
-      ESP_LOGE(TAG, "IE in 4-way handshake differs");
-      break;
-    case WIFI_REASON_GROUP_CIPHER_INVALID:
-      ESP_LOGE(TAG, "Invalid group cipher");
-      break;
-    case WIFI_REASON_PAIRWISE_CIPHER_INVALID:
-      ESP_LOGE(TAG, "Invalid pairwise cipher");
-      break;
-    case WIFI_REASON_AKMP_INVALID:
-      ESP_LOGE(TAG, "Invalid AKMP (auth/key mgmt)");
-      break;
-    case WIFI_REASON_UNSUPP_RSN_IE_VERSION:
-      ESP_LOGE(TAG, "Unsupported RSN IE version");
-      break;
-    case WIFI_REASON_INVALID_RSN_IE_CAP:
-      ESP_LOGE(TAG, "Invalid RSN IE capabilities");
-      break;
-    case WIFI_REASON_802_1X_AUTH_FAILED:
-      ESP_LOGE(TAG, "802.1X authentication failed");
-      break;
-    case WIFI_REASON_CIPHER_SUITE_REJECTED:
-      ESP_LOGE(TAG, "Cipher suite rejected");
-      break;
-    case WIFI_REASON_BEACON_TIMEOUT:
-      ESP_LOGE(TAG, "Beacon timeout - lost connection to AP");
-      break;
-    case WIFI_REASON_NO_AP_FOUND:
-      ESP_LOGE(TAG, "No AP found - SSID not visible");
-      break;
-    case WIFI_REASON_AUTH_FAIL:
-      ESP_LOGE(TAG, "Authentication failed - wrong credentials");
-      break;
-    case WIFI_REASON_ASSOC_FAIL:
-      ESP_LOGE(TAG, "Association failed - AP rejected association");
-      break;
-    case WIFI_REASON_HANDSHAKE_TIMEOUT:
-      ESP_LOGE(TAG, "Handshake timeout - general timeout");
-      break;
-    case WIFI_REASON_CONNECTION_FAIL:
-      ESP_LOGE(TAG, "Connection failed - general failure");
-      break;
-    case WIFI_REASON_AP_TSF_RESET:
-      ESP_LOGE(TAG, "AP TSF reset");
-      break;
-    case WIFI_REASON_ROAMING:
-      ESP_LOGI(TAG, "Roaming to another AP");
-      break;
-    default:
-      ESP_LOGE(
-          TAG, "Unknown disconnect reason: %d", disconnected_event->reason);
-      break;
+    const wifi_disconnect_reason_t* reason_info = find_disconnect_reason(disconnected_event->reason);
+    if (reason_info != NULL) {
+      ESP_LOG_LEVEL(reason_info->log_level, TAG, "%s", reason_info->message);
+    } else {
+      ESP_LOGE(TAG, "Unknown disconnect reason: %d", disconnected_event->reason);
     }
 
     if (retry_count < max_retries) {
