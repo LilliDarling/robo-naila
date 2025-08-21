@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "wifi_manager.c"
+    SRCS "wifi.c"
     INCLUDE_DIRS "include"
-    REQUIRES "common" "esp_wifi" "nvs_flash"
+    REQUIRES "common" "esp_wifi" "nvs_flash" "config"
 )

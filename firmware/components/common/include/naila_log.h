@@ -2,8 +2,8 @@
 #define NAILA_LOG_H
 
 #include "common_types.h"
-#include "esp_log.h"
 #include "esp_app_trace.h"
+#include "esp_log.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 #ifndef NAILA_USE_APP_TRACE
-#define NAILA_USE_APP_TRACE 0  // Set to 1 for development with host connection
+#define NAILA_USE_APP_TRACE 0 // Set to 1 for development with host connection
 #endif
 
 // Initialize logging system
@@ -39,36 +39,41 @@ bool naila_stats_is_task_running(void);
 
 #if NAILA_USE_APP_TRACE
 // High-performance app_trace logging for development
-#define NAILA_LOGE(tag, format, ...) \
-  do { \
-    char buf[256]; \
-    int len = snprintf(buf, sizeof(buf), "[E] %s: " format "\n", tag, ##__VA_ARGS__); \
-    esp_apptrace_write(ESP_APPTRACE_DEST_JTAG, buf, len, 1000); \
-  } while(0)
-#define NAILA_LOGW(tag, format, ...) \
-  do { \
-    char buf[256]; \
-    int len = snprintf(buf, sizeof(buf), "[W] %s: " format "\n", tag, ##__VA_ARGS__); \
-    esp_apptrace_write(ESP_APPTRACE_DEST_JTAG, buf, len, 1000); \
-  } while(0)
-#define NAILA_LOGI(tag, format, ...) \
-  do { \
-    char buf[256]; \
-    int len = snprintf(buf, sizeof(buf), "[I] %s: " format "\n", tag, ##__VA_ARGS__); \
-    esp_apptrace_write(ESP_APPTRACE_DEST_JTAG, buf, len, 1000); \
-  } while(0)
-#define NAILA_LOGD(tag, format, ...) \
-  do { \
-    char buf[256]; \
-    int len = snprintf(buf, sizeof(buf), "[D] %s: " format "\n", tag, ##__VA_ARGS__); \
-    esp_apptrace_write(ESP_APPTRACE_DEST_JTAG, buf, len, 500); \
-  } while(0)
-#define NAILA_LOGV(tag, format, ...) \
-  do { \
-    char buf[256]; \
-    int len = snprintf(buf, sizeof(buf), "[V] %s: " format "\n", tag, ##__VA_ARGS__); \
-    esp_apptrace_write(ESP_APPTRACE_DEST_JTAG, buf, len, 100); \
-  } while(0)
+#define NAILA_LOGE(tag, format, ...)                                           \
+  do {                                                                         \
+    char buf[256];                                                             \
+    int len = snprintf(                                                        \
+        buf, sizeof(buf), "[E] %s: " format "\n", tag, ##__VA_ARGS__);         \
+    esp_apptrace_write(ESP_APPTRACE_DEST_JTAG, buf, len, 1000);                \
+  } while (0)
+#define NAILA_LOGW(tag, format, ...)                                           \
+  do {                                                                         \
+    char buf[256];                                                             \
+    int len = snprintf(                                                        \
+        buf, sizeof(buf), "[W] %s: " format "\n", tag, ##__VA_ARGS__);         \
+    esp_apptrace_write(ESP_APPTRACE_DEST_JTAG, buf, len, 1000);                \
+  } while (0)
+#define NAILA_LOGI(tag, format, ...)                                           \
+  do {                                                                         \
+    char buf[256];                                                             \
+    int len = snprintf(                                                        \
+        buf, sizeof(buf), "[I] %s: " format "\n", tag, ##__VA_ARGS__);         \
+    esp_apptrace_write(ESP_APPTRACE_DEST_JTAG, buf, len, 1000);                \
+  } while (0)
+#define NAILA_LOGD(tag, format, ...)                                           \
+  do {                                                                         \
+    char buf[256];                                                             \
+    int len = snprintf(                                                        \
+        buf, sizeof(buf), "[D] %s: " format "\n", tag, ##__VA_ARGS__);         \
+    esp_apptrace_write(ESP_APPTRACE_DEST_JTAG, buf, len, 500);                 \
+  } while (0)
+#define NAILA_LOGV(tag, format, ...)                                           \
+  do {                                                                         \
+    char buf[256];                                                             \
+    int len = snprintf(                                                        \
+        buf, sizeof(buf), "[V] %s: " format "\n", tag, ##__VA_ARGS__);         \
+    esp_apptrace_write(ESP_APPTRACE_DEST_JTAG, buf, len, 100);                 \
+  } while (0)
 #else
 // Standard ESP logging for production
 #define NAILA_LOGE(tag, format, ...) ESP_LOGE(tag, format, ##__VA_ARGS__)
@@ -79,23 +84,40 @@ bool naila_stats_is_task_running(void);
 #endif
 
 // Error logging with error code
-#define NAILA_LOG_ERROR(tag, err, format, ...) \
+#define NAILA_LOG_ERROR(tag, err, format, ...)                                 \
   NAILA_LOGE(tag, format " (0x%x)", ##__VA_ARGS__, err)
 
 #else
 // No-op logging for maximum performance
-#define NAILA_LOGE(tag, format, ...) do {} while(0)
-#define NAILA_LOGW(tag, format, ...) do {} while(0)
-#define NAILA_LOGI(tag, format, ...) do {} while(0)
-#define NAILA_LOGD(tag, format, ...) do {} while(0)
-#define NAILA_LOGV(tag, format, ...) do {} while(0)
-#define NAILA_LOG_ERROR(tag, err, format, ...) do {} while(0)
+#define NAILA_LOGE(tag, format, ...)                                           \
+  do {                                                                         \
+  } while (0)
+#define NAILA_LOGW(tag, format, ...)                                           \
+  do {                                                                         \
+  } while (0)
+#define NAILA_LOGI(tag, format, ...)                                           \
+  do {                                                                         \
+  } while (0)
+#define NAILA_LOGD(tag, format, ...)                                           \
+  do {                                                                         \
+  } while (0)
+#define NAILA_LOGV(tag, format, ...)                                           \
+  do {                                                                         \
+  } while (0)
+#define NAILA_LOG_ERROR(tag, err, format, ...)                                 \
+  do {                                                                         \
+  } while (0)
 #endif
+
+// Function entry/exit logging macros
+#define NAILA_LOG_FUNC_ENTER(tag) NAILA_LOGD(tag, "ENTER %s", __func__)
+#define NAILA_LOG_FUNC_EXIT(tag) NAILA_LOGD(tag, "EXIT %s", __func__)
 
 // Performance timing macros (always minimal overhead)
 #define NAILA_TIME_START(name) int64_t time_start_##name = esp_timer_get_time()
-#define NAILA_TIME_END(tag, name) \
-  NAILA_LOGD(tag, "[%s] %lld μs", #name, esp_timer_get_time() - time_start_##name)
+#define NAILA_TIME_END(tag, name)                                              \
+  NAILA_LOGD(                                                                  \
+      tag, "[%s] %lld μs", #name, esp_timer_get_time() - time_start_##name)
 
 #ifdef __cplusplus
 }

@@ -8,13 +8,13 @@
 #include <freertos/task.h>
 #include <nvs_flash.h>
 
-#include "app_manager.h"
+#include "app.h"
 #include "common_types.h"
-#include "config_manager.h"
+#include "config.h"
 #include "error_handling.h"
 #include "naila_log.h"
 
-static const char *TAG = "MAIN_APP";
+static const char *TAG = "main_app";
 
 // Application callback functions
 static void on_state_change(app_state_t old_state, app_state_t new_state) {
@@ -55,7 +55,7 @@ static naila_err_t initialize_system(void) {
 }
 
 extern "C" void app_main() {
-  NAILA_LOGI(TAG, "Starting NAILA Robot Application...");
+  NAILA_LOGI(TAG, "Starting NAILA Application...");
   NAILA_TIME_START(total_init);
 
   // Initialize basic system components

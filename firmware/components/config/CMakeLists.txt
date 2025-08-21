@@ -13,7 +13,7 @@ else()
 endif()
 
 idf_component_register(
-    SRCS "config_manager.c" "config_manager.c"
+    SRCS "config.c"
     INCLUDE_DIRS "include"
     REQUIRES "nvs_flash" "common"
 )

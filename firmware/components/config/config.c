@@ -1,4 +1,4 @@
-#include "config_manager.h"
+#include "config.h"
 #include "error_handling.h"
 #include "naila_log.h"
 #include "nvs.h"
@@ -28,7 +28,8 @@ naila_err_t config_manager_init(void) {
   }
   // NVS init can succeed or already be initialized - both are fine
   if (ret != ESP_OK) {
-    NAILA_LOGW(TAG, "NVS flash init returned: %s (may already be initialized)", esp_err_to_name(ret));
+    NAILA_LOGW(TAG, "NVS flash init returned: %s (may already be initialized)",
+        esp_err_to_name(ret));
   }
 
   // Load default configuration
@@ -182,11 +183,11 @@ const naila_config_t *config_manager_get(void) {
   return &g_config;
 }
 
-naila_err_t config_manager_update_wifi(const wifi_config_t *wifi_config) {
+naila_err_t config_manager_update_wifi(const naila_wifi_config_t *wifi_config) {
   NAILA_CHECK_NULL(wifi_config, TAG, "WiFi config pointer is null");
   NAILA_CHECK_INIT(g_state, TAG, "config_manager");
 
-  memcpy(&g_config.wifi, wifi_config, sizeof(wifi_config_t));
+  memcpy(&g_config.wifi, wifi_config, sizeof(naila_wifi_config_t));
   NAILA_LOGI(TAG, "WiFi configuration updated");
   return config_manager_save_to_nvs(&g_config);
 }

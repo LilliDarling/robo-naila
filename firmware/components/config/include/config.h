@@ -1,5 +1,5 @@
-#ifndef CONFIG_MANAGER_H
-#define CONFIG_MANAGER_H
+#ifndef CONFIG_H
+#define CONFIG_H
 
 #include "common_types.h"
 
@@ -13,7 +13,7 @@ typedef struct {
   char password[64];
   int max_retry;
   int timeout_ms;
-} wifi_config_t;
+} naila_wifi_config_t;
 
 // MQTT Configuration
 typedef struct {
@@ -42,7 +42,7 @@ typedef struct {
 
 // Main system configuration
 typedef struct {
-  wifi_config_t wifi;
+  naila_wifi_config_t wifi;
   mqtt_config_t mqtt;
   ai_config_t ai;
   audio_config_t audio;
@@ -56,7 +56,7 @@ naila_err_t config_manager_load_from_nvs(naila_config_t *config);
 naila_err_t config_manager_save_to_nvs(const naila_config_t *config);
 naila_err_t config_manager_validate(const naila_config_t *config);
 const naila_config_t *config_manager_get(void);
-naila_err_t config_manager_update_wifi(const wifi_config_t *wifi_config);
+naila_err_t config_manager_update_wifi(const naila_wifi_config_t *wifi_config);
 naila_err_t config_manager_update_mqtt(const mqtt_config_t *mqtt_config);
 
 #ifdef __cplusplus

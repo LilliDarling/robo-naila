@@ -15,7 +15,7 @@ endif()
 
 idf_component_register(SRCS "main.cpp"
                        INCLUDE_DIRS "."
-                       REQUIRES "common" "app_manager" "config_manager"
+                       REQUIRES "common" "app" "config"
                        PRIV_REQUIRES "esp_wifi"
                                      "nvs_flash"
                                      "esp_netif"

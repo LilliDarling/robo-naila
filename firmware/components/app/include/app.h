@@ -1,5 +1,5 @@
-#ifndef APP_MANAGER_H
-#define APP_MANAGER_H
+#ifndef APP_H
+#define APP_H
 
 #include "common_types.h"
 
@@ -25,7 +25,7 @@ typedef struct {
   void (*on_error)(naila_err_t error);
 } app_callbacks_t;
 
-// Application statistics  
+// Application statistics
 typedef struct {
   uint32_t wifi_reconnect_count;
   uint32_t inference_count;
