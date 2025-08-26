@@ -59,3 +59,5 @@ coverage.xml
 .env
 .env.local
 .env.*.local
+
+CLAUDE.md
