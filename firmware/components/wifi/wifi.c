@@ -191,8 +191,8 @@ naila_err_t wifi_connect(const wifi_config_simple_t *config) {
   wifi_config_t wifi_config = {
       .sta =
           {
-              .threshold.authmode = WIFI_AUTH_OPEN,
-              .pmf_cfg = {.capable = false, .required = false},
+              .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+              .pmf_cfg = {.capable = true, .required = false},
           },
   };
 
