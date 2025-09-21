@@ -3,6 +3,7 @@
 #include "error_handling.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "naila_mqtt.h"
 #include "naila_log.h"
 #include "wifi.h"
 #include <string.h>
@@ -81,7 +82,18 @@ naila_err_t app_manager_init(const app_callbacks_t *callbacks) {
 
 // WiFi event callbacks for the app_manager
 static void on_wifi_connected(void) {
-  app_manager_set_state(APP_STATE_RUNNING);
+  NAILA_LOGI(TAG, "🎉 WiFi connected callback triggered");
+  app_manager_set_state(APP_STATE_SERVICES_STARTING);
+
+  // Initialize MQTT after WiFi connection
+  naila_err_t result = naila_mqtt_init();
+  if (result == NAILA_OK) {
+    NAILA_LOGI(TAG, "MQTT initialized after WiFi connection");
+    app_manager_set_state(APP_STATE_RUNNING);
+  } else {
+    NAILA_LOGE(TAG, "MQTT initialization failed");
+    app_manager_set_state(APP_STATE_ERROR);
+  }
 
   if (g_callbacks.on_wifi_connected) {
     g_callbacks.on_wifi_connected();
