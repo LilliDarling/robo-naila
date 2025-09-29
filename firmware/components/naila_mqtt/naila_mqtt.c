@@ -90,10 +90,10 @@ esp_err_t naila_mqtt_init(void) {
     esp_mqtt_client_config_t mqtt_cfg = {
         .broker = {
             .address = {
-                .uri = "mqtt://10.0.0.117:1883",  // Use mqtt:// not mqtts://
+                .uri = mqtt_uri,  // Use dynamically configured URI from environment
                 // OR alternatively use hostname and port:
-                // .hostname = "10.0.0.117",
-                // .port = 1883,
+                // .hostname = CONFIG_MQTT_BROKER_IP,
+                // .port = CONFIG_MQTT_BROKER_PORT,
                 // .transport = MQTT_TRANSPORT_OVER_TCP,
             },
         },
