@@ -113,41 +113,47 @@ static void event_handler(void *arg,
     int32_t event_id,
     void *event_data) {
 
-  if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-  } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
-    ESP_LOGI(TAG, "WiFi connected successfully!");
-  } else if (event_base == WIFI_EVENT &&
-             event_id == WIFI_EVENT_STA_AUTHMODE_CHANGE) {
-  } else if (event_base == WIFI_EVENT &&
-             event_id == WIFI_EVENT_STA_DISCONNECTED) {
-    wifi_event_sta_disconnected_t *disconnected_event =
-        (wifi_event_sta_disconnected_t *)event_data;
+  if (event_base == WIFI_EVENT) {
+    switch (event_id) {
+      case WIFI_EVENT_STA_CONNECTED:
+        ESP_LOGI(TAG, "WiFi connected successfully!");
+        break;
 
-    // Log the specific disconnect reason with detailed explanations
-    const wifi_disconnect_reason_t *reason_info =
-        find_disconnect_reason(disconnected_event->reason);
-    if (reason_info != NULL) {
-      ESP_LOG_LEVEL(reason_info->log_level, TAG, "%s", reason_info->message);
-    } else {
-      ESP_LOGE(
-          TAG, "Unknown disconnect reason: %d", disconnected_event->reason);
-    }
+      case WIFI_EVENT_STA_DISCONNECTED: {
+        wifi_event_sta_disconnected_t *disconnected_event =
+            (wifi_event_sta_disconnected_t *)event_data;
 
-    // Clear connected bit
-    xEventGroupClearBits(wifi_event_group, CONNECTED_BIT);
+        // Log disconnect reason
+        const wifi_disconnect_reason_t *reason_info =
+            find_disconnect_reason(disconnected_event->reason);
+        if (reason_info != NULL) {
+          ESP_LOG_LEVEL(reason_info->log_level, TAG, "%s", reason_info->message);
+        } else {
+          ESP_LOGE(TAG, "Unknown disconnect reason: %d", disconnected_event->reason);
+        }
 
-    // Only start reconnection task if none is already running
-    if (wifi_task_handle == NULL) {
-      ESP_LOGI(TAG, "Starting reconnection task due to disconnect...");
-      naila_err_t result = start_reconnection_task();
-      if (result != NAILA_OK) {
-        ESP_LOGE(TAG, "Failed to start reconnection task: %d", result);
-        xEventGroupSetBits(wifi_event_group, FAIL_BIT);
-      } else {
-        ESP_LOGI(TAG, "Reconnection task started successfully");
+        // Clear connected bit
+        xEventGroupClearBits(wifi_event_group, CONNECTED_BIT);
+
+        // Start reconnection task if none is running
+        if (wifi_task_handle == NULL) {
+          ESP_LOGD(TAG, "Starting reconnection task due to disconnect...");
+          naila_err_t result = start_reconnection_task();
+          if (result != NAILA_OK) {
+            ESP_LOGE(TAG, "Failed to start reconnection task: %d", result);
+            xEventGroupSetBits(wifi_event_group, FAIL_BIT);
+          } else {
+            ESP_LOGD(TAG, "Reconnection task started successfully");
+          }
+        } else {
+          ESP_LOGD(TAG, "Reconnection task already active, disconnect handled automatically");
+        }
+        break;
       }
-    } else {
-      ESP_LOGD(TAG, "Reconnection task already active, disconnect handled automatically");
+
+      default:
+        // Ignore other WiFi events
+        break;
     }
   } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
     retry_count = 0;
@@ -155,7 +161,7 @@ static void event_handler(void *arg,
 
     // Stop reconnection task since we're now connected
     if (wifi_task_handle != NULL) {
-      ESP_LOGI(TAG, "🛑 Stopping reconnection task due to successful connection");
+      ESP_LOGD(TAG, "Stopping reconnection task due to successful connection");
       task_should_stop = true;
     }
 
@@ -345,32 +351,32 @@ naila_err_t wifi_get_info(component_info_t *info) {
 
 // Helper function to start reconnection task if not already running
 static naila_err_t start_reconnection_task(void) {
-  ESP_LOGI(TAG, "🔍 start_reconnection_task: wifi_task_handle = %p", wifi_task_handle);
+  ESP_LOGD(TAG, "start_reconnection_task: wifi_task_handle = %p", wifi_task_handle);
 
   if (wifi_task_handle != NULL) {
-    ESP_LOGI(TAG, "⚠️ Reconnection task already running, skipping");
+    ESP_LOGD(TAG, "Reconnection task already running, skipping");
     return NAILA_OK; // Task already running
   }
 
-  ESP_LOGI(TAG, "✨ Creating new reconnection task");
+  ESP_LOGD(TAG, "Creating WiFi reconnection task");
   task_should_stop = false;
   BaseType_t result = xTaskCreate(
-      wifi_reconnection_task, "wifi_reconnect", 4096, NULL, 5, &wifi_task_handle);
+      wifi_reconnection_task, "wifi_reconnect", 2048, NULL, 5, &wifi_task_handle);
 
-  if (result == pdPASS) {
-    ESP_LOGI(TAG, "✅ Reconnection task created, handle = %p", wifi_task_handle);
-  } else {
-    ESP_LOGE(TAG, "❌ Failed to create reconnection task");
+  if (result != pdPASS) {
+    ESP_LOGE(TAG, "Failed to create reconnection task");
+    return NAILA_ERR_NO_MEM;
   }
 
-  return (result == pdPASS) ? NAILA_OK : NAILA_ERR_NO_MEM;
+  return NAILA_OK;
 }
 
 // Reconnection task - only runs when trying to connect
 static void wifi_reconnection_task(void *parameters) {
-  ESP_LOGI(TAG, "🔄 Reconnection task started");
+  ESP_LOGD(TAG, "WiFi reconnection task started");
   const naila_config_t *config = config_manager_get();
   if (config == NULL) {
+    ESP_LOGE(TAG, "Config unavailable, terminating reconnection task");
     if (task_callbacks.on_error) {
       task_callbacks.on_error(NAILA_ERR_INVALID_ARG);
     }
@@ -382,23 +388,15 @@ static void wifi_reconnection_task(void *parameters) {
   int attempt = 0;
   while (!task_should_stop && !wifi_is_connected() && attempt < config->wifi.max_retry) {
     attempt++;
-    ESP_LOGI(TAG, "🔄 Connection attempt %d/%d", attempt, config->wifi.max_retry);
+    ESP_LOGD(TAG, "WiFi connection attempt %d/%d", attempt, config->wifi.max_retry);
 
-    // Clear any previous failure bits
+    // Clear failure bit and try to connect
     xEventGroupClearBits(wifi_event_group, FAIL_BIT);
 
-    // Try to connect (WiFi is already started from initial wifi_connect call)
     esp_err_t err = esp_wifi_connect();
     if (err != ESP_OK) {
       ESP_LOGE(TAG, "Failed to initiate connection: %s", esp_err_to_name(err));
-      if (attempt >= config->wifi.max_retry) {
-        if (task_callbacks.on_error) {
-          task_callbacks.on_error(NAILA_ERR_WIFI_NOT_CONNECTED);
-        }
-        break;
-      }
-      vTaskDelay(pdMS_TO_TICKS(5000));
-      continue;
+      goto retry_or_exit;
     }
 
     // Wait for connection result with 10 second timeout
@@ -406,23 +404,24 @@ static void wifi_reconnection_task(void *parameters) {
         CONNECTED_BIT | FAIL_BIT, pdFALSE, pdFALSE, pdMS_TO_TICKS(10000));
 
     if (bits & CONNECTED_BIT) {
-      ESP_LOGI(TAG, "✅ Successfully reconnected!");
+      ESP_LOGI(TAG, "WiFi reconnection successful");
       break;
     }
 
+retry_or_exit:
     if (attempt >= config->wifi.max_retry) {
-      ESP_LOGE(TAG, "❌ Max reconnection attempts reached");
+      ESP_LOGE(TAG, "Max reconnection attempts reached");
       if (task_callbacks.on_error) {
         task_callbacks.on_error(NAILA_ERR_WIFI_NOT_CONNECTED);
       }
       break;
     }
 
-    ESP_LOGI(TAG, "⏳ Waiting 5 seconds before retry...");
+    ESP_LOGD(TAG, "Waiting 5 seconds before retry...");
     vTaskDelay(pdMS_TO_TICKS(5000));
   }
 
-  ESP_LOGI(TAG, "🏁 Reconnection task exiting, setting handle to NULL");
+  ESP_LOGD(TAG, "WiFi reconnection task exiting");
   wifi_task_handle = NULL;
   vTaskDelete(NULL);
 }
@@ -462,8 +461,15 @@ naila_err_t wifi_stop_task(void) {
   }
 
   task_should_stop = true;
-  vTaskDelay(pdMS_TO_TICKS(1000)); // Wait for task to exit
 
+  // Wait for task to self-terminate gracefully
+  int wait_count = 0;
+  while (wifi_task_handle != NULL && wait_count < 10) {
+    vTaskDelay(pdMS_TO_TICKS(100));
+    wait_count++;
+  }
+
+  // Force delete if still running
   if (wifi_task_handle != NULL) {
     vTaskDelete(wifi_task_handle);
     wifi_task_handle = NULL;
