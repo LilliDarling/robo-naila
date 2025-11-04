@@ -1,22 +1,27 @@
 #!/bin/bash
 # Build script for ESP32 firmware
 
-set -e  # Exit on any error
+# Load common functions
+source "$(dirname "$0")/common.sh"
 
-echo "🔧 Building ESP32 firmware..."
+print_step "Building ESP32 firmware..."
 
-# Change to firmware directory (parent of scripts)
-cd "$(dirname "$0")/.."
+# Change to firmware directory
+goto_firmware_dir
 
 # Clean old build directory
 if [ -d "build" ]; then
-    echo "Removing old build directory..."
+    print_info "Removing old build directory..."
     rm -rf build
 fi
 
-# Get ESP-IDF environment, load credentials, and build in same shell context
-echo "Setting up ESP-IDF environment, loading WiFi credentials, and building..."
-source "/Users/j/code/esp/esp-idf/export.sh" && source ./scripts/setenv.sh && idf.py build
+# Setup environment and build
+print_info "Setting up ESP-IDF environment and loading credentials..."
+setup_esp_idf
+load_env_vars
 
-echo "✅ Build completed successfully!"
-echo "Run './flash.sh' to flash to device"
+print_info "Starting build..."
+idf.py build
+
+print_success "Build completed successfully!"
+echo "Run './scripts/flash.sh' to flash to device"

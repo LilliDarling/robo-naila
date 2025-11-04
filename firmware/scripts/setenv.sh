@@ -31,4 +31,20 @@ if [[ -z "$CONFIG_EXAMPLE_WIFI_SSID" ]] || [[ -z "$CONFIG_EXAMPLE_WIFI_PASSWORD"
     echo "ERROR: Missing required WiFi credentials in .env file"
 fi
 
-echo "WiFi environment variables loaded from .env"
+# Map MQTT configuration to ESP-IDF expected variable names
+if [ -n "$MQTT_BROKER_IP" ]; then
+    export CONFIG_MQTT_BROKER_IP="$MQTT_BROKER_IP"
+    echo "Set CONFIG_MQTT_BROKER_IP=$MQTT_BROKER_IP"
+fi
+
+if [ -n "$MQTT_BROKER_PORT" ]; then
+    export CONFIG_MQTT_BROKER_PORT="$MQTT_BROKER_PORT"
+    echo "Set CONFIG_MQTT_BROKER_PORT=$MQTT_BROKER_PORT"
+fi
+
+if [ -n "$ROBOT_ID" ]; then
+    export CONFIG_ROBOT_ID="$ROBOT_ID"
+    echo "Set CONFIG_ROBOT_ID=$ROBOT_ID"
+fi
+
+echo "WiFi and MQTT environment variables loaded from .env"

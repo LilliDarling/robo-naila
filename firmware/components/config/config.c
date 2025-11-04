@@ -63,7 +63,7 @@ naila_err_t config_manager_load_defaults(naila_config_t *config) {
       sizeof(config->wifi.ssid) - 1);
   strncpy(config->wifi.password, CONFIG_EXAMPLE_WIFI_PASSWORD,
       sizeof(config->wifi.password) - 1);
-  config->wifi.max_retry = 5;
+  config->wifi.max_retry = 50;
   config->wifi.timeout_ms = 30000;
 
   // MQTT defaults
