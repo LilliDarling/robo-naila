@@ -9,11 +9,13 @@ from agents.base import BaseAgent
 
 class ResponseGenerator(BaseAgent):
     """Generate context-aware responses with conversation continuity"""
-    
-    def __init__(self):
+
+    def __init__(self, llm_service=None):
         super().__init__("response_generator")
         self._response_cache = {}
         self._cache_ttl = 600  # 10 minutes
+        self.llm_service = llm_service
+        self.use_llm = llm_service is not None and llm_service.is_ready
     
     async def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Generate context-aware response"""
@@ -28,7 +30,7 @@ class ResponseGenerator(BaseAgent):
         device_id = state.get("device_id", "")
         
         # Generate context-aware response
-        response = self._generate_response(
+        response = await self._generate_response(
             intent, processed_text, context, conversation_history, confidence
         )
         
@@ -59,42 +61,64 @@ class ResponseGenerator(BaseAgent):
         self.logger.info(f"Generated: '{response}' (conf: {confidence:.2f}, {response_metadata['generation_time_ms']}ms)")
         return state
     
-    def _generate_response(
-        self, 
-        intent: str, 
-        text: str, 
-        context: Dict[str, Any], 
-        history: List[Dict], 
+    async def _generate_response(
+        self,
+        intent: str,
+        text: str,
+        context: Dict[str, Any],
+        history: List[Dict],
         confidence: float
     ) -> str:
         """Generate context-aware response with conversation continuity"""
-        
+
         # Handle low confidence inputs
         if confidence < 0.6:
             return self._generate_clarification_response(text, confidence)
-        
+
+        # Try LLM generation first if available
+        if self.use_llm:
+            try:
+                response = await self._generate_llm_response(text, history)
+                if response:
+                    self.logger.info("Using LLM-generated response")
+                    return response
+            except Exception as e:
+                self.logger.warning(f"LLM generation failed, falling back to patterns: {e}")
+
+        # Fallback to pattern-based responses
+        self.logger.debug("Using pattern-based response")
+
         # Check for conversation continuity
         if history:
             last_exchange = history[-1]
             last_intent = last_exchange.get("metadata", {}).get("intent", "")
-            
+
             # Handle follow-up questions
             if intent == "question" and last_intent in ["time_query", "weather_query"]:
                 return self._generate_followup_response(intent, text, last_intent, last_exchange)
-        
+
         # Use cached response for repeated queries (speed optimization)
         cache_key = f"{intent}:{text.lower().strip()}"
-        cached_response = self._get_cached_response(cache_key)
-        if cached_response:
+        if cached_response := self._get_cached_response(cache_key):
             return self._personalize_response(cached_response, context)
-        
+
         # Generate new response
         response = self._generate_base_response(intent, text, context, history)
         self._cache_response(cache_key, response)
-        
+
         # Apply personalization to new responses too
         return self._personalize_response(response, context)
-    
+
+    async def _generate_llm_response(self, query: str, history: List[Dict]) -> str:
+        """Generate response using LLM"""
+        if not self.llm_service or not self.llm_service.is_ready:
+            return ""
+
+        # Build chat messages with history
+        messages = self.llm_service.build_chat_messages(query, history)
+
+        return await self.llm_service.generate_chat(messages)
+
     def _generate_clarification_response(self, text: str, confidence: float) -> str:
         """Generate response for low-confidence input"""
         return f"I didn't catch that clearly (confidence: {confidence:.1f}). Could you repeat that or rephrase?"

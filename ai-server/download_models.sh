@@ -100,7 +100,6 @@ hf_hub_download(
 )
 print('Vision model downloaded successfully')
 "
-fi
 
 
 echo ""

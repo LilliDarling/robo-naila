@@ -7,15 +7,19 @@ from .system_handlers import SystemHandlers
 
 class ProtocolHandler:
     """Coordinates all MQTT protocol handlers - clean, focused entry point"""
-    
+
     def __init__(self, mqtt_service: NailaMQTTService):
         self.mqtt_service = mqtt_service
-        
+
         # Initialize specialized handler modules
         self.device_handlers = DeviceHandlers(mqtt_service)
         self.ai_handlers = AIHandlers(mqtt_service)
         self.system_handlers = SystemHandlers(mqtt_service)
-    
+
+    def set_llm_service(self, llm_service):
+        """Set LLM service for AI handlers"""
+        self.ai_handlers.set_llm_service(llm_service)
+
     def register_all_handlers(self):
         """Register all protocol handlers with the MQTT service"""
         self.device_handlers.register_handlers()

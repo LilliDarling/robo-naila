@@ -61,35 +61,36 @@ class InputProcessor(BaseAgent):
     def _setup_model(self):
         """Setup lightweight NLP model with hardware optimization"""
         try:
-            from sentence_transformers import SentenceTransformer
-            import numpy as np
-            from config.hardware_config import hardware_optimizer
-            
-            # Get optimal hardware configuration
-            model_config = hardware_optimizer.get_model_config("sentence_transformer")
-            device = model_config["device"]
-            
-            # Log hardware info on first setup
-            if not hasattr(self, '_hardware_logged'):
-                hardware_optimizer.log_hardware_info()
-                self._hardware_logged = True
-            
-            # Use small, fast model optimized for semantic similarity
-            self.model = SentenceTransformer(
-                'all-MiniLM-L6-v2',
-                device=device,
-                show_progress_bar=model_config.get("show_progress_bar", True)
-            )
-            
-            self._setup_intent_embeddings()
-            self.has_model = True
-            self.logger.info(f"Loaded sentence transformer on {device} for intent detection")
+            self._load_transformer()
         except ImportError:
             self.logger.info("sentence-transformers not available, using fallback patterns")
             self.has_model = False
         except Exception as e:
             self.logger.warning(f"Failed to load model: {e}, using fallback")
             self.has_model = False
+
+    def _load_transformer(self):
+        from sentence_transformers import SentenceTransformer
+        from config.hardware_config import hardware_optimizer
+
+        # Get optimal hardware configuration
+        model_config = hardware_optimizer.get_model_config("sentence_transformer")
+        device = model_config["device"]
+
+        # Log hardware info on first setup
+        if not hasattr(self, '_hardware_logged'):
+            hardware_optimizer.log_hardware_info()
+            self._hardware_logged = True
+
+        # Use small, fast model optimized for semantic similarity
+        self.model = SentenceTransformer(
+            'all-MiniLM-L6-v2',
+            device=device
+        )
+
+        self._setup_intent_embeddings()
+        self.has_model = True
+        self.logger.info(f"Loaded sentence transformer on {device} for intent detection")
     
     
     def _setup_intent_embeddings(self):

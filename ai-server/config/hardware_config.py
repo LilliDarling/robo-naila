@@ -30,21 +30,21 @@ class HardwareOptimizer:
         """Comprehensive hardware detection"""
         try:
             import torch
-            
+
             # CUDA detection
             if torch.cuda.is_available():
                 device_count = torch.cuda.device_count()
                 device_name = torch.cuda.get_device_name(0)
-                
+
                 # Get GPU memory
                 memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-                
+
                 # Get compute capability
                 compute_cap = torch.cuda.get_device_properties(0).major
                 compute_capability = f"{compute_cap}.{torch.cuda.get_device_properties(0).minor}"
-                
+
                 logger.info(f"CUDA GPU detected: {device_name} ({memory_gb:.1f}GB, compute {compute_capability})")
-                
+
                 return HardwareInfo(
                     device_type="cuda",
                     device_name=device_name,
@@ -52,37 +52,18 @@ class HardwareOptimizer:
                     compute_capability=compute_capability,
                     optimization_level=self._get_gpu_optimization_level(memory_gb)
                 )
-            
-            # Apple MPS detection
+
             elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
                 logger.info("Apple MPS (Metal Performance Shaders) detected")
-                
+
                 return HardwareInfo(
                     device_type="mps",
                     device_name="Apple Silicon GPU",
                     optimization_level="standard"
                 )
-            
-            # CPU fallback
+
             else:
-                import multiprocessing
-                import psutil
-                
-                cpu_count = multiprocessing.cpu_count()
-                memory_gb = psutil.virtual_memory().total / (1024**3)
-                
-                # Detect CPU type
-                cpu_info = self._get_cpu_info()
-                
-                logger.info(f"CPU detected: {cpu_info} ({cpu_count} cores, {memory_gb:.1f}GB RAM)")
-                
-                return HardwareInfo(
-                    device_type="cpu",
-                    device_name=cpu_info,
-                    memory_gb=memory_gb,
-                    optimization_level=self._get_cpu_optimization_level(cpu_count, memory_gb)
-                )
-                
+                return self._detect_cpu_hardware()
         except Exception as e:
             logger.warning(f"Hardware detection failed: {e}, using minimal CPU config")
             return HardwareInfo(
@@ -90,6 +71,25 @@ class HardwareOptimizer:
                 device_name="Unknown CPU",
                 optimization_level="minimal"
             )
+
+    def _detect_cpu_hardware(self):
+        import multiprocessing
+        import psutil
+
+        cpu_count = multiprocessing.cpu_count()
+        memory_gb = psutil.virtual_memory().total / (1024**3)
+
+        # Detect CPU type
+        cpu_info = self._get_cpu_info()
+
+        logger.info(f"CPU detected: {cpu_info} ({cpu_count} cores, {memory_gb:.1f}GB RAM)")
+
+        return HardwareInfo(
+            device_type="cpu",
+            device_name=cpu_info,
+            memory_gb=memory_gb,
+            optimization_level=self._get_cpu_optimization_level(cpu_count, memory_gb)
+        )
     
     def _get_cpu_info(self) -> str:
         """Get CPU information"""
@@ -97,7 +97,7 @@ class HardwareOptimizer:
             import platform
             import cpuinfo
             return f"{cpuinfo.get_cpu_info()['brand_raw']} ({platform.machine()})"
-        except:
+        except Exception:
             return f"CPU ({os.cpu_count() or 'unknown'} cores)"
     
     def _get_gpu_optimization_level(self, memory_gb: float) -> str:
@@ -175,18 +175,15 @@ class HardwareOptimizer:
         """Get model-specific configuration"""
         base = self.config.copy()
         
-        if model_type == "sentence_transformer":
-            # Sentence transformer specific settings
-            if self.hardware_info.device_type == "cpu":
-                base["show_progress_bar"] = False
-                base["convert_to_numpy"] = True
-            
+        if model_type == "sentence_transformer" and self.hardware_info.device_type == "cpu":
+            base["convert_to_numpy"] = True
+
         return base
     
     def log_hardware_info(self):
         """Log detailed hardware information"""
         info = self.hardware_info
-        logger.info(f"Hardware Configuration:")
+        logger.info("Hardware Configuration:")
         logger.info(f"  Device Type: {info.device_type}")
         logger.info(f"  Device Name: {info.device_name}")
         logger.info(f"  Memory: {info.memory_gb:.1f}GB" if info.memory_gb else "  Memory: Unknown")
