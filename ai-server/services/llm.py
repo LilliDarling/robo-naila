@@ -220,7 +220,7 @@ class LLMService:
 
             prompt_parts.extend(
                 (
-                    f"{role}{llm_config.LLAMA_3_END_HEADER}\n",
+                    f"{llm_config.LLAMA_3_START_HEADER}{role}{llm_config.LLAMA_3_END_HEADER}\n",
                     f"{content.strip()}{llm_config.LLAMA_3_EOT}",
                 )
             )
