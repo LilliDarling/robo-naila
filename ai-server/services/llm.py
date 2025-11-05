@@ -59,7 +59,8 @@ class LLMService:
                 'device_type': hw_optimizer.hardware_info.device_type,
                 'device_name': hw_optimizer.hardware_info.device_name,
                 'acceleration': hw_optimizer.hardware_info.device_type,
-                'cpu_count': os.cpu_count() or 4
+                'cpu_count': os.cpu_count() or 4,
+                'vram_gb': hw_optimizer.hardware_info.memory_gb  # GPU memory in GB
             }
             logger.info(f"Hardware detected: {self.hardware_info}")
 
@@ -76,19 +77,55 @@ class LLMService:
 
             # Load model (this is blocking, so run in executor)
             loop = asyncio.get_event_loop()
-            self.model = await loop.run_in_executor(
-                None,
-                lambda: Llama(
-                    model_path=str(self.model_path),
-                    n_ctx=llm_config.CONTEXT_SIZE,
-                    n_threads=n_threads,
-                    n_gpu_layers=n_gpu_layers,
-                    n_batch=llm_config.BATCH_SIZE,
-                    use_mmap=llm_config.USE_MMAP,
-                    use_mlock=llm_config.USE_MLOCK,
-                    verbose=False,
+            try:
+                self.model = await loop.run_in_executor(
+                    None,
+                    lambda: Llama(
+                        model_path=str(self.model_path),
+                        n_ctx=llm_config.CONTEXT_SIZE,
+                        n_threads=n_threads,
+                        n_gpu_layers=n_gpu_layers,
+                        n_batch=llm_config.BATCH_SIZE,
+                        use_mmap=llm_config.USE_MMAP,
+                        use_mlock=llm_config.USE_MLOCK,
+                        verbose=False,
+                    )
                 )
-            )
+            except MemoryError as e:
+                logger.error(
+                    f"Out of memory while loading model. "
+                    f"Try reducing CONTEXT_SIZE (current: {llm_config.CONTEXT_SIZE}) "
+                    f"or GPU_LAYERS (current: {n_gpu_layers}). "
+                    f"Error: {e}"
+                )
+                self.is_ready = False
+                return False
+            except ValueError as e:
+                error_msg = str(e).lower()
+                if "cuda" in error_msg or "gpu" in error_msg or "metal" in error_msg:
+                    logger.error(
+                        f"Hardware incompatibility detected. "
+                        f"GPU acceleration may not be available or supported. "
+                        f"Try setting GPU_LAYERS=0 for CPU-only mode. "
+                        f"Error: {e}"
+                    )
+                else:
+                    logger.error(f"Invalid model configuration: {e}")
+                self.is_ready = False
+                return False
+            except RuntimeError as e:
+                error_msg = str(e).lower()
+                if "out of memory" in error_msg or "oom" in error_msg:
+                    logger.error(
+                        f"Out of memory error during model loading. "
+                        f"Current config: context_size={llm_config.CONTEXT_SIZE}, "
+                        f"gpu_layers={n_gpu_layers}, threads={n_threads}. "
+                        f"Consider reducing these values. Error: {e}"
+                    )
+                else:
+                    logger.error(f"Runtime error loading model: {e}")
+                self.is_ready = False
+                return False
 
             load_time = time.time() - start_time
             self.is_ready = True
@@ -117,12 +154,35 @@ class LLMService:
         return 4  # Safe default
 
     def _get_gpu_layers(self) -> int:
-        """Determine how many layers to offload to GPU"""
+        """Determine how many layers to offload to GPU, based on hardware capabilities"""
         if llm_config.GPU_LAYERS == -1:
-            # Auto-detect: offload all layers if GPU available
+            # Auto-detect: offload layers based on VRAM or device capabilities
             if self.hardware_info and self.hardware_info.get('acceleration') in ['cuda', 'metal']:
-                logger.info("GPU detected, enabling full GPU acceleration")
-                return -1  # All layers
+                vram_gb = self.hardware_info.get('vram_gb')
+                if vram_gb is not None:
+                    # Heuristic: offload more layers for higher VRAM
+                    # Model-specific: Llama 3.1 8B typically has 32 layers
+                    # For other models, this should be adjusted
+                    estimated_layers = 32  # Default for Llama 3.1 8B
+
+                    if vram_gb >= 16:
+                        logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling full GPU acceleration")
+                        return -1  # All layers
+                    elif vram_gb >= 8:
+                        layers = int(estimated_layers * 0.75)
+                        logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling partial GPU acceleration ({layers} layers, ~75%)")
+                        return layers
+                    elif vram_gb >= 4:
+                        layers = int(estimated_layers * 0.5)
+                        logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling partial GPU acceleration ({layers} layers, ~50%)")
+                        return layers
+                    else:
+                        layers = int(estimated_layers * 0.25)
+                        logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling minimal GPU acceleration ({layers} layers, ~25%)")
+                        return layers
+                else:
+                    logger.info("GPU detected, VRAM unknown, enabling full GPU acceleration")
+                    return -1  # All layers
             return 0  # CPU only
 
         return llm_config.GPU_LAYERS
@@ -173,7 +233,15 @@ class LLMService:
                 )
             )
 
-            # Extract generated text
+            # Extract generated text with validation
+            if not response or 'choices' not in response or not response['choices']:
+                logger.error("Invalid response structure from LLM")
+                return ""
+
+            if 'text' not in response['choices'][0]:
+                logger.error("Missing 'text' field in LLM response")
+                return ""
+
             generated_text = response['choices'][0]['text']
             generated_text = self._clean_response(generated_text)
 
@@ -234,9 +302,10 @@ class LLMService:
         if llm_config.STRIP_WHITESPACE:
             text = text.strip()
 
-        # Remove any leaked special tokens
+        # Remove any leaked special tokens only from the end of the response
         for token in llm_config.STOP_SEQUENCES:
-            text = text.replace(token, "")
+            if text.endswith(token):
+                text = text[: -len(token)]
 
         # Apply length limits
         if len(text) > llm_config.MAX_RESPONSE_LENGTH:
@@ -299,6 +368,16 @@ class LLMService:
         """Unload the model and free resources"""
         if self.model:
             logger.info("Unloading LLM model")
-            del self.model
-            self.model = None
-            self.is_ready = False
+            try:
+                # Try to call close() method if available for explicit cleanup
+                if hasattr(self.model, 'close'):
+                    self.model.close()
+                    logger.debug("Model cleanup method called successfully")
+                else:
+                    logger.debug("Model does not have a close() method; relying on garbage collection")
+            except Exception as e:
+                logger.warning(f"Error during model cleanup: {e}")
+            finally:
+                del self.model
+                self.model = None
+                self.is_ready = False

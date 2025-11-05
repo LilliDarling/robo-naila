@@ -3,12 +3,30 @@ import contextlib
 import logging
 import os
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Optional
 from .health_monitor import HealthMonitor
 from .platform_utils import get_platform_info
+from services.ai_model_manager import AIModelManager
 
 
 logger = logging.getLogger(__name__)
+
+
+class StartupStage(Enum):
+    """Descriptive startup stages for server initialization"""
+    LOAD_AI_MODELS = "Loading AI models"
+    REGISTER_HANDLERS = "Registering protocol handlers"
+    START_MQTT = "Starting MQTT service"
+    START_HEALTH_MONITORING = "Starting health monitoring"
+    PUBLISH_STATUS = "Publishing initial system status"
+
+
+class ShutdownStage(Enum):
+    """Descriptive shutdown stages for graceful termination"""
+    STOP_HEALTH_MONITORING = "Stopping health monitoring"
+    STOP_MQTT = "Stopping MQTT service"
+    UNLOAD_AI_MODELS = "Unloading AI models"
 
 
 class ServerLifecycleManager:
@@ -17,7 +35,7 @@ class ServerLifecycleManager:
     def __init__(self, mqtt_service, protocol_handlers, llm_service=None):
         self.mqtt_service = mqtt_service
         self.protocol_handlers = protocol_handlers
-        self.llm_service = llm_service
+        self.ai_model_manager = AIModelManager(llm_service)
         self.health_monitor = HealthMonitor(mqtt_service, protocol_handlers)
 
         # Server state
@@ -46,27 +64,31 @@ class ServerLifecycleManager:
         logger.info("=" * 60)
         
         try:
-            # Phase 1: Load AI models
-            logger.info("Phase 1: Loading AI models...")
-            await self._load_ai_models()
+            # Stage: Load AI models
+            logger.info(f"{StartupStage.LOAD_AI_MODELS.value}...")
+            await self.ai_model_manager.load_models()
+            # Pass LLM service to protocol handlers if available
+            llm_service = self.ai_model_manager.get_llm_service()
+            if llm_service:
+                self.protocol_handlers.set_llm_service(llm_service)
 
-            # Phase 2: Register protocol handlers
-            logger.info("Phase 2: Registering protocol handlers...")
+            # Stage: Register protocol handlers
+            logger.info(f"{StartupStage.REGISTER_HANDLERS.value}...")
             self.protocol_handlers.register_all_handlers()
             logger.info(f"Registered handlers for {len(self.mqtt_service.event_handlers)} topics")
 
-            # Phase 3: Start MQTT service
-            logger.info("Phase 3: Starting MQTT service...")
+            # Stage: Start MQTT service
+            logger.info(f"{StartupStage.START_MQTT.value}...")
             await self.mqtt_service.start()
             logger.info("MQTT service connected and subscribed")
-            
-            # Phase 4: Start health monitoring
-            logger.info("Phase 4: Starting health monitoring...")
+
+            # Stage: Start health monitoring
+            logger.info(f"{StartupStage.START_HEALTH_MONITORING.value}...")
             await self.health_monitor.start_monitoring(interval=30)
             logger.info("Health monitoring active")
 
-            # Phase 5: Publish initial status
-            logger.info("Phase 5: Publishing initial system status...")
+            # Stage: Publish initial status
+            logger.info(f"{StartupStage.PUBLISH_STATUS.value}...")
             await self._publish_startup_status()
             logger.info("Initial status published")
             
@@ -112,19 +134,6 @@ class ServerLifecycleManager:
                 logger.error(f"Main loop error: {e}")
                 await asyncio.sleep(1)
 
-    async def _load_ai_models(self):
-        """Load AI models during startup"""
-        if self.llm_service:
-            logger.info("Loading LLM model...")
-            success = await self.llm_service.load_model()
-            if success:
-                logger.info(f"LLM model loaded successfully: {self.llm_service.model_path.name}")
-                # Pass LLM service to protocol handlers so orchestrator can use it
-                self.protocol_handlers.set_llm_service(self.llm_service)
-            else:
-                logger.warning("LLM model failed to load - will use fallback responses")
-        else:
-            logger.info("No LLM service configured - using pattern-based responses")
 
     async def _heartbeat_check(self):
         """Perform periodic health checks"""
@@ -187,7 +196,7 @@ class ServerLifecycleManager:
         self._shutdown_event.set()
         
         try:
-            # Phase 1: Publish shutdown notification
+            # Publish shutdown notification
             if self.mqtt_service.is_connected():
                 shutdown_data = {
                     "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -197,20 +206,18 @@ class ServerLifecycleManager:
                 }
                 self.mqtt_service.publish_system_message("health", "shutdown", shutdown_data, qos=1)
                 await asyncio.sleep(0.5)
-            
-            # Phase 2: Stop health monitoring
-            logger.info("Phase 1: Stopping health monitoring...")
+
+            # Stage: Stop health monitoring
+            logger.info(f"{ShutdownStage.STOP_HEALTH_MONITORING.value}...")
             await self.health_monitor.stop_monitoring()
 
-            # Phase 3: Stop MQTT service
-            logger.info("Phase 2: Stopping MQTT service...")
+            # Stage: Stop MQTT service
+            logger.info(f"{ShutdownStage.STOP_MQTT.value}...")
             await self.mqtt_service.stop()
 
-            # Phase 4: Unload AI models
-            logger.info("Phase 3: Unloading AI models...")
-            if self.llm_service and self.llm_service.is_ready:
-                self.llm_service.unload_model()
-                logger.info("LLM model unloaded")
+            # Stage: Unload AI models
+            logger.info(f"{ShutdownStage.UNLOAD_AI_MODELS.value}...")
+            self.ai_model_manager.unload_models()
 
             self._running = False
             

@@ -1,5 +1,6 @@
 """Context-aware response generation agent"""
 
+import asyncio
 import time
 from typing import Any, Dict, List, Optional
 from functools import lru_cache
@@ -15,7 +16,6 @@ class ResponseGenerator(BaseAgent):
         self._response_cache = {}
         self._cache_ttl = 600  # 10 minutes
         self.llm_service = llm_service
-        self.use_llm = llm_service is not None and llm_service.is_ready
     
     async def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Generate context-aware response"""
@@ -29,9 +29,12 @@ class ResponseGenerator(BaseAgent):
         confidence = state.get("confidence", 1.0)
         device_id = state.get("device_id", "")
         
+        # Check LLM readiness dynamically
+        use_llm = self.llm_service is not None and self.llm_service.is_ready
+
         # Generate context-aware response
         response = await self._generate_response(
-            intent, processed_text, context, conversation_history, confidence
+            intent, processed_text, context, conversation_history, confidence, use_llm=use_llm
         )
         
         # Add response metadata
@@ -67,7 +70,8 @@ class ResponseGenerator(BaseAgent):
         text: str,
         context: Dict[str, Any],
         history: List[Dict],
-        confidence: float
+        confidence: float,
+        use_llm: bool = False
     ) -> str:
         """Generate context-aware response with conversation continuity"""
 
@@ -76,7 +80,7 @@ class ResponseGenerator(BaseAgent):
             return self._generate_clarification_response(text, confidence)
 
         # Try LLM generation first if available
-        if self.use_llm:
+        if use_llm:
             try:
                 response = await self._generate_llm_response(text, history)
                 if response:
@@ -109,15 +113,37 @@ class ResponseGenerator(BaseAgent):
         # Apply personalization to new responses too
         return self._personalize_response(response, context)
 
-    async def _generate_llm_response(self, query: str, history: List[Dict]) -> str:
-        """Generate response using LLM"""
+    async def _generate_llm_response(
+        self,
+        query: str,
+        history: List[Dict],
+        timeout: float = 10.0,
+        max_retries: int = 3,
+    ) -> str:
+        """Generate response using LLM with timeout and retry logic"""
         if not self.llm_service or not self.llm_service.is_ready:
             return ""
 
         # Build chat messages with history
         messages = self.llm_service.build_chat_messages(query, history)
 
-        return await self.llm_service.generate_chat(messages)
+        last_exception = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                return await asyncio.wait_for(
+                    self.llm_service.generate_chat(messages),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError as e:
+                last_exception = e
+                self.logger.warning(f"LLM generation timeout on attempt {attempt}/{max_retries}")
+            except Exception as e:
+                last_exception = e
+                self.logger.warning(f"LLM generation error on attempt {attempt}/{max_retries}: {e}")
+
+        # If all retries fail, log the final failure
+        self.logger.error(f"LLM generation failed after {max_retries} attempts: {last_exception}")
+        return ""
 
     def _generate_clarification_response(self, text: str, confidence: float) -> str:
         """Generate response for low-confidence input"""

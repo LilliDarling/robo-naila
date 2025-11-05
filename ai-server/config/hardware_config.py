@@ -1,9 +1,21 @@
 """Hardware detection and optimization configuration"""
 
 import logging
+import multiprocessing
 import os
+import platform
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
+
+try:
+    import cpuinfo
+except ImportError:
+    cpuinfo = None
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 
 logger = logging.getLogger(__name__)
@@ -73,11 +85,12 @@ class HardwareOptimizer:
             )
 
     def _detect_cpu_hardware(self):
-        import multiprocessing
-        import psutil
-
         cpu_count = multiprocessing.cpu_count()
-        memory_gb = psutil.virtual_memory().total / (1024**3)
+        if psutil:
+            memory_gb = psutil.virtual_memory().total / (1024**3)
+        else:
+            logger.warning("psutil not available, memory detection unavailable")
+            memory_gb = None
 
         # Detect CPU type
         cpu_info = self._get_cpu_info()
@@ -94,9 +107,10 @@ class HardwareOptimizer:
     def _get_cpu_info(self) -> str:
         """Get CPU information"""
         try:
-            import platform
-            import cpuinfo
-            return f"{cpuinfo.get_cpu_info()['brand_raw']} ({platform.machine()})"
+            if cpuinfo:
+                return f"{cpuinfo.get_cpu_info()['brand_raw']} ({platform.machine()})"
+            else:
+                return f"CPU {platform.machine()} ({os.cpu_count() or 'unknown'} cores)"
         except Exception:
             return f"CPU ({os.cpu_count() or 'unknown'} cores)"
     
@@ -158,8 +172,6 @@ class HardwareOptimizer:
     
     def _get_cpu_config(self) -> Dict[str, Any]:
         """CPU-specific optimizations"""
-        import multiprocessing
-        
         config = {
             "precision": "float32",
             "thread_count": min(4, multiprocessing.cpu_count()),  # Limit threads for stability
