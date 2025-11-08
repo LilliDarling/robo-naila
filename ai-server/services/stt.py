@@ -12,6 +12,7 @@ import numpy as np
 
 from config import stt as stt_config
 from services.base import BaseAIService
+from services.resource_pool import ResourcePool
 
 
 logger = logging.getLogger(__name__)
@@ -69,10 +70,11 @@ class TranscriptionResult:
 
 
 class STTService(BaseAIService):
-    """Service for loading and running STT inference"""
+    """Service for loading and running STT inference with resource pooling"""
 
     def __init__(self):
         super().__init__(stt_config.MODEL_PATH)
+        self._pool: Optional[ResourcePool] = None
 
     def _get_model_type(self) -> str:
         """Get the model type name for logging"""
@@ -144,6 +146,13 @@ class STTService(BaseAIService):
                 else:
                     logger.error(f"Runtime error loading model: {e}")
                 return False
+
+            # Initialize resource pool
+            self._pool = ResourcePool(
+                max_concurrent=stt_config.MAX_CONCURRENT_REQUESTS,
+                timeout=stt_config.POOL_TIMEOUT_SECONDS
+            )
+            logger.info(f"Resource pool initialized with max {stt_config.MAX_CONCURRENT_REQUESTS} concurrent requests")
 
             # Warm up the model if enabled
             if stt_config.ENABLE_WARMUP:
@@ -225,11 +234,23 @@ class STTService(BaseAIService):
         format: str = "wav",
         language: Optional[str] = None,
     ) -> TranscriptionResult:
-        """Transcribe audio data to text"""
+        """Transcribe audio data to text with resource pooling"""
         if not self.is_ready or self.model is None:
             logger.error("Model not loaded, cannot transcribe")
             return self._empty_result()
 
+        if self._pool is None:
+            return await self._transcribe_impl(audio_data, format, language)
+        async with self._pool:
+            return await self._transcribe_impl(audio_data, format, language)
+
+    async def _transcribe_impl(
+        self,
+        audio_data: bytes,
+        format: str,
+        language: Optional[str],
+    ) -> TranscriptionResult:
+        """Internal transcription implementation"""
         try:
             start_time = time.time()
 
@@ -599,11 +620,16 @@ class STTService(BaseAIService):
             )
 
     def get_status(self) -> Dict:
-        """Get current service status"""
+        """Get current service status including pool stats"""
         status = super().get_status()
         status.update({
             "sample_rate": stt_config.SAMPLE_RATE,
             "supported_formats": stt_config.SUPPORTED_FORMATS,
             "language": stt_config.LANGUAGE,
         })
+
+        # Add pool stats if pool is initialized
+        if self._pool is not None:
+            status["pool"] = self._pool.get_stats()
+
         return status

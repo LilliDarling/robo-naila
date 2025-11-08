@@ -950,3 +950,132 @@ class TestRetryLogic:
             # Should return empty result instead of raising
             assert result.text == ''
             assert result.confidence == 0.0
+
+
+class TestResourcePooling:
+    """Test resource pooling integration"""
+
+    @pytest.fixture
+    def service(self):
+        service = STTService()
+        service.is_ready = True
+        service.model = MagicMock()
+        return service
+
+    @pytest.mark.asyncio
+    async def test_pool_initialized_on_load(self, service):
+        """Test that resource pool is initialized when model loads"""
+        from services.resource_pool import ResourcePool
+
+        with patch.object(service, '_pool', None):
+            service._pool = ResourcePool(
+                max_concurrent=4,
+                timeout=30.0
+            )
+
+            assert service._pool is not None
+            stats = service._pool.get_stats()
+            assert stats["max_concurrent"] == 4
+
+    @pytest.mark.asyncio
+    async def test_transcribe_uses_pool(self, service):
+        """Test that transcription uses resource pool"""
+        from services.resource_pool import ResourcePool
+
+        service._pool = ResourcePool(max_concurrent=2, timeout=5.0)
+
+        mock_segment = MagicMock()
+        mock_segment.text = "Test"
+        mock_segment.start = 0.0
+        mock_segment.end = 1.0
+        mock_segment.avg_logprob = -0.1
+        mock_info = MagicMock()
+        mock_info.language = 'en'
+
+        service.model.transcribe.return_value = ([mock_segment], mock_info)
+
+        with patch.object(service, '_validate_audio', return_value=(True, '')), \
+             patch.object(service, '_preprocess_audio', return_value=(np.random.randn(16000).astype('float32'), 16000, 1000)):
+
+            result = await service.transcribe_audio(b'fake_audio', 'wav')
+
+            assert result.text == 'Test'
+            # Pool should have been used
+            stats = service._pool.get_stats()
+            assert stats["total_requests"] == 1
+
+    @pytest.mark.asyncio
+    async def test_concurrent_transcriptions_limited(self, service):
+        """Test that concurrent transcriptions are limited by pool"""
+        from services.resource_pool import ResourcePool
+
+        service._pool = ResourcePool(max_concurrent=2, timeout=5.0)
+
+        mock_segment = MagicMock()
+        mock_segment.text = "Test"
+        mock_segment.start = 0.0
+        mock_segment.end = 1.0
+        mock_segment.avg_logprob = -0.1
+        mock_info = MagicMock()
+        mock_info.language = 'en'
+
+        # Add small delay to simulate real transcription
+        def slow_transcribe(*args, **kwargs):
+            import time
+            time.sleep(0.05)  # Synchronous sleep since this runs in executor
+            return ([mock_segment], mock_info)
+
+        service.model.transcribe = slow_transcribe
+
+        with patch.object(service, '_validate_audio', return_value=(True, '')), \
+             patch.object(service, '_preprocess_audio', return_value=(np.random.randn(16000).astype('float32'), 16000, 1000)):
+
+            # Run 4 concurrent transcriptions (pool allows 2 at a time)
+            results = await asyncio.gather(*[
+                service.transcribe_audio(b'fake_audio', 'wav')
+                for _ in range(4)
+            ])
+
+            assert len(results) == 4
+            assert all(r.text == 'Test' for r in results)
+
+            # Pool stats should show all 4 requests
+            stats = service._pool.get_stats()
+            assert stats["total_requests"] == 4
+            assert stats["active_requests"] == 0  # All completed
+
+    @pytest.mark.asyncio
+    async def test_get_status_includes_pool_stats(self, service):
+        """Test that get_status includes pool statistics"""
+        from services.resource_pool import ResourcePool
+
+        service._pool = ResourcePool(max_concurrent=4, timeout=30.0)
+
+        status = service.get_status()
+
+        assert "pool" in status
+        assert status["pool"]["max_concurrent"] == 4
+        assert status["pool"]["active_requests"] == 0
+        assert "available_slots" in status["pool"]
+
+    @pytest.mark.asyncio
+    async def test_transcribe_without_pool(self, service):
+        """Test that transcription works without pool (backwards compatibility)"""
+        service._pool = None  # No pool
+
+        mock_segment = MagicMock()
+        mock_segment.text = "Test"
+        mock_segment.start = 0.0
+        mock_segment.end = 1.0
+        mock_segment.avg_logprob = -0.1
+        mock_info = MagicMock()
+        mock_info.language = 'en'
+
+        service.model.transcribe.return_value = ([mock_segment], mock_info)
+
+        with patch.object(service, '_validate_audio', return_value=(True, '')), \
+             patch.object(service, '_preprocess_audio', return_value=(np.random.randn(16000).astype('float32'), 16000, 1000)):
+
+            result = await service.transcribe_audio(b'fake_audio', 'wav')
+
+            assert result.text == 'Test'  # Should still work

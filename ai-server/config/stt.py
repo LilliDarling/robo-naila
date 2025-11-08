@@ -48,6 +48,10 @@ WARNING_RTF_THRESHOLD = 1.0  # Real-time factor (warn if slower than real-time)
 ENABLE_WARMUP = os.getenv("STT_ENABLE_WARMUP", "true").lower() == "true"
 WARMUP_DURATION_MS = int(os.getenv("STT_WARMUP_DURATION_MS", "1000"))  # Duration of warm-up audio
 
+# Resource Pooling
+MAX_CONCURRENT_REQUESTS = int(os.getenv("STT_MAX_CONCURRENT_REQUESTS", "4"))  # Max concurrent transcriptions
+POOL_TIMEOUT_SECONDS = float(os.getenv("STT_POOL_TIMEOUT_SECONDS", "30.0"))  # Timeout waiting for pool slot
+
 # Response Formatting
 STRIP_WHITESPACE = True
 NORMALIZE_WHITESPACE = True  # Replace multiple spaces with single space
