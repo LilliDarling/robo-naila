@@ -239,10 +239,15 @@ class ServerLifecycleManager:
         """Emergency shutdown for critical errors"""
         logger.critical("EMERGENCY SHUTDOWN INITIATED")
 
-        with contextlib.suppress(Exception):
+        try:
             if self.mqtt_service.is_connected():
                 emergency_data = {
                     "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "reason": "critical_error"
+                }
+                self.mqtt_service.publish_system_message("health", "emergency", emergency_data, qos=2)
+        except Exception as exc:
+            logger.error("Exception during emergency shutdown: %s", exc, exc_info=True)
                     "event": "emergency_shutdown",
                     "reason": "critical_error"
                 }
