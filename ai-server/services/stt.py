@@ -38,8 +38,12 @@ class STTService:
         self.is_ready = False
         self.hardware_info = None
 
-    async def load_model(self) -> bool:
-        """Load the STT model with hardware optimization"""
+    async def load_model(self, hardware_info: Optional[Dict] = None) -> bool:
+        """Load the STT model with hardware optimization
+
+        Args:
+            hardware_info: Optional pre-detected hardware info. If None, will detect automatically.
+        """
         if self.is_ready:
             logger.warning("Model already loaded")
             return True
@@ -53,16 +57,21 @@ class STTService:
             logger.info(f"Loading STT model: {self.model_path}")
             start_time = time.time()
 
-            # Detect hardware for optimization
-            hw_optimizer = HardwareOptimizer()
-            self.hardware_info = {
-                'device_type': hw_optimizer.hardware_info.device_type,
-                'device_name': hw_optimizer.hardware_info.device_name,
-                'acceleration': hw_optimizer.hardware_info.device_type,
-                'cpu_count': os.cpu_count() or 4,
-                'vram_gb': hw_optimizer.hardware_info.memory_gb
-            }
-            logger.info(f"Hardware detected: {self.hardware_info}")
+            # Use provided hardware info or detect if not provided
+            if hardware_info is not None:
+                self.hardware_info = hardware_info
+                logger.debug("Using shared hardware detection")
+            else:
+                # Fallback to individual detection (for backward compatibility)
+                hw_optimizer = HardwareOptimizer()
+                self.hardware_info = {
+                    'device_type': hw_optimizer.hardware_info.device_type,
+                    'device_name': hw_optimizer.hardware_info.device_name,
+                    'acceleration': hw_optimizer.hardware_info.device_type,
+                    'cpu_count': os.cpu_count() or 4,
+                    'vram_gb': hw_optimizer.hardware_info.memory_gb
+                }
+                logger.info(f"Hardware detected: {self.hardware_info}")
 
             # Import faster-whisper
             try:
@@ -402,9 +411,9 @@ class STTService:
                 audio_data = f.read()
 
             # Determine format from extension
-            format = path.suffix.lstrip('.').lower()
+            ext_format = path.suffix.lstrip('.').lower()
 
-            return await self.transcribe_audio(audio_data, format)
+            return await self.transcribe_audio(audio_data, ext_format)
 
         except Exception as e:
             logger.error(f"File transcription failed: {e}", exc_info=True)

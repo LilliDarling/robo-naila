@@ -38,8 +38,12 @@ class LLMService:
         logger.info("Using fallback system prompt")
         return llm_config.FALLBACK_SYSTEM_PROMPT
 
-    async def load_model(self) -> bool:
-        """Load the LLM model with hardware optimization"""
+    async def load_model(self, hardware_info: Optional[Dict] = None) -> bool:
+        """Load the LLM model with hardware optimization
+
+        Args:
+            hardware_info: Optional pre-detected hardware info. If None, will detect automatically.
+        """
         if self.is_ready:
             logger.warning("Model already loaded")
             return True
@@ -53,16 +57,21 @@ class LLMService:
             logger.info(f"Loading LLM model: {self.model_path}")
             start_time = time.time()
 
-            # Detect hardware for optimization
-            hw_optimizer = HardwareOptimizer()
-            self.hardware_info = {
-                'device_type': hw_optimizer.hardware_info.device_type,
-                'device_name': hw_optimizer.hardware_info.device_name,
-                'acceleration': hw_optimizer.hardware_info.device_type,
-                'cpu_count': os.cpu_count() or 4,
-                'vram_gb': hw_optimizer.hardware_info.memory_gb  # GPU memory in GB
-            }
-            logger.info(f"Hardware detected: {self.hardware_info}")
+            # Use provided hardware info or detect if not provided
+            if hardware_info is not None:
+                self.hardware_info = hardware_info
+                logger.debug("Using shared hardware detection")
+            else:
+                # Fallback to individual detection (for backward compatibility)
+                hw_optimizer = HardwareOptimizer()
+                self.hardware_info = {
+                    'device_type': hw_optimizer.hardware_info.device_type,
+                    'device_name': hw_optimizer.hardware_info.device_name,
+                    'acceleration': hw_optimizer.hardware_info.device_type,
+                    'cpu_count': os.cpu_count() or 4,
+                    'vram_gb': hw_optimizer.hardware_info.memory_gb
+                }
+                logger.info(f"Hardware detected: {self.hardware_info}")
 
             # Import llama-cpp-python
             try:
@@ -155,37 +164,36 @@ class LLMService:
 
     def _get_gpu_layers(self) -> int:
         """Determine how many layers to offload to GPU, based on hardware capabilities"""
-        if llm_config.GPU_LAYERS == -1:
-            # Auto-detect: offload layers based on VRAM or device capabilities
-            if self.hardware_info and self.hardware_info.get('acceleration') in ['cuda', 'metal']:
-                vram_gb = self.hardware_info.get('vram_gb')
-                if vram_gb is not None:
-                    # Heuristic: offload more layers for higher VRAM
-                    # Model-specific: Llama 3.1 8B typically has 32 layers
-                    # For other models, this should be adjusted
-                    estimated_layers = 32  # Default for Llama 3.1 8B
+        if llm_config.GPU_LAYERS != -1:
+            return llm_config.GPU_LAYERS
+        # Auto-detect: offload layers based on VRAM or device capabilities
+        if self.hardware_info and self.hardware_info.get('acceleration') in ['cuda', 'metal']:
+            vram_gb = self.hardware_info.get('vram_gb')
+            if vram_gb is not None:
+                # Heuristic: offload more layers for higher VRAM
+                # Model-specific: Llama 3.1 8B typically has 32 layers
+                # For other models, this should be adjusted
+                estimated_layers = 32  # Default for Llama 3.1 8B
 
-                    if vram_gb >= 16:
-                        logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling full GPU acceleration")
-                        return -1  # All layers
-                    elif vram_gb >= 8:
-                        layers = int(estimated_layers * 0.75)
-                        logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling partial GPU acceleration ({layers} layers, ~75%)")
-                        return layers
-                    elif vram_gb >= 4:
-                        layers = int(estimated_layers * 0.5)
-                        logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling partial GPU acceleration ({layers} layers, ~50%)")
-                        return layers
-                    else:
-                        layers = int(estimated_layers * 0.25)
-                        logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling minimal GPU acceleration ({layers} layers, ~25%)")
-                        return layers
-                else:
-                    logger.info("GPU detected, VRAM unknown, enabling full GPU acceleration")
+                if vram_gb >= 16:
+                    logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling full GPU acceleration")
                     return -1  # All layers
-            return 0  # CPU only
-
-        return llm_config.GPU_LAYERS
+                elif vram_gb >= 8:
+                    layers = int(estimated_layers * 0.75)
+                    logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling partial GPU acceleration ({layers} layers, ~75%)")
+                    return layers
+                elif vram_gb >= 4:
+                    layers = int(estimated_layers * 0.5)
+                    logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling partial GPU acceleration ({layers} layers, ~50%)")
+                    return layers
+                else:
+                    layers = int(estimated_layers * 0.25)
+                    logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling minimal GPU acceleration ({layers} layers, ~25%)")
+                    return layers
+            else:
+                logger.info("GPU detected, VRAM unknown, enabling full GPU acceleration")
+                return -1  # All layers
+        return 0  # CPU only
 
     async def generate_chat(
         self,

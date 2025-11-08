@@ -77,6 +77,30 @@ class TestLoadModel:
     async def test_load_model_success(self, service):
         """Test successful model loading with proper configuration"""
         mock_llama = MagicMock()
+        hardware_info = {
+            'device_type': 'cuda',
+            'device_name': 'Test GPU',
+            'acceleration': 'cuda',
+            'cpu_count': 8,
+            'vram_gb': 8.0
+        }
+
+        with patch('pathlib.Path.exists', return_value=True), \
+             patch('llama_cpp.Llama', return_value=mock_llama) as mock_llama_class:
+
+            result = await service.load_model(hardware_info=hardware_info)
+
+            assert result is True
+            assert service.is_ready is True
+            assert service.model == mock_llama
+            assert service.hardware_info is not None
+            assert service.hardware_info == hardware_info
+            mock_llama_class.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_load_model_success_without_hardware_info(self, service):
+        """Test successful model loading with automatic hardware detection"""
+        mock_llama = MagicMock()
         mock_hw_optimizer = MagicMock()
         mock_hw_optimizer.hardware_info.device_type = 'cuda'
         mock_hw_optimizer.hardware_info.device_name = 'Test GPU'

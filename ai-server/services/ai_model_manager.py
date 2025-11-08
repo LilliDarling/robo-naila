@@ -1,9 +1,11 @@
 """AI Model Manager - Centralized model loading and lifecycle management"""
 
 import logging
-from typing import Optional
+import os
+from typing import Dict, Optional
 from services.llm import LLMService
 from services.stt import STTService
+from config.hardware_config import HardwareOptimizer
 
 
 logger = logging.getLogger(__name__)
@@ -16,19 +18,38 @@ class AIModelManager:
         self.llm_service = llm_service
         self.stt_service = stt_service
         self._models_loaded = False
+        self._hardware_info = None
+
+    def _detect_hardware(self) -> Dict:
+        """Detect hardware capabilities once and share across all services"""
+        if self._hardware_info is None:
+            logger.info("Detecting hardware capabilities...")
+            hw_optimizer = HardwareOptimizer()
+            self._hardware_info = {
+                'device_type': hw_optimizer.hardware_info.device_type,
+                'device_name': hw_optimizer.hardware_info.device_name,
+                'acceleration': hw_optimizer.hardware_info.device_type,
+                'cpu_count': os.cpu_count() or 4,
+                'vram_gb': hw_optimizer.hardware_info.memory_gb
+            }
+            logger.info(f"Hardware detected: {self._hardware_info}")
+        return self._hardware_info
 
     async def load_models(self) -> bool:
-        """Load all AI models during startup"""
+        """Load all AI models during startup with shared hardware detection"""
         if self._models_loaded:
             logger.warning("Models already loaded")
             return True
 
         success = True
 
+        # Detect hardware once for all services
+        hardware_info = self._detect_hardware()
+
         # Load LLM model if configured
         if self.llm_service:
             logger.info("Loading LLM model...")
-            llm_success = await self.llm_service.load_model()
+            llm_success = await self.llm_service.load_model(hardware_info=hardware_info)
             if llm_success:
                 logger.info(f"LLM model loaded successfully: {self.llm_service.model_path.name}")
             else:
@@ -40,7 +61,7 @@ class AIModelManager:
         # Load STT model if configured
         if self.stt_service:
             logger.info("Loading STT model...")
-            stt_success = await self.stt_service.load_model()
+            stt_success = await self.stt_service.load_model(hardware_info=hardware_info)
             if stt_success:
                 logger.info(f"STT model loaded successfully: {self.stt_service.model_path.name}")
             else:
