@@ -139,8 +139,9 @@ class ResponseGenerator(BaseAgent):
                 self.logger.warning(f"LLM generation timeout on attempt {attempt}/{max_retries}")
             except Exception as e:
                 last_exception = e
-                self.logger.warning(f"LLM generation error on attempt {attempt}/{max_retries}: {e}")
-
+                self.logger.warning(
+                    f"LLM generation error on attempt {attempt}/{max_retries}: {last_exception}"
+                )
         # If all retries fail, log the final failure
         self.logger.error(f"LLM generation failed after {max_retries} attempts: {last_exception}")
         return ""
