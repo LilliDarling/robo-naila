@@ -204,7 +204,7 @@ class TestLoadModel:
         await service._warmup_model()
 
         # Model should still be ready despite warm-up failure
-        assert service.is_ready is True
+        assert service.is_ready
 
 
 class TestDeviceSelection:
