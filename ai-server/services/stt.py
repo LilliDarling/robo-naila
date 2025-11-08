@@ -1,7 +1,6 @@
 """STT Service for speech-to-text transcription using Whisper models"""
 
 import asyncio
-import io
 import logging
 import time
 from dataclasses import dataclass
@@ -105,11 +104,49 @@ class STTService(BaseAIService):
                     logger.error(f"Runtime error loading model: {e}")
                 return False
 
+            # Warm up the model if enabled
+            if stt_config.ENABLE_WARMUP:
+                await self._warmup_model()
+
             return True
 
         except Exception as e:
             logger.error(f"Exception during model loading: {e}", exc_info=True)
             return False
+
+    async def _warmup_model(self):
+        """Warm up the model with a dummy transcription to reduce first-inference latency"""
+        try:
+            logger.info("Warming up STT model...")
+            start_time = time.time()
+
+            # Generate silent audio for warm-up
+            duration_seconds = stt_config.WARMUP_DURATION_MS / 1000.0
+            sample_count = int(stt_config.SAMPLE_RATE * duration_seconds)
+
+            # Create very quiet white noise (better for warm-up than pure silence)
+            warmup_audio = np.random.randn(sample_count).astype('float32') * 0.001
+
+            # Run a quick transcription
+            model = self.model
+            assert model is not None, "Model should be loaded"
+
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: model.transcribe(
+                    warmup_audio,
+                    language=stt_config.LANGUAGE,
+                    beam_size=1,  # Minimal beam for warm-up
+                    vad_filter=False,  # Skip VAD for warm-up
+                )
+            )
+
+            warmup_time = time.time() - start_time
+            logger.info(f"Model warm-up completed in {warmup_time:.2f}s")
+
+        except Exception as e:
+            logger.warning(f"Model warm-up failed (non-critical): {e}")
 
     def _get_device(self) -> str:
         """Determine optimal device based on hardware"""
@@ -150,127 +187,255 @@ class STTService(BaseAIService):
         """Transcribe audio data to text"""
         if not self.is_ready or self.model is None:
             logger.error("Model not loaded, cannot transcribe")
-            return TranscriptionResult(
-                text="",
-                language="",
-                confidence=0.0,
-                duration_ms=0,
-                transcription_time_ms=0
-            )
+            return self._empty_result()
 
         try:
             start_time = time.time()
 
-            # Validate audio
+            # Validate and preprocess audio
             is_valid, error_msg = self._validate_audio(audio_data, format)
             if not is_valid:
                 logger.error(f"Audio validation failed: {error_msg}")
-                return TranscriptionResult(
-                    text="",
-                    language="",
-                    confidence=0.0,
-                    duration_ms=0,
-                    transcription_time_ms=0
-                )
+                return self._empty_result()
 
-            # Preprocess audio
             audio_array, sample_rate, duration_ms = await self._preprocess_audio(audio_data, format)
 
             if stt_config.LOG_AUDIO_INFO:
                 logger.debug(f"Audio preprocessed: {duration_ms}ms, {sample_rate}Hz, {len(audio_array)} samples")
 
-            # Transcribe (blocking, run in executor)
-            model = self.model
-            assert model is not None, "Model should be loaded"
+            # Run transcription
+            segments_list, info = await self._run_transcription(audio_array, language)
 
-            loop = asyncio.get_event_loop()
-            segments_list, info = await loop.run_in_executor(
-                None,
-                lambda: model.transcribe(
-                    audio_array,
-                    language=language or stt_config.LANGUAGE,
-                    beam_size=stt_config.BEAM_SIZE,
-                    best_of=stt_config.BEST_OF,
-                    temperature=stt_config.TEMPERATURE,
-                    vad_filter=stt_config.VAD_FILTER,
-                    vad_parameters={
-                        "threshold": stt_config.VAD_THRESHOLD,
-                        "min_silence_duration_ms": stt_config.MIN_SILENCE_DURATION_MS,
-                        "speech_pad_ms": stt_config.SPEECH_PAD_MS,
-                    } if stt_config.VAD_FILTER else None,
-                )
-            )
+            # Process segments and calculate confidence
+            segments, transcribed_text, avg_confidence = self._process_segments(segments_list)
 
-            # Extract segments and build text
-            segments = []
-            text_parts = []
-            total_confidence = 0.0
-            segment_count = 0
+            # Calculate performance metrics
+            transcription_time_ms = int((time.time() - start_time) * 1000)
+            self._log_performance(duration_ms, transcription_time_ms, avg_confidence, transcribed_text)
 
-            for segment in segments_list:
-                segments.append({
-                    "start": segment.start,
-                    "end": segment.end,
-                    "text": segment.text,
-                    "confidence": getattr(segment, 'avg_logprob', 0.0),
-                })
-                text_parts.append(segment.text)
-                total_confidence += getattr(segment, 'avg_logprob', 0.0)
-                segment_count += 1
-
-            # Build final text and calculate average confidence
-            transcribed_text = " ".join(text_parts).strip()
-            avg_confidence = total_confidence / segment_count if segment_count > 0 else 0.0
-
-            # Convert log probability to confidence (0-1 scale)
-            # avg_logprob is typically negative, so we use exp() to convert
-            avg_confidence = min(1.0, max(0.0, np.exp(avg_confidence)))
-
-            # Clean the transcription
-            transcribed_text = self._clean_transcription(transcribed_text)
-
-            # Calculate metrics
-            transcription_time = time.time() - start_time
-            transcription_time_ms = int(transcription_time * 1000)
-            rtf = transcription_time / (duration_ms / 1000.0) if duration_ms > 0 else 0.0
-
-            # Log performance
-            if stt_config.LOG_PERFORMANCE_METRICS:
-                logger.info(
-                    f"Transcription: {transcription_time:.2f}s, "
-                    f"audio={duration_ms}ms, "
-                    f"RTF={rtf:.2f}, "
-                    f"confidence={avg_confidence:.2f}"
-                )
-
-            if rtf > stt_config.WARNING_RTF_THRESHOLD:
-                logger.warning(f"Slow transcription: RTF={rtf:.2f} (slower than real-time)")
-
-            if stt_config.LOG_TRANSCRIPTIONS:
-                logger.debug(f"Transcription: {transcribed_text}")
-
-            # Check confidence threshold
-            if avg_confidence < stt_config.MIN_CONFIDENCE:
-                logger.warning(f"Low confidence transcription: {avg_confidence:.2f}")
-
-            return TranscriptionResult(
-                text=transcribed_text,
-                language=info.language,
-                confidence=avg_confidence,
-                duration_ms=duration_ms,
-                transcription_time_ms=transcription_time_ms,
-                segments=segments,
+            # Check confidence threshold and build result
+            return self._build_result(
+                transcribed_text, info.language, avg_confidence,
+                duration_ms, transcription_time_ms, segments
             )
 
         except Exception as e:
             logger.error(f"Transcription failed: {e}", exc_info=True)
-            return TranscriptionResult(
-                text="",
-                language="",
-                confidence=0.0,
-                duration_ms=0,
-                transcription_time_ms=0
+            return self._empty_result()
+
+    async def transcribe_batch(
+        self,
+        audio_batch: List[Tuple[bytes, str]],
+        language: Optional[str] = None,
+    ) -> List[TranscriptionResult]:
+        """Transcribe multiple audio chunks efficiently
+
+        Args:
+            audio_batch: List of (audio_data, format) tuples
+            language: Optional language code for all audio chunks
+
+        Returns:
+            List of TranscriptionResult objects in the same order as input
+        """
+        if not self.is_ready or self.model is None:
+            logger.error("Model not loaded, cannot transcribe batch")
+            return [self._empty_result() for _ in audio_batch]
+
+        if not audio_batch:
+            return []
+
+        try:
+            start_time = time.time()
+            results = []
+
+            # Preprocess all audio in parallel
+            preprocess_tasks = [
+                self._preprocess_audio_safe(audio_data, fmt)
+                for audio_data, fmt in audio_batch
+            ]
+            preprocessed = await asyncio.gather(*preprocess_tasks)
+
+            # Filter out failed preprocessing
+            valid_items = [
+                (i, audio_array, sample_rate, duration_ms)
+                for i, (audio_array, sample_rate, duration_ms) in enumerate(preprocessed)
+                if audio_array is not None
+            ]
+
+            if not valid_items:
+                logger.warning("All audio in batch failed preprocessing")
+                return [self._empty_result() for _ in audio_batch]
+
+            # Transcribe all valid audio
+            transcription_tasks = [
+                self._run_transcription(audio_array, language)
+                for _, audio_array, _, _ in valid_items
+            ]
+            transcriptions = await asyncio.gather(*transcription_tasks, return_exceptions=True)
+
+            # Build results maintaining original order
+            result_map = {}
+            for (idx, _, _, duration_ms), transcription in zip(valid_items, transcriptions):
+                if isinstance(transcription, Exception):
+                    logger.error(f"Batch item {idx} failed: {transcription}")
+                    result_map[idx] = self._empty_result()
+                else:
+                    segments_list, info = transcription
+                    segments, text, confidence = self._process_segments(segments_list)
+                    result_map[idx] = TranscriptionResult(
+                        text=text,
+                        language=info.language,
+                        confidence=confidence,
+                        duration_ms=duration_ms,
+                        transcription_time_ms=0,  # Updated below
+                        segments=segments,
+                    )
+
+            # Fill in results for failed preprocessing
+            for i in range(len(audio_batch)):
+                if i not in result_map:
+                    result_map[i] = self._empty_result()
+
+            results = [result_map[i] for i in range(len(audio_batch))]
+
+            # Log batch performance
+            total_time = time.time() - start_time
+            total_audio_duration = sum(r.duration_ms for r in results) / 1000.0
+            logger.info(
+                f"Batch transcription: {len(audio_batch)} items, "
+                f"{total_time:.2f}s total, "
+                f"{total_audio_duration:.1f}s audio, "
+                f"RTF={total_time/total_audio_duration:.2f}"
             )
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Batch transcription failed: {e}", exc_info=True)
+            return [self._empty_result() for _ in audio_batch]
+
+    async def _preprocess_audio_safe(
+        self, audio_data: bytes, format: str
+    ) -> Tuple[Optional[np.ndarray], int, int]:
+        """Safely preprocess audio, returning None on failure"""
+        try:
+            is_valid, error_msg = self._validate_audio(audio_data, format)
+            if not is_valid:
+                logger.warning(f"Audio validation failed: {error_msg}")
+                return None, 0, 0
+
+            return await self._preprocess_audio(audio_data, format)
+        except Exception as e:
+            logger.warning(f"Audio preprocessing failed: {e}")
+            return None, 0, 0
+
+    def _empty_result(self) -> TranscriptionResult:
+        """Return an empty transcription result"""
+        return TranscriptionResult(
+            text="",
+            language="",
+            confidence=0.0,
+            duration_ms=0,
+            transcription_time_ms=0
+        )
+
+    async def _run_transcription(self, audio_array: np.ndarray, language: Optional[str]):
+        """Run the Whisper transcription model"""
+        model = self.model
+        assert model is not None, "Model should be loaded"
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: model.transcribe(
+                audio_array,
+                language=language or stt_config.LANGUAGE,
+                beam_size=stt_config.BEAM_SIZE,
+                best_of=stt_config.BEST_OF,
+                temperature=stt_config.TEMPERATURE,
+                vad_filter=stt_config.VAD_FILTER,
+                vad_parameters={
+                    "threshold": stt_config.VAD_THRESHOLD,
+                    "min_silence_duration_ms": stt_config.MIN_SILENCE_DURATION_MS,
+                    "speech_pad_ms": stt_config.SPEECH_PAD_MS,
+                } if stt_config.VAD_FILTER else None,
+            )
+        )
+
+    def _process_segments(self, segments_list) -> Tuple[List[Dict], str, float]:
+        """Process transcription segments and calculate confidence"""
+        segments = []
+        text_parts = []
+        total_logprob = 0.0
+        segment_count = 0
+
+        for segment in segments_list:
+            logprob = getattr(segment, 'avg_logprob', 0.0)
+            segments.append({
+                "start": segment.start,
+                "end": segment.end,
+                "text": segment.text,
+                "confidence": logprob,
+            })
+            text_parts.append(segment.text)
+            total_logprob += logprob
+            segment_count += 1
+
+        # Build text and calculate confidence
+        transcribed_text = self._clean_transcription(" ".join(text_parts).strip())
+        avg_confidence = self._calculate_confidence(total_logprob, segment_count)
+
+        return segments, transcribed_text, avg_confidence
+
+    def _calculate_confidence(self, total_logprob: float, segment_count: int) -> float:
+        """Convert log probability to confidence score (0-1 scale)"""
+        if segment_count == 0:
+            return 0.0
+
+        # Whisper's avg_logprob is typically in range [-1, 0]
+        # Log probs closer to 0 are better (higher confidence)
+        avg_logprob = total_logprob / segment_count
+        return min(1.0, max(0.0, np.exp(avg_logprob)))
+
+    def _log_performance(self, duration_ms: int, transcription_time_ms: int,
+                         avg_confidence: float, transcribed_text: str):
+        """Log performance metrics and transcription results"""
+        transcription_time = transcription_time_ms / 1000.0
+        rtf = transcription_time / (duration_ms / 1000.0) if duration_ms > 0 else 0.0
+
+        if stt_config.LOG_PERFORMANCE_METRICS:
+            logger.info(
+                f"Transcription: {transcription_time:.2f}s, "
+                f"audio={duration_ms}ms, "
+                f"RTF={rtf:.2f}, "
+                f"confidence={avg_confidence:.2f}"
+            )
+
+        if rtf > stt_config.WARNING_RTF_THRESHOLD:
+            logger.warning(f"Slow transcription: RTF={rtf:.2f} (slower than real-time)")
+
+        if stt_config.LOG_TRANSCRIPTIONS:
+            logger.debug(f"Transcription: {transcribed_text}")
+
+    def _build_result(self, text: str, language: str, confidence: float,
+                      duration_ms: int, transcription_time_ms: int,
+                      segments: List[Dict]) -> TranscriptionResult:
+        """Build final transcription result, checking confidence threshold"""
+        # Check confidence threshold
+        if confidence < stt_config.MIN_CONFIDENCE:
+            logger.warning(f"Low confidence transcription: {confidence:.2f}")
+            if stt_config.REJECT_LOW_CONFIDENCE:
+                logger.info(f"Rejecting low confidence transcription (threshold: {stt_config.MIN_CONFIDENCE})")
+                text = ""  # Reject the transcription
+
+        return TranscriptionResult(
+            text=text,
+            language=language,
+            confidence=confidence,
+            duration_ms=duration_ms,
+            transcription_time_ms=transcription_time_ms,
+            segments=segments,
+        )
 
     def _validate_audio(self, audio_data: bytes, format: str) -> Tuple[bool, str]:
         """Validate audio data"""

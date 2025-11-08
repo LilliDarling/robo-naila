@@ -140,6 +140,72 @@ class TestLoadModel:
             assert result is False
             assert service.is_ready is False
 
+    @pytest.mark.asyncio
+    async def test_load_model_with_warmup_enabled(self, service):
+        """Test that model warm-up is called when enabled"""
+        mock_whisper_model = MagicMock()
+        hardware_info = {'device_type': 'cpu', 'cpu_count': 4}
+
+        with patch('pathlib.Path.exists', return_value=True), \
+             patch('faster_whisper.WhisperModel', return_value=mock_whisper_model), \
+             patch.object(stt_config, 'ENABLE_WARMUP', True), \
+             patch.object(service, '_warmup_model', new_callable=AsyncMock) as mock_warmup:
+
+            result = await service.load_model(hardware_info=hardware_info)
+
+            assert result is True
+            mock_warmup.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_load_model_with_warmup_disabled(self, service):
+        """Test that model warm-up is skipped when disabled"""
+        mock_whisper_model = MagicMock()
+        hardware_info = {'device_type': 'cpu', 'cpu_count': 4}
+
+        with patch('pathlib.Path.exists', return_value=True), \
+             patch('faster_whisper.WhisperModel', return_value=mock_whisper_model), \
+             patch.object(stt_config, 'ENABLE_WARMUP', False), \
+             patch.object(service, '_warmup_model', new_callable=AsyncMock) as mock_warmup:
+
+            result = await service.load_model(hardware_info=hardware_info)
+
+            assert result is True
+            mock_warmup.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_warmup_model_success(self, service):
+        """Test successful model warm-up"""
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = ([], MagicMock())
+        service.model = mock_model
+        service.is_ready = True
+
+        await service._warmup_model()
+
+        # Verify transcribe was called with warm-up audio
+        mock_model.transcribe.assert_called_once()
+        call_args = mock_model.transcribe.call_args
+        warmup_audio = call_args[0][0]
+
+        # Check warm-up audio is correct shape
+        expected_samples = int(stt_config.SAMPLE_RATE * stt_config.WARMUP_DURATION_MS / 1000.0)
+        assert len(warmup_audio) == expected_samples
+        assert warmup_audio.dtype == np.float32
+
+    @pytest.mark.asyncio
+    async def test_warmup_model_failure_non_critical(self, service):
+        """Test that warm-up failure doesn't prevent model from being ready"""
+        mock_model = MagicMock()
+        mock_model.transcribe.side_effect = Exception("Warm-up error")
+        service.model = mock_model
+        service.is_ready = True
+
+        # Should not raise, just log warning
+        await service._warmup_model()
+
+        # Model should still be ready despite warm-up failure
+        assert service.is_ready is True
+
 
 class TestDeviceSelection:
     """Test device selection logic"""
@@ -437,9 +503,62 @@ class TestTranscribeAudio:
             result = await service.transcribe_audio(b'fake_audio', 'wav')
 
             assert result.text == ''
-            # When there are no segments, np.exp(0.0) = 1.0, but we want 0.0 for empty
-            # The current implementation returns 1.0, which we should fix in the service
-            # For now, we'll accept this behavior
+            assert result.confidence == 0.0  # Fixed: empty transcription now returns 0.0
+
+    @pytest.mark.asyncio
+    async def test_transcribe_audio_low_confidence_warning(self, service):
+        """Test that low confidence transcriptions log a warning but still return text"""
+        mock_audio_array = np.random.randn(16000).astype('float32')
+
+        # Mock low confidence segment
+        mock_segment = MagicMock()
+        mock_segment.text = "Unclear audio"
+        mock_segment.start = 0.0
+        mock_segment.end = 1.0
+        mock_segment.avg_logprob = -2.0  # Very low confidence
+
+        mock_info = MagicMock()
+        mock_info.language = 'en'
+
+        service.model.transcribe.return_value = ([mock_segment], mock_info)
+
+        with patch.object(service, '_validate_audio', return_value=(True, '')), \
+             patch.object(service, '_preprocess_audio', return_value=(mock_audio_array, 16000, 1000)), \
+             patch.object(stt_config, 'REJECT_LOW_CONFIDENCE', False):
+
+            result = await service.transcribe_audio(b'fake_audio', 'wav')
+
+            # Should still return text even with low confidence
+            assert result.text == 'Unclear audio'
+            assert result.confidence < stt_config.MIN_CONFIDENCE
+
+    @pytest.mark.asyncio
+    async def test_transcribe_audio_reject_low_confidence(self, service):
+        """Test that low confidence transcriptions are rejected when configured"""
+        mock_audio_array = np.random.randn(16000).astype('float32')
+
+        # Mock low confidence segment
+        mock_segment = MagicMock()
+        mock_segment.text = "Unclear audio"
+        mock_segment.start = 0.0
+        mock_segment.end = 1.0
+        mock_segment.avg_logprob = -2.0  # Very low confidence
+
+        mock_info = MagicMock()
+        mock_info.language = 'en'
+
+        service.model.transcribe.return_value = ([mock_segment], mock_info)
+
+        with patch.object(service, '_validate_audio', return_value=(True, '')), \
+             patch.object(service, '_preprocess_audio', return_value=(mock_audio_array, 16000, 1000)), \
+             patch.object(stt_config, 'REJECT_LOW_CONFIDENCE', True):
+
+            result = await service.transcribe_audio(b'fake_audio', 'wav')
+
+            # Should return empty text due to low confidence rejection
+            assert result.text == ''
+            assert result.confidence < stt_config.MIN_CONFIDENCE
+            assert result.language == 'en'  # Other fields should still be populated
 
 
 class TestCleanTranscription:
@@ -513,6 +632,150 @@ class TestTranscribeFile:
 
             assert result.text == "Test transcription"
             mock_transcribe.assert_called_once()
+
+
+class TestTranscribeBatch:
+    """Test batch transcription"""
+
+    @pytest.fixture
+    def service(self):
+        service = STTService()
+        service.is_ready = True
+        service.model = MagicMock()
+        return service
+
+    @pytest.mark.asyncio
+    async def test_transcribe_batch_empty(self, service):
+        """Test batch transcription with empty input"""
+        results = await service.transcribe_batch([])
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_transcribe_batch_model_not_ready(self):
+        """Test batch transcription when model not ready"""
+        service = STTService()  # is_ready = False
+        batch = [(b'audio1', 'wav'), (b'audio2', 'wav')]
+
+        results = await service.transcribe_batch(batch)
+
+        assert len(results) == 2
+        assert all(r.text == '' for r in results)
+        assert all(r.confidence == 0.0 for r in results)
+
+    @pytest.mark.asyncio
+    async def test_transcribe_batch_success(self, service):
+        """Test successful batch transcription"""
+        # Mock preprocessing
+        mock_audio1 = np.random.randn(16000).astype('float32')
+        mock_audio2 = np.random.randn(16000).astype('float32')
+
+        # Mock segments
+        mock_segment1 = MagicMock()
+        mock_segment1.text = "First audio"
+        mock_segment1.start = 0.0
+        mock_segment1.end = 1.0
+        mock_segment1.avg_logprob = -0.1
+
+        mock_segment2 = MagicMock()
+        mock_segment2.text = "Second audio"
+        mock_segment2.start = 0.0
+        mock_segment2.end = 1.0
+        mock_segment2.avg_logprob = -0.2
+
+        mock_info = MagicMock()
+        mock_info.language = 'en'
+
+        # Mock preprocessing to return different arrays
+        async def mock_preprocess_safe(audio_data, fmt):
+            if audio_data == b'audio1':
+                return mock_audio1, 16000, 1000
+            elif audio_data == b'audio2':
+                return mock_audio2, 16000, 1000
+            return None, 0, 0
+
+        service._preprocess_audio_safe = mock_preprocess_safe
+
+        # Mock transcription to return different results
+        async def mock_run_transcription(audio_array, language):
+            if np.array_equal(audio_array, mock_audio1):
+                return ([mock_segment1], mock_info)
+            elif np.array_equal(audio_array, mock_audio2):
+                return ([mock_segment2], mock_info)
+
+        service._run_transcription = mock_run_transcription
+
+        batch = [(b'audio1', 'wav'), (b'audio2', 'wav')]
+        results = await service.transcribe_batch(batch)
+
+        assert len(results) == 2
+        assert results[0].text == 'First audio'
+        assert results[1].text == 'Second audio'
+        assert all(r.language == 'en' for r in results)
+        assert all(r.confidence > 0.0 for r in results)
+
+    @pytest.mark.asyncio
+    async def test_transcribe_batch_partial_failure(self, service):
+        """Test batch transcription with some items failing"""
+        mock_audio = np.random.randn(16000).astype('float32')
+
+        mock_segment = MagicMock()
+        mock_segment.text = "Valid audio"
+        mock_segment.start = 0.0
+        mock_segment.end = 1.0
+        mock_segment.avg_logprob = -0.1
+
+        mock_info = MagicMock()
+        mock_info.language = 'en'
+
+        # First item succeeds, second fails preprocessing
+        async def mock_preprocess_safe(audio_data, fmt):
+            if audio_data == b'valid_audio':
+                return mock_audio, 16000, 1000
+            return None, 0, 0  # Failure
+
+        service._preprocess_audio_safe = mock_preprocess_safe
+        service._run_transcription = AsyncMock(return_value=([mock_segment], mock_info))
+
+        batch = [(b'valid_audio', 'wav'), (b'invalid_audio', 'wav')]
+        results = await service.transcribe_batch(batch)
+
+        assert len(results) == 2
+        assert results[0].text == 'Valid audio'
+        assert results[1].text == ''  # Failed item
+        assert results[1].confidence == 0.0
+
+    @pytest.mark.asyncio
+    async def test_transcribe_batch_all_preprocessing_failed(self, service):
+        """Test batch transcription when all preprocessing fails"""
+        async def mock_preprocess_safe(audio_data, fmt):
+            return None, 0, 0  # All fail
+
+        service._preprocess_audio_safe = mock_preprocess_safe
+
+        batch = [(b'audio1', 'wav'), (b'audio2', 'wav')]
+        results = await service.transcribe_batch(batch)
+
+        assert len(results) == 2
+        assert all(r.text == '' for r in results)
+        assert all(r.confidence == 0.0 for r in results)
+
+    @pytest.mark.asyncio
+    async def test_transcribe_batch_transcription_exception(self, service):
+        """Test batch transcription when transcription raises exception"""
+        mock_audio = np.random.randn(16000).astype('float32')
+
+        async def mock_preprocess_safe(audio_data, fmt):
+            return mock_audio, 16000, 1000
+
+        service._preprocess_audio_safe = mock_preprocess_safe
+        service._run_transcription = AsyncMock(side_effect=Exception("Transcription error"))
+
+        batch = [(b'audio1', 'wav')]
+        results = await service.transcribe_batch(batch)
+
+        assert len(results) == 1
+        assert results[0].text == ''
+        assert results[0].confidence == 0.0
 
 
 class TestGetStatus:

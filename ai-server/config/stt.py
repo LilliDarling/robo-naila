@@ -33,6 +33,7 @@ SPEECH_PAD_MS = int(os.getenv("STT_SPEECH_PAD_MS", "400"))
 
 # Quality Settings
 MIN_CONFIDENCE = float(os.getenv("STT_MIN_CONFIDENCE", "0.6"))
+REJECT_LOW_CONFIDENCE = os.getenv("STT_REJECT_LOW_CONFIDENCE", "false").lower() == "true"
 MIN_DURATION_MS = int(os.getenv("STT_MIN_DURATION_MS", "100"))
 MAX_DURATION_MS = int(os.getenv("STT_MAX_DURATION_MS", "30000"))  # 30 seconds
 MIN_TEXT_LENGTH = int(os.getenv("STT_MIN_TEXT_LENGTH", "1"))
@@ -44,6 +45,8 @@ SUPPORTED_FORMATS = ["wav", "mp3", "flac", "ogg", "m4a", "webm"]
 # Performance Thresholds
 MAX_TRANSCRIPTION_TIME_SECONDS = 30.0  # Timeout
 WARNING_RTF_THRESHOLD = 1.0  # Real-time factor (warn if slower than real-time)
+ENABLE_WARMUP = os.getenv("STT_ENABLE_WARMUP", "true").lower() == "true"
+WARMUP_DURATION_MS = int(os.getenv("STT_WARMUP_DURATION_MS", "1000"))  # Duration of warm-up audio
 
 # Response Formatting
 STRIP_WHITESPACE = True
