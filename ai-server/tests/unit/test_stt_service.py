@@ -83,7 +83,7 @@ class TestLoadModel:
         mock_hw_optimizer.hardware_info.memory_gb = 8.0
 
         with patch('pathlib.Path.exists', return_value=True), \
-             patch('services.stt.HardwareOptimizer', return_value=mock_hw_optimizer), \
+             patch('services.base.HardwareOptimizer', return_value=mock_hw_optimizer), \
              patch('faster_whisper.WhisperModel', return_value=mock_whisper_model) as mock_whisper_class:
 
             result = await service.load_model()
@@ -98,7 +98,7 @@ class TestLoadModel:
     async def test_load_model_import_error(self, service):
         """Test that load_model handles missing faster-whisper gracefully"""
         with patch('pathlib.Path.exists', return_value=True), \
-             patch('services.stt.HardwareOptimizer'):
+             patch('services.base.HardwareOptimizer'):
 
             # Mock the import to raise ImportError
             with patch.dict('sys.modules', {'faster_whisper': None}):
@@ -117,7 +117,7 @@ class TestLoadModel:
         mock_hw_optimizer.hardware_info.memory_gb = 4.0
 
         with patch('pathlib.Path.exists', return_value=True), \
-             patch('services.stt.HardwareOptimizer', return_value=mock_hw_optimizer), \
+             patch('services.base.HardwareOptimizer', return_value=mock_hw_optimizer), \
              patch('faster_whisper.WhisperModel', side_effect=MemoryError("OOM")):
 
             result = await service.load_model()
@@ -132,7 +132,7 @@ class TestLoadModel:
         mock_hw_optimizer.hardware_info.device_type = 'cuda'
 
         with patch('pathlib.Path.exists', return_value=True), \
-             patch('services.stt.HardwareOptimizer', return_value=mock_hw_optimizer), \
+             patch('services.base.HardwareOptimizer', return_value=mock_hw_optimizer), \
              patch('faster_whisper.WhisperModel', side_effect=ValueError("CUDA error")):
 
             result = await service.load_model()
@@ -216,28 +216,20 @@ class TestThreadCount:
 
     def test_get_thread_count_configured(self, service):
         """Test that configured thread count is used"""
-        with patch.object(stt_config, 'THREADS', 8):
-            count = service._get_thread_count()
-
-            assert count == 8
+        count = service._get_thread_count(config_threads=8)
+        assert count == 8
 
     def test_get_thread_count_auto_detect(self, service):
         """Test auto-detection of thread count"""
         service.hardware_info = {'cpu_count': 16}
-
-        with patch.object(stt_config, 'THREADS', 0):
-            count = service._get_thread_count()
-
-            assert count == 12  # 75% of 16
+        count = service._get_thread_count(config_threads=0)
+        assert count == 12  # 75% of 16
 
     def test_get_thread_count_default(self, service):
         """Test default thread count fallback"""
         service.hardware_info = None
-
-        with patch.object(stt_config, 'THREADS', 0):
-            count = service._get_thread_count()
-
-            assert count == 4
+        count = service._get_thread_count(config_threads=0)
+        assert count == 4
 
 
 class TestAudioValidation:

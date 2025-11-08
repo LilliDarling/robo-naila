@@ -3,7 +3,6 @@
 import asyncio
 import io
 import logging
-import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +11,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from config import stt as stt_config
-from config.hardware_config import HardwareOptimizer
+from services.base import BaseAIService
 
 
 logger = logging.getLogger(__name__)
@@ -29,50 +28,26 @@ class TranscriptionResult:
     segments: Optional[List[Dict]] = None
 
 
-class STTService:
+class STTService(BaseAIService):
     """Service for loading and running STT inference"""
 
     def __init__(self):
-        self.model = None
-        self.model_path = Path(stt_config.MODEL_PATH)
-        self.is_ready = False
-        self.hardware_info = None
+        super().__init__(stt_config.MODEL_PATH)
 
-    async def load_model(self, hardware_info: Optional[Dict] = None) -> bool:
-        """Load the STT model with hardware optimization
+    def _get_model_type(self) -> str:
+        """Get the model type name for logging"""
+        return "STT"
 
-        Args:
-            hardware_info: Optional pre-detected hardware info. If None, will detect automatically.
-        """
-        if self.is_ready:
-            logger.warning("Model already loaded")
-            return True
+    def _log_configuration(self):
+        """Log model-specific configuration after successful load"""
+        device = self._get_device()
+        compute_type = self._get_compute_type()
+        cpu_threads = self._get_thread_count(stt_config.THREADS)
+        logger.info(f"Configuration: device={device}, compute_type={compute_type}, cpu_threads={cpu_threads}")
 
+    async def _load_model_impl(self) -> bool:
+        """STT-specific model loading logic"""
         try:
-            # Verify model file exists
-            if not self.model_path.exists():
-                logger.error(f"Model file not found: {self.model_path}")
-                return False
-
-            logger.info(f"Loading STT model: {self.model_path}")
-            start_time = time.time()
-
-            # Use provided hardware info or detect if not provided
-            if hardware_info is not None:
-                self.hardware_info = hardware_info
-                logger.debug("Using shared hardware detection")
-            else:
-                # Fallback to individual detection (for backward compatibility)
-                hw_optimizer = HardwareOptimizer()
-                self.hardware_info = {
-                    'device_type': hw_optimizer.hardware_info.device_type,
-                    'device_name': hw_optimizer.hardware_info.device_name,
-                    'acceleration': hw_optimizer.hardware_info.device_type,
-                    'cpu_count': os.cpu_count() or 4,
-                    'vram_gb': hw_optimizer.hardware_info.memory_gb
-                }
-                logger.info(f"Hardware detected: {self.hardware_info}")
-
             # Import faster-whisper
             try:
                 from faster_whisper import WhisperModel
@@ -83,7 +58,7 @@ class STTService:
             # Determine optimal settings
             device = self._get_device()
             compute_type = self._get_compute_type()
-            cpu_threads = self._get_thread_count()
+            cpu_threads = self._get_thread_count(stt_config.THREADS)
 
             # Load model (this is blocking, so run in executor)
             loop = asyncio.get_event_loop()
@@ -105,7 +80,6 @@ class STTService:
                     f"Current config: compute_type={compute_type}, device={device}. "
                     f"Error: {e}"
                 )
-                self.is_ready = False
                 return False
             except ValueError as e:
                 error_msg = str(e).lower()
@@ -117,7 +91,6 @@ class STTService:
                     )
                 else:
                     logger.error(f"Invalid model configuration: {e}")
-                self.is_ready = False
                 return False
             except RuntimeError as e:
                 error_msg = str(e).lower()
@@ -130,20 +103,12 @@ class STTService:
                     )
                 else:
                     logger.error(f"Runtime error loading model: {e}")
-                self.is_ready = False
                 return False
-
-            load_time = time.time() - start_time
-            self.is_ready = True
-
-            logger.info(f"Model loaded successfully in {load_time:.2f}s")
-            logger.info(f"Configuration: device={device}, compute_type={compute_type}, cpu_threads={cpu_threads}")
 
             return True
 
         except Exception as e:
-            logger.error(f"Failed to load model: {e}", exc_info=True)
-            self.is_ready = False
+            logger.error(f"Exception during model loading: {e}", exc_info=True)
             return False
 
     def _get_device(self) -> str:
@@ -175,18 +140,6 @@ class STTService:
 
         return "int8"
 
-    def _get_thread_count(self) -> int:
-        """Determine optimal thread count based on hardware"""
-        if stt_config.THREADS > 0:
-            return stt_config.THREADS
-
-        # Auto-detect based on CPU cores
-        if self.hardware_info and 'cpu_count' in self.hardware_info:
-            cpu_count = self.hardware_info['cpu_count']
-            # Use 75% of available cores, minimum 2
-            return max(2, int(cpu_count * 0.75))
-
-        return 4  # Safe default
 
     async def transcribe_audio(
         self,
@@ -440,30 +393,10 @@ class STTService:
 
     def get_status(self) -> Dict:
         """Get current service status"""
-        return {
-            "ready": self.is_ready,
-            "model_path": str(self.model_path),
-            "model_exists": self.model_path.exists(),
-            "hardware": self.hardware_info,
+        status = super().get_status()
+        status.update({
             "sample_rate": stt_config.SAMPLE_RATE,
             "supported_formats": stt_config.SUPPORTED_FORMATS,
             "language": stt_config.LANGUAGE,
-        }
-
-    def unload_model(self):
-        """Unload the model and free resources"""
-        if self.model:
-            logger.info("Unloading STT model")
-            try:
-                # faster-whisper doesn't have explicit cleanup, rely on garbage collection
-                if hasattr(self.model, 'close'):
-                    self.model.close()
-                    logger.debug("Model cleanup method called successfully")
-                else:
-                    logger.debug("Model does not have a close() method; relying on garbage collection")
-            except Exception as e:
-                logger.warning(f"Error during model cleanup: {e}")
-            finally:
-                del self.model
-                self.model = None
-                self.is_ready = False
+        })
+        return status
