@@ -64,6 +64,34 @@ class TestAIModelManager:
             assert llm_call_kwargs['hardware_info'] == stt_call_kwargs['hardware_info']
 
     @pytest.mark.asyncio
+    async def test_parallel_model_loading(self, manager, llm_service, stt_service):
+        """Test that models are loaded in parallel using asyncio.gather"""
+        import asyncio
+
+        mock_hw_optimizer = MagicMock()
+        mock_hw_optimizer.hardware_info.device_type = 'cpu'
+        mock_hw_optimizer.hardware_info.device_name = 'CPU'
+        mock_hw_optimizer.hardware_info.memory_gb = 16.0
+
+        with patch('services.ai_model_manager.HardwareOptimizer', return_value=mock_hw_optimizer), \
+             patch('services.ai_model_manager.asyncio.gather', new_callable=AsyncMock) as mock_gather:
+
+            # Make gather return successful results
+            mock_gather.return_value = [True, True]
+
+            await manager.load_models()
+
+            # Verify asyncio.gather was called
+            assert mock_gather.called
+
+            # Verify it was called with both model loading tasks
+            call_args = mock_gather.call_args
+            assert len(call_args[0]) == 2  # Two tasks (LLM and STT)
+
+            # Verify return_exceptions=True was passed
+            assert call_args[1].get('return_exceptions') is True
+
+    @pytest.mark.asyncio
     async def test_hardware_info_cached(self, manager):
         """Test that hardware info is cached after first detection"""
         mock_hw_optimizer = MagicMock()
@@ -126,6 +154,30 @@ class TestAIModelManager:
 
             # STT is optional, so overall should still succeed if LLM loaded
             assert result is True
+
+    @pytest.mark.asyncio
+    async def test_load_models_exception_handling(self, manager, llm_service, stt_service):
+        """Test that exceptions during loading are handled gracefully"""
+        # Make STT raise an exception
+        stt_service.load_model = AsyncMock(side_effect=RuntimeError("Model corrupted"))
+
+        with patch('services.ai_model_manager.HardwareOptimizer'):
+            result = await manager.load_models()
+
+            # Should handle exception and still succeed if LLM loaded
+            assert result is True  # LLM loaded successfully
+
+    @pytest.mark.asyncio
+    async def test_load_models_llm_exception(self, manager, llm_service, stt_service):
+        """Test that LLM exception affects overall result"""
+        # Make LLM raise an exception
+        llm_service.load_model = AsyncMock(side_effect=RuntimeError("LLM failed"))
+
+        with patch('services.ai_model_manager.HardwareOptimizer'):
+            result = await manager.load_models()
+
+            # Should fail overall if LLM throws exception
+            assert result is False
 
     def test_get_llm_service(self, manager, llm_service):
         """Test getting LLM service"""

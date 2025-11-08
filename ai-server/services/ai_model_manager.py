@@ -1,5 +1,6 @@
 """AI Model Manager - Centralized model loading and lifecycle management"""
 
+import asyncio
 import logging
 import os
 from typing import Dict, Optional
@@ -36,7 +37,7 @@ class AIModelManager:
         return self._hardware_info
 
     async def load_models(self) -> bool:
-        """Load all AI models during startup with shared hardware detection"""
+        """Load all AI models during startup with shared hardware detection and parallel loading"""
         if self._models_loaded:
             logger.warning("Models already loaded")
             return True
@@ -46,29 +47,45 @@ class AIModelManager:
         # Detect hardware once for all services
         hardware_info = self._detect_hardware()
 
-        # Load LLM model if configured
+        # Prepare loading tasks for parallel execution
+        tasks = []
+        task_names = []
+
         if self.llm_service:
             logger.info("Loading LLM model...")
-            llm_success = await self.llm_service.load_model(hardware_info=hardware_info)
-            if llm_success:
-                logger.info(f"LLM model loaded successfully: {self.llm_service.model_path.name}")
-            else:
-                logger.warning("LLM model failed to load - will use fallback responses")
-                success = False
+            tasks.append(self.llm_service.load_model(hardware_info=hardware_info))
+            task_names.append("LLM")
         else:
             logger.info("No LLM service configured - using pattern-based responses")
 
-        # Load STT model if configured
         if self.stt_service:
             logger.info("Loading STT model...")
-            stt_success = await self.stt_service.load_model(hardware_info=hardware_info)
-            if stt_success:
-                logger.info(f"STT model loaded successfully: {self.stt_service.model_path.name}")
-            else:
-                logger.warning("STT model failed to load - audio input will be unavailable")
-                # Don't mark overall success as False - STT is optional
+            tasks.append(self.stt_service.load_model(hardware_info=hardware_info))
+            task_names.append("STT")
         else:
             logger.info("No STT service configured - audio input disabled")
+
+        # Load all models in parallel if there are any to load
+        if tasks:
+            logger.info(f"Loading {len(tasks)} model(s) in parallel...")
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Process results
+            for result, name in zip(results, task_names):
+                if isinstance(result, Exception):
+                    logger.error(f"{name} model loading failed with exception: {result}")
+                    if name == "LLM":
+                        success = False  # LLM failure affects overall success
+                elif result is True:
+                    service = self.llm_service if name == "LLM" else self.stt_service
+                    logger.info(f"{name} model loaded successfully: {service.model_path.name}")
+                else:
+                    logger.warning(f"{name} model failed to load")
+                    if name == "LLM":
+                        success = False  # LLM failure affects overall success
+                        logger.warning("Will use fallback responses")
+                    else:
+                        logger.warning("Audio input will be unavailable")
 
         self._models_loaded = success
         return success
