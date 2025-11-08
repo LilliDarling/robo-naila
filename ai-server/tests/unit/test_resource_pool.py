@@ -56,7 +56,7 @@ class TestResourcePool:
             blocking_task()
         )
 
-        assert task2_waited is True  # Second task had to wait
+        assert task2_waited
         assert pool.get_stats()["pool_waits"] == 1
 
     @pytest.mark.asyncio
