@@ -302,6 +302,27 @@ class TestAudioPreprocessing:
             assert duration_ms == 1000  # 1 second
 
     @pytest.mark.asyncio
+    async def test_preprocess_audio_already_correct_format(self, service):
+        """Test that preprocessing skips conversion for already correct format (16kHz mono)"""
+        # Create mock audio that's already in correct format
+        mock_audio_array = np.random.randn(16000).astype('float32')  # Mono, 16kHz
+        mock_sample_rate = 16000
+
+        mock_sf = MagicMock()
+        mock_sf.read.return_value = (mock_audio_array, mock_sample_rate)
+
+        # Mock resampy to verify it's NOT called
+        mock_resampy = MagicMock()
+
+        with patch.dict('sys.modules', {'soundfile': mock_sf, 'resampy': mock_resampy}):
+            audio_array, sample_rate, duration_ms = await service._preprocess_audio(b'fake_wav_data', 'wav')
+
+            # Verify resampling was NOT called (audio already correct)
+            assert not mock_resampy.resample.called
+            assert sample_rate == 16000
+            assert len(audio_array.shape) == 1  # Mono
+
+    @pytest.mark.asyncio
     async def test_preprocess_audio_stereo_to_mono(self, service):
         """Test conversion of stereo audio to mono"""
         # Create mock stereo audio (2 channels)

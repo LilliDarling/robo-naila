@@ -333,7 +333,7 @@ class STTService:
         return True, ""
 
     async def _preprocess_audio(self, audio_data: bytes, format: str) -> Tuple[np.ndarray, int, int]:
-        """Preprocess audio data for Whisper"""
+        """Preprocess audio data for Whisper with optimization for correct format"""
         try:
             # Import audio processing libraries
             import soundfile as sf
@@ -343,15 +343,28 @@ class STTService:
             audio_io = BytesIO(audio_data)
             audio_array, sample_rate = sf.read(audio_io, dtype='float32')
 
-            # Convert stereo to mono if necessary
-            if len(audio_array.shape) > 1:
-                audio_array = audio_array.mean(axis=1)
+            # Track if any conversion is needed
+            needs_conversion = False
 
-            # Resample to 16kHz if necessary (Whisper requirement)
-            if sample_rate != stt_config.SAMPLE_RATE:
+            # Check if stereo to mono conversion needed
+            is_mono = len(audio_array.shape) == 1
+            if not is_mono:
+                needs_conversion = True
+                audio_array = audio_array.mean(axis=1)
+                logger.debug("Converted stereo to mono")
+
+            # Check if resampling needed
+            correct_sample_rate = sample_rate == stt_config.SAMPLE_RATE
+            if not correct_sample_rate:
+                needs_conversion = True
                 import resampy
                 audio_array = resampy.resample(audio_array, sample_rate, stt_config.SAMPLE_RATE)
                 sample_rate = stt_config.SAMPLE_RATE
+                logger.debug(f"Resampled from {sample_rate}Hz to {stt_config.SAMPLE_RATE}Hz")
+
+            # Log optimization when no conversion needed
+            if not needs_conversion:
+                logger.debug("Audio already in correct format (16kHz mono), skipping conversion")
 
             # Calculate duration
             duration_ms = int((len(audio_array) / sample_rate) * 1000)
