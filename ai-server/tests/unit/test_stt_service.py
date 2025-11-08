@@ -808,7 +808,7 @@ class TestUnloadModel:
         service.unload_model()
 
         assert service.model is None
-        assert service.is_ready is False
+        assert not service.is_ready
 
     def test_unload_model_with_close_method(self):
         """Test model unloading when model has close() method"""
