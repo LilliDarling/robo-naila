@@ -52,6 +52,14 @@ class AIHandlers(BaseHandler):
         # Check if STT service is available
         if not self.stt_service or not self.stt_service.is_ready:
             self.logger.warning(f"STT service not available, cannot process audio from {message.device_id}")
+            # Publish error message to MQTT topic for the device
+            error_topic = f"devices/{message.device_id}/audio/error"
+            error_payload = {
+                "error": "stt_unavailable",
+                "message": "Speech-to-text service is currently unavailable. Please try again later.",
+                "device_id": message.device_id
+            }
+            await self.mqtt_service.publish(error_topic, error_payload)
             return
 
         try:
