@@ -3,6 +3,7 @@ from config.mqtt_config import MQTTConfig
 from mqtt.core.service_coordinator import NailaMQTTService
 from mqtt.handlers.coordinator import ProtocolHandler
 from services.llm import LLMService
+from services.stt import STTService
 from .lifecycle import ServerLifecycleManager
 
 
@@ -20,12 +21,14 @@ class NailaAIServer:
 
         # Initialize AI services
         self.llm_service = LLMService()
+        self.stt_service = STTService()
 
         # Initialize lifecycle manager
         self.lifecycle = ServerLifecycleManager(
             self.mqtt_service,
             self.protocol_handlers,
-            self.llm_service
+            self.llm_service,
+            self.stt_service
         )
     
     async def start(self):

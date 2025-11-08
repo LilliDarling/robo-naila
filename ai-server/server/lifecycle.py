@@ -32,10 +32,10 @@ class ShutdownStage(Enum):
 class ServerLifecycleManager:
     """Manages server startup, shutdown, and lifecycle events"""
 
-    def __init__(self, mqtt_service, protocol_handlers, llm_service=None):
+    def __init__(self, mqtt_service, protocol_handlers, llm_service=None, stt_service=None):
         self.mqtt_service = mqtt_service
         self.protocol_handlers = protocol_handlers
-        self.ai_model_manager = AIModelManager(llm_service)
+        self.ai_model_manager = AIModelManager(llm_service, stt_service)
         self.health_monitor = HealthMonitor(mqtt_service, protocol_handlers)
 
         # Server state
@@ -67,10 +67,16 @@ class ServerLifecycleManager:
             # Stage: Load AI models
             logger.info(f"{StartupStage.LOAD_AI_MODELS.value}...")
             await self.ai_model_manager.load_models()
+
             # Pass LLM service to protocol handlers if available
             llm_service = self.ai_model_manager.get_llm_service()
             if llm_service:
                 self.protocol_handlers.set_llm_service(llm_service)
+
+            # Pass STT service to protocol handlers if available
+            stt_service = self.ai_model_manager.get_stt_service()
+            if stt_service:
+                self.protocol_handlers.set_stt_service(stt_service)
 
             # Stage: Register protocol handlers
             logger.info(f"{StartupStage.REGISTER_HANDLERS.value}...")
