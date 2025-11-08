@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -14,6 +15,46 @@ from services.base import BaseAIService
 
 
 logger = logging.getLogger(__name__)
+
+
+def retry_on_failure(max_retries: Optional[int] = None, delay: Optional[float] = None):
+    """Decorator to retry async functions on failure with exponential backoff
+
+    Args:
+        max_retries: Maximum number of retry attempts (uses config default if None)
+        delay: Initial delay between retries in seconds (uses config default if None)
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            retries = max_retries if max_retries is not None else stt_config.MAX_RETRIES
+            retry_delay = delay if delay is not None else stt_config.RETRY_DELAY_SECONDS
+
+            last_exception = None
+            for attempt in range(retries + 1):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+
+                    if attempt < retries:
+                        # Exponential backoff: delay * 2^attempt
+                        wait_time = retry_delay * (2 ** attempt)
+                        logger.warning(
+                            f"{func.__name__} failed (attempt {attempt + 1}/{retries + 1}): {e}. "
+                            f"Retrying in {wait_time:.2f}s..."
+                        )
+                        await asyncio.sleep(wait_time)
+                    else:
+                        logger.error(
+                            f"{func.__name__} failed after {retries + 1} attempts: {e}"
+                        )
+
+            # If all retries failed, raise the last exception
+            raise last_exception
+
+        return wrapper
+    return decorator
 
 
 @dataclass
@@ -339,8 +380,9 @@ class STTService(BaseAIService):
             transcription_time_ms=0
         )
 
+    @retry_on_failure()
     async def _run_transcription(self, audio_array: np.ndarray, language: Optional[str]):
-        """Run the Whisper transcription model"""
+        """Run the Whisper transcription model with retry logic"""
         model = self.model
         assert model is not None, "Model should be loaded"
 

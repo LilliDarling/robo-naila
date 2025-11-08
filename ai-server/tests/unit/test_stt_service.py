@@ -832,3 +832,121 @@ class TestUnloadModel:
 
         assert service.model is None
         assert service.is_ready is False
+
+
+class TestRetryLogic:
+    """Test retry and error recovery behavior"""
+
+    @pytest.fixture
+    def service(self):
+        service = STTService()
+        service.is_ready = True
+        service.model = MagicMock()
+        return service
+
+    @pytest.mark.asyncio
+    async def test_run_transcription_success_first_try(self, service):
+        """Test that successful transcription doesn't retry"""
+        mock_segment = MagicMock()
+        mock_segment.text = "Success"
+        mock_info = MagicMock()
+        mock_info.language = 'en'
+
+        service.model.transcribe.return_value = ([mock_segment], mock_info)
+
+        audio_array = np.random.randn(16000).astype('float32')
+        result = await service._run_transcription(audio_array, None)
+
+        # Should be called exactly once (no retries)
+        assert service.model.transcribe.call_count == 1
+        assert result == ([mock_segment], mock_info)
+
+    @pytest.mark.asyncio
+    async def test_run_transcription_retry_then_success(self, service):
+        """Test that transcription retries on failure then succeeds"""
+        mock_segment = MagicMock()
+        mock_segment.text = "Success"
+        mock_info = MagicMock()
+        mock_info.language = 'en'
+
+        # Fail twice, then succeed
+        service.model.transcribe.side_effect = [
+            RuntimeError("Temporary error"),
+            RuntimeError("Another error"),
+            ([mock_segment], mock_info)
+        ]
+
+        audio_array = np.random.randn(16000).astype('float32')
+
+        with patch.object(stt_config, 'MAX_RETRIES', 2), \
+             patch.object(stt_config, 'RETRY_DELAY_SECONDS', 0.01):  # Fast retry for testing
+
+            result = await service._run_transcription(audio_array, None)
+
+            # Should be called 3 times (initial + 2 retries)
+            assert service.model.transcribe.call_count == 3
+            assert result == ([mock_segment], mock_info)
+
+    @pytest.mark.asyncio
+    async def test_run_transcription_all_retries_fail(self, service):
+        """Test that transcription raises after all retries fail"""
+        # Always fail
+        service.model.transcribe.side_effect = RuntimeError("Persistent error")
+
+        audio_array = np.random.randn(16000).astype('float32')
+
+        with patch.object(stt_config, 'MAX_RETRIES', 2), \
+             patch.object(stt_config, 'RETRY_DELAY_SECONDS', 0.01):
+
+            with pytest.raises(RuntimeError, match="Persistent error"):
+                await service._run_transcription(audio_array, None)
+
+            # Should be called 3 times (initial + 2 retries)
+            assert service.model.transcribe.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_run_transcription_exponential_backoff(self, service):
+        """Test that retry delay uses exponential backoff"""
+        service.model.transcribe.side_effect = RuntimeError("Error")
+
+        audio_array = np.random.randn(16000).astype('float32')
+        sleep_times = []
+
+        original_sleep = asyncio.sleep
+
+        async def track_sleep(delay):
+            sleep_times.append(delay)
+            await original_sleep(0)  # Don't actually wait
+
+        with patch.object(stt_config, 'MAX_RETRIES', 2), \
+             patch.object(stt_config, 'RETRY_DELAY_SECONDS', 0.5), \
+             patch('asyncio.sleep', side_effect=track_sleep):
+
+            try:
+                await service._run_transcription(audio_array, None)
+            except RuntimeError:
+                pass
+
+            # Should have exponential backoff: 0.5s, 1.0s (0.5 * 2^0, 0.5 * 2^1)
+            assert len(sleep_times) == 2
+            assert sleep_times[0] == 0.5  # First retry: delay * 2^0
+            assert sleep_times[1] == 1.0  # Second retry: delay * 2^1
+
+    @pytest.mark.asyncio
+    async def test_transcribe_audio_handles_retry_failure(self, service):
+        """Test that transcribe_audio returns empty result when retries exhausted"""
+        # Make _run_transcription always fail
+        service.model.transcribe.side_effect = RuntimeError("Persistent error")
+
+        audio_array = np.random.randn(16000).astype('float32')
+
+        with patch.object(service, '_validate_audio', return_value=(True, '')), \
+             patch.object(service, '_preprocess_audio', return_value=(audio_array, 16000, 1000)), \
+             patch.object(stt_config, 'MAX_RETRIES', 1), \
+             patch.object(stt_config, 'RETRY_DELAY_SECONDS', 0.01):
+
+            result = await service.transcribe_audio(b'fake_audio', 'wav')
+
+            # Should return empty result instead of raising
+            assert result.text == ''
+            assert result.confidence == 0.0
