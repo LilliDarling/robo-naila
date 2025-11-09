@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from services.ai_model_manager import AIModelManager
+from managers.ai_model import AIModelManager
 from services.llm import LLMService
 from services.stt import STTService
 

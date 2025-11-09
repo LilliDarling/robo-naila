@@ -1,61 +1,31 @@
 """STT Service for speech-to-text transcription using Whisper models"""
-
+import re
+import resampy
+import soundfile as sf
+from io import BytesIO
 import asyncio
-import logging
 import time
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-
 import numpy as np
+
+try:
+    from faster_whisper import WhisperModel
+    HAS_FASTER_WHISPER = True
+except ImportError:
+    WhisperModel = None
+    HAS_FASTER_WHISPER = False
 
 from config import stt as stt_config
 from services.base import BaseAIService
-from services.resource_pool import ResourcePool
+from utils.retry import retry_on_failure
+from utils.resource_pool import ResourcePool
+from utils import get_logger
 
 
-logger = logging.getLogger(__name__)
-
-
-def retry_on_failure(max_retries: Optional[int] = None, delay: Optional[float] = None):
-    """Decorator to retry async functions on failure with exponential backoff
-
-    Args:
-        max_retries: Maximum number of retry attempts (uses config default if None)
-        delay: Initial delay between retries in seconds (uses config default if None)
-    """
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            retries = max_retries if max_retries is not None else stt_config.MAX_RETRIES
-            retry_delay = delay if delay is not None else stt_config.RETRY_DELAY_SECONDS
-
-            last_exception = None
-            for attempt in range(retries + 1):
-                try:
-                    return await func(*args, **kwargs)
-                except Exception as e:
-                    last_exception = e
-
-                    if attempt < retries:
-                        # Exponential backoff: delay * 2^attempt
-                        wait_time = retry_delay * (2 ** attempt)
-                        logger.warning(
-                            f"{func.__name__} failed (attempt {attempt + 1}/{retries + 1}): {e}. "
-                            f"Retrying in {wait_time:.2f}s..."
-                        )
-                        await asyncio.sleep(wait_time)
-                    else:
-                        logger.error(
-                            f"{func.__name__} failed after {retries + 1} attempts: {e}"
-                        )
-
-            # If all retries failed, raise the last exception
-            raise last_exception
-
-        return wrapper
-    return decorator
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -85,17 +55,18 @@ class STTService(BaseAIService):
         device = self._get_device()
         compute_type = self._get_compute_type()
         cpu_threads = self._get_thread_count(stt_config.THREADS)
-        logger.info(f"Configuration: device={device}, compute_type={compute_type}, cpu_threads={cpu_threads}")
+        logger.info("stt_configuration", device=device, compute_type=compute_type, cpu_threads=cpu_threads)
 
     async def _load_model_impl(self) -> bool:
         """STT-specific model loading logic"""
         try:
-            # Import faster-whisper
-            try:
-                from faster_whisper import WhisperModel
-            except ImportError:
-                logger.error("faster-whisper not installed. Run: pip install faster-whisper")
+            # Check if faster-whisper is available
+            if not HAS_FASTER_WHISPER or WhisperModel is None:
+                logger.error("faster_whisper_not_installed", suggestion="Run: pip install faster-whisper")
                 return False
+
+            # Type assertion for type checker
+            assert WhisperModel is not None, "WhisperModel should be available after import check"
 
             # Determine optimal settings
             device = self._get_device()
@@ -117,34 +88,37 @@ class STTService(BaseAIService):
                 )
             except MemoryError as e:
                 logger.error(
-                    f"Out of memory while loading model. "
-                    f"Try using a smaller model or setting COMPUTE_TYPE=int8. "
-                    f"Current config: compute_type={compute_type}, device={device}. "
-                    f"Error: {e}"
+                    "stt_out_of_memory",
+                    compute_type=compute_type,
+                    device=device,
+                    error=str(e),
+                    suggestion="Try using a smaller model or setting COMPUTE_TYPE=int8"
                 )
                 return False
             except ValueError as e:
                 error_msg = str(e).lower()
                 if "cuda" in error_msg or "gpu" in error_msg:
                     logger.error(
-                        f"GPU incompatibility detected. "
-                        f"Try setting DEVICE=cpu for CPU-only mode. "
-                        f"Error: {e}"
+                        "stt_gpu_incompatibility",
+                        error=str(e),
+                        suggestion="Try setting DEVICE=cpu for CPU-only mode"
                     )
                 else:
-                    logger.error(f"Invalid model configuration: {e}")
+                    logger.error("stt_invalid_configuration", error=str(e))
                 return False
             except RuntimeError as e:
                 error_msg = str(e).lower()
                 if "out of memory" in error_msg or "oom" in error_msg:
                     logger.error(
-                        f"Out of memory error during model loading. "
-                        f"Current config: device={device}, compute_type={compute_type}, "
-                        f"cpu_threads={cpu_threads}. "
-                        f"Consider using CPU mode or int8 compute type. Error: {e}"
+                        "stt_runtime_oom",
+                        device=device,
+                        compute_type=compute_type,
+                        cpu_threads=cpu_threads,
+                        error=str(e),
+                        suggestion="Consider using CPU mode or int8 compute type"
                     )
                 else:
-                    logger.error(f"Runtime error loading model: {e}")
+                    logger.error("stt_runtime_error", error=str(e), error_type=type(e).__name__)
                 return False
 
             # Initialize resource pool
@@ -152,7 +126,7 @@ class STTService(BaseAIService):
                 max_concurrent=stt_config.MAX_CONCURRENT_REQUESTS,
                 timeout=stt_config.POOL_TIMEOUT_SECONDS
             )
-            logger.info(f"Resource pool initialized with max {stt_config.MAX_CONCURRENT_REQUESTS} concurrent requests")
+            logger.info("resource_pool_initialized", max_concurrent=stt_config.MAX_CONCURRENT_REQUESTS)
 
             # Warm up the model if enabled
             if stt_config.ENABLE_WARMUP:
@@ -161,13 +135,13 @@ class STTService(BaseAIService):
             return True
 
         except Exception as e:
-            logger.error(f"Exception during model loading: {e}", exc_info=True)
+            logger.error("stt_model_loading_exception", error=str(e), error_type=type(e).__name__)
             return False
 
     async def _warmup_model(self):
         """Warm up the model with a dummy transcription to reduce first-inference latency"""
         try:
-            logger.info("Warming up STT model...")
+            logger.info("stt_warmup_starting")
             start_time = time.time()
 
             # Generate silent audio for warm-up
@@ -193,10 +167,10 @@ class STTService(BaseAIService):
             )
 
             warmup_time = time.time() - start_time
-            logger.info(f"Model warm-up completed in {warmup_time:.2f}s")
+            logger.info("stt_warmup_completed", warmup_time_seconds=round(warmup_time, 2))
 
         except Exception as e:
-            logger.warning(f"Model warm-up failed (non-critical): {e}")
+            logger.warning("stt_warmup_failed", error=str(e), severity="non-critical")
 
     def _get_device(self) -> str:
         """Determine optimal device based on hardware"""
@@ -205,10 +179,10 @@ class STTService(BaseAIService):
 
         # Auto-detect based on hardware
         if self.hardware_info and self.hardware_info.get('acceleration') == 'cuda':
-            logger.info("CUDA detected, using GPU acceleration")
+            logger.info("stt_device_selected", device="cuda", reason="CUDA detected")
             return "cuda"
 
-        logger.info("No GPU detected, using CPU")
+        logger.info("stt_device_selected", device="cpu", reason="No GPU detected")
         return "cpu"
 
     def _get_compute_type(self) -> str:
@@ -236,7 +210,7 @@ class STTService(BaseAIService):
     ) -> TranscriptionResult:
         """Transcribe audio data to text with resource pooling"""
         if not self.is_ready or self.model is None:
-            logger.error("Model not loaded, cannot transcribe")
+            logger.error("stt_model_not_loaded")
             return self._empty_result()
 
         if self._pool is None:
@@ -257,13 +231,13 @@ class STTService(BaseAIService):
             # Validate and preprocess audio
             is_valid, error_msg = self._validate_audio(audio_data, format)
             if not is_valid:
-                logger.error(f"Audio validation failed: {error_msg}")
+                logger.error("audio_validation_failed", error=error_msg)
                 return self._empty_result()
 
             audio_array, sample_rate, duration_ms = await self._preprocess_audio(audio_data, format)
 
             if stt_config.LOG_AUDIO_INFO:
-                logger.debug(f"Audio preprocessed: {duration_ms}ms, {sample_rate}Hz, {len(audio_array)} samples")
+                logger.debug("audio_preprocessed", duration_ms=duration_ms, sample_rate=sample_rate, sample_count=len(audio_array))
 
             # Run transcription
             segments_list, info = await self._run_transcription(audio_array, language)
@@ -282,7 +256,7 @@ class STTService(BaseAIService):
             )
 
         except Exception as e:
-            logger.error(f"Transcription failed: {e}", exc_info=True)
+            logger.error("transcription_failed", error=str(e), error_type=type(e).__name__)
             return self._empty_result()
 
     async def transcribe_batch(
@@ -300,7 +274,7 @@ class STTService(BaseAIService):
             List of TranscriptionResult objects in the same order as input
         """
         if not self.is_ready or self.model is None:
-            logger.error("Model not loaded, cannot transcribe batch")
+            logger.error("stt_model_not_loaded_batch")
             return [self._empty_result() for _ in audio_batch]
 
         if not audio_batch:
@@ -325,7 +299,7 @@ class STTService(BaseAIService):
             ]
 
             if not valid_items:
-                logger.warning("All audio in batch failed preprocessing")
+                logger.warning("batch_preprocessing_all_failed")
                 return [self._empty_result() for _ in audio_batch]
 
             # Transcribe all valid audio
@@ -339,7 +313,7 @@ class STTService(BaseAIService):
             result_map = {}
             for (idx, _, _, duration_ms), transcription in zip(valid_items, transcriptions):
                 if isinstance(transcription, Exception):
-                    logger.error(f"Batch item {idx} failed: {transcription}")
+                    logger.error("batch_item_failed", item_index=idx, error=str(transcription), error_type=type(transcription).__name__)
                     result_map[idx] = self._empty_result()
                 else:
                     segments_list, info = transcription
@@ -363,17 +337,19 @@ class STTService(BaseAIService):
             # Log batch performance
             total_time = time.time() - start_time
             total_audio_duration = sum(r.duration_ms for r in results) / 1000.0
+            rtf = total_time/total_audio_duration if total_audio_duration > 0 else 0
             logger.info(
-                f"Batch transcription: {len(audio_batch)} items, "
-                f"{total_time:.2f}s total, "
-                f"{total_audio_duration:.1f}s audio, "
-                f"RTF={total_time/total_audio_duration:.2f}"
+                "batch_transcription_completed",
+                item_count=len(audio_batch),
+                total_time_seconds=round(total_time, 2),
+                total_audio_seconds=round(total_audio_duration, 1),
+                rtf=round(rtf, 2)
             )
 
             return results
 
         except Exception as e:
-            logger.error(f"Batch transcription failed: {e}", exc_info=True)
+            logger.error("batch_transcription_failed", error=str(e), error_type=type(e).__name__)
             return [self._empty_result() for _ in audio_batch]
 
     async def _preprocess_audio_safe(
@@ -383,12 +359,12 @@ class STTService(BaseAIService):
         try:
             is_valid, error_msg = self._validate_audio(audio_data, format)
             if not is_valid:
-                logger.warning(f"Audio validation failed: {error_msg}")
+                logger.warning("audio_validation_failed_safe", error=error_msg)
                 return None, 0, 0
 
             return await self._preprocess_audio(audio_data, format)
         except Exception as e:
-            logger.warning(f"Audio preprocessing failed: {e}")
+            logger.warning("audio_preprocessing_failed_safe", error=str(e), error_type=type(e).__name__)
             return None, 0, 0
 
     def _empty_result(self) -> TranscriptionResult:
@@ -468,17 +444,18 @@ class STTService(BaseAIService):
 
         if stt_config.LOG_PERFORMANCE_METRICS:
             logger.info(
-                f"Transcription: {transcription_time:.2f}s, "
-                f"audio={duration_ms}ms, "
-                f"RTF={rtf:.2f}, "
-                f"confidence={avg_confidence:.2f}"
+                "stt_transcription_performance",
+                transcription_time_seconds=round(transcription_time, 2),
+                audio_duration_ms=duration_ms,
+                rtf=round(rtf, 2),
+                confidence=round(avg_confidence, 2)
             )
 
         if rtf > stt_config.WARNING_RTF_THRESHOLD:
-            logger.warning(f"Slow transcription: RTF={rtf:.2f} (slower than real-time)")
+            logger.warning("stt_slow_transcription", rtf=round(rtf, 2), threshold=stt_config.WARNING_RTF_THRESHOLD)
 
         if stt_config.LOG_TRANSCRIPTIONS:
-            logger.debug(f"Transcription: {transcribed_text}")
+            logger.debug("stt_transcription_text", text=transcribed_text)
 
     def _build_result(self, text: str, language: str, confidence: float,
                       duration_ms: int, transcription_time_ms: int,
@@ -486,9 +463,9 @@ class STTService(BaseAIService):
         """Build final transcription result, checking confidence threshold"""
         # Check confidence threshold
         if confidence < stt_config.MIN_CONFIDENCE:
-            logger.warning(f"Low confidence transcription: {confidence:.2f}")
+            logger.warning("stt_low_confidence", confidence=round(confidence, 2), threshold=stt_config.MIN_CONFIDENCE)
             if stt_config.REJECT_LOW_CONFIDENCE:
-                logger.info(f"Rejecting low confidence transcription (threshold: {stt_config.MIN_CONFIDENCE})")
+                logger.info("stt_rejecting_low_confidence", threshold=stt_config.MIN_CONFIDENCE)
                 text = ""  # Reject the transcription
 
         return TranscriptionResult(
@@ -516,10 +493,6 @@ class STTService(BaseAIService):
     async def _preprocess_audio(self, audio_data: bytes, format: str) -> Tuple[np.ndarray, int, int]:
         """Preprocess audio data for Whisper with optimization for correct format"""
         try:
-            # Import audio processing libraries
-            import soundfile as sf
-            from io import BytesIO
-
             # Load audio using soundfile
             audio_io = BytesIO(audio_data)
             audio_array, sample_rate = sf.read(audio_io, dtype='float32')
@@ -532,30 +505,30 @@ class STTService(BaseAIService):
             if not is_mono:
                 needs_conversion = True
                 audio_array = audio_array.mean(axis=1)
-                logger.debug("Converted stereo to mono")
+                logger.debug("audio_converted_to_mono")
 
             # Check if resampling needed
             correct_sample_rate = sample_rate == stt_config.SAMPLE_RATE
             if not correct_sample_rate:
                 needs_conversion = True
-                import resampy
+                original_rate = sample_rate
                 audio_array = resampy.resample(audio_array, sample_rate, stt_config.SAMPLE_RATE)
                 sample_rate = stt_config.SAMPLE_RATE
-                logger.debug(f"Resampled from {sample_rate}Hz to {stt_config.SAMPLE_RATE}Hz")
+                logger.debug("audio_resampled", from_hz=original_rate, to_hz=stt_config.SAMPLE_RATE)
 
             # Log optimization when no conversion needed
             if not needs_conversion:
-                logger.debug("Audio already in correct format (16kHz mono), skipping conversion")
+                logger.debug("audio_no_conversion_needed", format="16kHz_mono")
 
             # Calculate duration
             duration_ms = int((len(audio_array) / sample_rate) * 1000)
 
             # Validate duration
             if duration_ms < stt_config.MIN_DURATION_MS:
-                logger.warning(f"Audio too short: {duration_ms}ms < {stt_config.MIN_DURATION_MS}ms")
+                logger.warning("audio_too_short", duration_ms=duration_ms, min_duration_ms=stt_config.MIN_DURATION_MS)
 
             if duration_ms > stt_config.MAX_DURATION_MS:
-                logger.warning(f"Audio too long: {duration_ms}ms > {stt_config.MAX_DURATION_MS}ms, truncating")
+                logger.warning("audio_too_long_truncating", duration_ms=duration_ms, max_duration_ms=stt_config.MAX_DURATION_MS)
                 max_samples = int((stt_config.MAX_DURATION_MS / 1000.0) * sample_rate)
                 audio_array = audio_array[:max_samples]
                 duration_ms = stt_config.MAX_DURATION_MS
@@ -563,7 +536,7 @@ class STTService(BaseAIService):
             return audio_array, sample_rate, duration_ms
 
         except Exception as e:
-            logger.error(f"Audio preprocessing failed: {e}", exc_info=True)
+            logger.error("audio_preprocessing_exception", error=str(e), error_type=type(e).__name__)
             raise
 
     def _clean_transcription(self, text: str) -> str:
@@ -573,7 +546,6 @@ class STTService(BaseAIService):
 
         if stt_config.NORMALIZE_WHITESPACE:
             # Replace multiple spaces/newlines with single space
-            import re
             text = re.sub(r'\s+', ' ', text)
 
         if stt_config.CAPITALIZE_FIRST and text:
@@ -581,7 +553,7 @@ class STTService(BaseAIService):
 
         # Apply length limits
         if len(text) > stt_config.MAX_TEXT_LENGTH:
-            logger.warning(f"Transcription truncated from {len(text)} to {stt_config.MAX_TEXT_LENGTH} chars")
+            logger.warning("transcription_truncated", original_length=len(text), truncated_to=stt_config.MAX_TEXT_LENGTH)
             text = text[:stt_config.MAX_TEXT_LENGTH]
 
         return text
@@ -591,7 +563,7 @@ class STTService(BaseAIService):
         try:
             path = Path(file_path)
             if not path.exists():
-                logger.error(f"Audio file not found: {file_path}")
+                logger.error("audio_file_not_found", file_path=file_path)
                 return TranscriptionResult(
                     text="",
                     language="",
@@ -610,7 +582,7 @@ class STTService(BaseAIService):
             return await self.transcribe_audio(audio_data, ext_format)
 
         except Exception as e:
-            logger.error(f"File transcription failed: {e}", exc_info=True)
+            logger.error("file_transcription_failed", file_path=file_path, error=str(e), error_type=type(e).__name__)
             return TranscriptionResult(
                 text="",
                 language="",

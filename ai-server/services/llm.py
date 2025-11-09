@@ -1,16 +1,22 @@
 """LLM Service for text generation using Llama models"""
 
 import asyncio
-import logging
 import time
-from pathlib import Path
 from typing import Dict, List, Optional
+
+try:
+    from llama_cpp import Llama
+    HAS_LLAMA_CPP = True
+except ImportError:
+    Llama = None
+    HAS_LLAMA_CPP = False
 
 from config import llm as llm_config
 from services.base import BaseAIService
+from utils import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LLMService(BaseAIService):
@@ -26,12 +32,12 @@ class LLMService(BaseAIService):
             if llm_config.SYSTEM_PROMPT_FILE.exists():
                 with open(llm_config.SYSTEM_PROMPT_FILE, 'r', encoding='utf-8') as f:
                     prompt = f.read().strip()
-                    logger.info(f"Loaded system prompt from {llm_config.SYSTEM_PROMPT_FILE}")
+                    logger.info("system_prompt_loaded", prompt_file=str(llm_config.SYSTEM_PROMPT_FILE))
                     return prompt
         except Exception as e:
-            logger.warning(f"Failed to load system prompt file: {e}")
+            logger.warning("system_prompt_load_failed", error=str(e), error_type=type(e).__name__)
 
-        logger.info("Using fallback system prompt")
+        logger.info("using_fallback_system_prompt")
         return llm_config.FALLBACK_SYSTEM_PROMPT
 
     def _get_model_type(self) -> str:
@@ -42,16 +48,14 @@ class LLMService(BaseAIService):
         """Log model-specific configuration after successful load"""
         n_threads = self._get_thread_count(llm_config.THREADS)
         n_gpu_layers = self._get_gpu_layers()
-        logger.info(f"Configuration: threads={n_threads}, gpu_layers={n_gpu_layers}")
+        logger.info("llm_configuration", threads=n_threads, gpu_layers=n_gpu_layers)
 
     async def _load_model_impl(self) -> bool:
         """LLM-specific model loading logic"""
         try:
-            # Import llama-cpp-python
-            try:
-                from llama_cpp import Llama
-            except ImportError:
-                logger.error("llama-cpp-python not installed. Run: pip install llama-cpp-python")
+            # Check if llama-cpp-python is available
+            if not HAS_LLAMA_CPP or Llama is None:
+                logger.error("llama_cpp_not_installed", suggestion="Run: pip install llama-cpp-python")
                 return False
 
             # Determine optimal settings
@@ -63,7 +67,7 @@ class LLMService(BaseAIService):
             try:
                 self.model = await loop.run_in_executor(
                     None,
-                    lambda: Llama(
+                    lambda: Llama(  # type: ignore[misc]
                         model_path=str(self.model_path),
                         n_ctx=llm_config.CONTEXT_SIZE,
                         n_threads=n_threads,
@@ -76,41 +80,43 @@ class LLMService(BaseAIService):
                 )
             except MemoryError as e:
                 logger.error(
-                    f"Out of memory while loading model. "
-                    f"Try reducing CONTEXT_SIZE (current: {llm_config.CONTEXT_SIZE}) "
-                    f"or GPU_LAYERS (current: {n_gpu_layers}). "
-                    f"Error: {e}"
+                    "llm_out_of_memory",
+                    context_size=llm_config.CONTEXT_SIZE,
+                    gpu_layers=n_gpu_layers,
+                    error=str(e),
+                    suggestion="Reduce CONTEXT_SIZE or GPU_LAYERS"
                 )
                 return False
             except ValueError as e:
                 error_msg = str(e).lower()
                 if "cuda" in error_msg or "gpu" in error_msg or "metal" in error_msg:
                     logger.error(
-                        f"Hardware incompatibility detected. "
-                        f"GPU acceleration may not be available or supported. "
-                        f"Try setting GPU_LAYERS=0 for CPU-only mode. "
-                        f"Error: {e}"
+                        "llm_hardware_incompatibility",
+                        error=str(e),
+                        suggestion="Try setting GPU_LAYERS=0 for CPU-only mode"
                     )
                 else:
-                    logger.error(f"Invalid model configuration: {e}")
+                    logger.error("llm_invalid_configuration", error=str(e))
                 return False
             except RuntimeError as e:
                 error_msg = str(e).lower()
                 if "out of memory" in error_msg or "oom" in error_msg:
                     logger.error(
-                        f"Out of memory error during model loading. "
-                        f"Current config: context_size={llm_config.CONTEXT_SIZE}, "
-                        f"gpu_layers={n_gpu_layers}, threads={n_threads}. "
-                        f"Consider reducing these values. Error: {e}"
+                        "llm_runtime_oom",
+                        context_size=llm_config.CONTEXT_SIZE,
+                        gpu_layers=n_gpu_layers,
+                        threads=n_threads,
+                        error=str(e),
+                        suggestion="Consider reducing context_size, gpu_layers, or threads"
                     )
                 else:
-                    logger.error(f"Runtime error loading model: {e}")
+                    logger.error("llm_runtime_error", error=str(e), error_type=type(e).__name__)
                 return False
 
             return True
 
         except Exception as e:
-            logger.error(f"Exception during model loading: {e}", exc_info=True)
+            logger.error("llm_model_loading_exception", error=str(e), error_type=type(e).__name__)
             return False
 
 
@@ -128,22 +134,22 @@ class LLMService(BaseAIService):
                 estimated_layers = 32  # Default for Llama 3.1 8B
 
                 if vram_gb >= 16:
-                    logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling full GPU acceleration")
+                    logger.info("gpu_acceleration_enabled", vram_gb=round(vram_gb, 1), mode="full", layers="all")
                     return -1  # All layers
                 elif vram_gb >= 8:
                     layers = int(estimated_layers * 0.75)
-                    logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling partial GPU acceleration ({layers} layers, ~75%)")
+                    logger.info("gpu_acceleration_enabled", vram_gb=round(vram_gb, 1), mode="partial", layers=layers, percentage=75)
                     return layers
                 elif vram_gb >= 4:
                     layers = int(estimated_layers * 0.5)
-                    logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling partial GPU acceleration ({layers} layers, ~50%)")
+                    logger.info("gpu_acceleration_enabled", vram_gb=round(vram_gb, 1), mode="partial", layers=layers, percentage=50)
                     return layers
                 else:
                     layers = int(estimated_layers * 0.25)
-                    logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling minimal GPU acceleration ({layers} layers, ~25%)")
+                    logger.info("gpu_acceleration_enabled", vram_gb=round(vram_gb, 1), mode="minimal", layers=layers, percentage=25)
                     return layers
             else:
-                logger.info("GPU detected, VRAM unknown, enabling full GPU acceleration")
+                logger.info("gpu_detected_vram_unknown", mode="full_acceleration")
                 return -1  # All layers
         return 0  # CPU only
 
@@ -166,7 +172,7 @@ class LLMService(BaseAIService):
             prompt = self._format_chat_prompt(messages)
 
             if llm_config.LOG_PROMPTS:
-                logger.debug(f"Prompt:\n{prompt}")
+                logger.debug("llm_prompt", prompt=prompt)
 
             # Set generation parameters
             max_tokens = max_tokens or llm_config.MAX_TOKENS_PER_RESPONSE
@@ -194,12 +200,12 @@ class LLMService(BaseAIService):
             )
 
             # Extract generated text with validation
-            if not response or 'choices' not in response or not response['choices']:
-                logger.error("Invalid response structure from LLM")
+            if not response or not response.get('choices'):
+                logger.error("llm_invalid_response_structure")
                 return ""
 
             if 'text' not in response['choices'][0]:
-                logger.error("Missing 'text' field in LLM response")
+                logger.error("llm_missing_text_field")
                 return ""
 
             generated_text = response['choices'][0]['text']
@@ -212,21 +218,22 @@ class LLMService(BaseAIService):
 
             if llm_config.LOG_PERFORMANCE_METRICS:
                 logger.info(
-                    f"Generation: {inference_time:.2f}s, "
-                    f"{tokens_generated} tokens, "
-                    f"{tokens_per_sec:.1f} tok/s"
+                    "llm_generation_performance",
+                    inference_time_seconds=round(inference_time, 2),
+                    tokens_generated=tokens_generated,
+                    tokens_per_second=round(tokens_per_sec, 1)
                 )
 
             if inference_time > llm_config.WARNING_INFERENCE_TIME_SECONDS:
-                logger.warning(f"Slow inference: {inference_time:.2f}s")
+                logger.warning("llm_slow_inference", inference_time_seconds=round(inference_time, 2))
 
             if llm_config.LOG_RESPONSES:
-                logger.debug(f"Response: {generated_text}")
+                logger.debug("llm_response", response=generated_text)
 
             return generated_text
 
         except Exception as e:
-            logger.error(f"Generation failed: {e}", exc_info=True)
+            logger.error("llm_generation_failed", error=str(e), error_type=type(e).__name__)
             return ""
 
     def _format_chat_prompt(self, messages: List[Dict[str, str]]) -> str:
@@ -269,7 +276,7 @@ class LLMService(BaseAIService):
 
         # Apply length limits
         if len(text) > llm_config.MAX_RESPONSE_LENGTH:
-            logger.warning(f"Response truncated from {len(text)} to {llm_config.MAX_RESPONSE_LENGTH} chars")
+            logger.warning("llm_response_truncated", original_length=len(text), truncated_to=llm_config.MAX_RESPONSE_LENGTH)
             text = text[:llm_config.MAX_RESPONSE_LENGTH]
 
         return text

@@ -7,8 +7,8 @@ from unittest.mock import Mock, patch, AsyncMock
 import numpy as np
 
 from services.tts import TTSService, AudioData
-from services.text_normalizer import TextNormalizer
-from services.audio_encoder import AudioEncoder
+from utils.text_normalizer import TextNormalizer
+from utils.audio_encoder import AudioEncoder
 
 
 @pytest.fixture

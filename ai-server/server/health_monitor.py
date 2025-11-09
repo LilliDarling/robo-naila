@@ -1,12 +1,13 @@
 import asyncio
-import logging
 import os
 import sys
+import psutil
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
+from utils import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class HealthMonitor:
@@ -22,7 +23,7 @@ class HealthMonitor:
     async def start_monitoring(self, interval: int = 30):
         """Start periodic health monitoring"""
         self._monitoring_task = asyncio.create_task(self._monitor_loop(interval))
-        logger.info(f"Health monitoring started (interval: {interval}s)")
+        logger.info("health_monitoring_started", interval_seconds=interval)
     
     async def stop_monitoring(self):
         """Stop health monitoring"""
@@ -32,7 +33,7 @@ class HealthMonitor:
                 await self._monitoring_task
             except asyncio.CancelledError:
                 pass
-            logger.info("Health monitoring stopped")
+            logger.info("health_monitoring_stopped")
     
     async def _monitor_loop(self, interval: int):
         """Periodic health monitoring loop"""
@@ -43,7 +44,7 @@ class HealthMonitor:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Health monitoring error: {e}")
+                logger.error("health_monitoring_error", error=str(e), error_type=type(e).__name__)
     
     async def _publish_health_status(self):
         """Publish comprehensive system health status"""
@@ -83,22 +84,21 @@ class HealthMonitor:
             # Only publish if connected
             if self.mqtt_service.is_connected():
                 self.mqtt_service.publish_system_message("health", "services", health_data, qos=1)
-            
+
         except Exception as e:
-            logger.error(f"Failed to publish health status: {e}")
+            logger.error("health_status_publish_failed", error=str(e), error_type=type(e).__name__)
     
     def _get_memory_usage(self) -> float:
         """Get current memory usage in MB with cross-platform support"""
         try:
-            import psutil
             process = psutil.Process(os.getpid())
             return process.memory_info().rss / 1024 / 1024
         except ImportError:
             # Fallback for systems without psutil
-            logger.debug("psutil not available, using basic memory estimation")
+            logger.debug("psutil_unavailable", fallback="basic_memory_estimation")
             return 0.0
         except Exception as e:
-            logger.debug(f"Memory usage calculation failed: {e}")
+            logger.debug("memory_usage_calculation_failed", error=str(e), error_type=type(e).__name__)
             return 0.0
     
     def _calculate_cache_efficiency(self, stats: Dict[str, Any]) -> float:
@@ -155,5 +155,5 @@ class HealthMonitor:
             return services_status
 
         except Exception as e:
-            logger.error(f"Failed to get AI services status: {e}")
+            logger.error("ai_services_status_failed", error=str(e), error_type=type(e).__name__)
             return {"status": "error", "error": str(e)}

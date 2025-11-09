@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 import multiprocessing
-from config.hardware_config import HardwareOptimizer, HardwareInfo
+from config.hardware import HardwareOptimizer, HardwareInfo
 
 
 class TestHardwareOptimizer:

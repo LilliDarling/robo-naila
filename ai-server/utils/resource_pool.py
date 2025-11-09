@@ -1,11 +1,12 @@
 """Resource pool for managing concurrent access to AI models"""
 
 import asyncio
-import logging
 from typing import Dict
 
+from utils import get_logger
 
-logger = logging.getLogger(__name__)
+
+logger = get_logger(__name__)
 
 
 class ResourcePool:
@@ -31,7 +32,7 @@ class ResourcePool:
 
         if self._semaphore.locked():
             self._pool_waits += 1
-            logger.debug(f"Waiting for pool slot (active: {self._active_requests}/{self.max_concurrent})")
+            logger.debug("pool_slot_wait", active_requests=self._active_requests, max_concurrent=self.max_concurrent)
 
         try:
             await asyncio.wait_for(
@@ -41,7 +42,7 @@ class ResourcePool:
             self._active_requests += 1
             return self
         except asyncio.TimeoutError as e:
-            logger.error(f"Pool timeout after {self.timeout}s")
+            logger.error("pool_timeout", timeout_seconds=self.timeout, max_concurrent=self.max_concurrent)
             raise RuntimeError(
                 f"Resource pool timeout: max {self.max_concurrent} concurrent requests exceeded"
             ) from e

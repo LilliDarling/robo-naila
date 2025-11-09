@@ -980,7 +980,7 @@ class TestResourcePooling:
     @pytest.mark.asyncio
     async def test_transcribe_uses_pool(self, service):
         """Test that transcription uses resource pool"""
-        from services.resource_pool import ResourcePool
+        from utils.resource_pool import ResourcePool
 
         service._pool = ResourcePool(max_concurrent=2, timeout=5.0)
 
@@ -1007,7 +1007,7 @@ class TestResourcePooling:
     @pytest.mark.asyncio
     async def test_concurrent_transcriptions_limited(self, service):
         """Test that concurrent transcriptions are limited by pool"""
-        from services.resource_pool import ResourcePool
+        from utils.resource_pool import ResourcePool
 
         service._pool = ResourcePool(max_concurrent=2, timeout=5.0)
 
@@ -1047,7 +1047,7 @@ class TestResourcePooling:
     @pytest.mark.asyncio
     async def test_get_status_includes_pool_stats(self, service):
         """Test that get_status includes pool statistics"""
-        from services.resource_pool import ResourcePool
+        from utils.resource_pool import ResourcePool
 
         service._pool = ResourcePool(max_concurrent=4, timeout=30.0)
 

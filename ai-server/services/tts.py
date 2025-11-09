@@ -1,23 +1,32 @@
 """TTS Service for text-to-speech synthesis using Piper TTS"""
 
 import asyncio
-import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
+from piper.config import SynthesisConfig
 
 import numpy as np
 
+try:
+    from piper import PiperVoice
+    HAS_PIPER = True
+except ImportError:
+    PiperVoice = None
+    HAS_PIPER = False
+
 from config import tts as tts_config
-from services.audio_encoder import AudioEncoder
+from utils.audio_encoder import AudioEncoder
 from services.base import BaseAIService
-from services.text_normalizer import TextNormalizer
-from services.voice_manager import VoiceManager, VoiceConfig
-from services.emotion_presets import get_emotion_parameters, list_emotions
+from utils.text_normalizer import TextNormalizer
+from managers.voice import VoiceManager, VoiceConfig
+from utils.emotion_presets import get_emotion_parameters, list_emotions
+from utils.ssml_parser import SSMLParser
+from utils import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -46,6 +55,10 @@ class TTSService(BaseAIService):
         self.voice_manager = VoiceManager()
         self.multi_voice_enabled = tts_config.ENABLE_MULTI_VOICE
 
+        # SSML support
+        self.ssml_parser = SSMLParser()
+        self.ssml_enabled = tts_config.ENABLE_SSML
+
     def _get_model_type(self) -> str:
         """Get the model type name for logging"""
         return "TTS"
@@ -53,24 +66,26 @@ class TTSService(BaseAIService):
     def _log_configuration(self):
         """Log model-specific configuration after successful load"""
         logger.info(
-            f"Configuration: voice={tts_config.VOICE}, "
-            f"sample_rate={tts_config.SAMPLE_RATE}Hz, "
-            f"output_format={tts_config.OUTPUT_FORMAT}"
+            "tts_configuration",
+            voice=tts_config.VOICE,
+            sample_rate=tts_config.SAMPLE_RATE,
+            output_format=tts_config.OUTPUT_FORMAT
         )
 
     async def _load_model_impl(self) -> bool:
         """TTS-specific model loading logic"""
         try:
-            # Import piper-tts
-            try:
-                from piper import PiperVoice
-            except ImportError:
-                logger.error("piper-tts not installed. Run: uv add piper-tts")
+            # Check if piper-tts is available
+            if not HAS_PIPER or PiperVoice is None:
+                logger.error("piper_not_installed", suggestion="Run: uv add piper-tts")
                 return False
+
+            # Type assertion for type checker
+            assert PiperVoice is not None, "PiperVoice should be available after import check"
 
             if self.multi_voice_enabled:
                 # Multi-voice mode: Register and load available voices
-                logger.info("Multi-voice mode enabled")
+                logger.info("tts_multi_voice_enabled")
 
                 # Register all available voices
                 for voice_name, voice_config in tts_config.AVAILABLE_VOICES.items():
@@ -87,7 +102,7 @@ class TTSService(BaseAIService):
                 # Load default voice
                 default_voice = tts_config.DEFAULT_VOICE
                 if not await self.voice_manager.load_voice(default_voice, tts_config.ENABLE_GPU):
-                    logger.error(f"Failed to load default voice: {default_voice}")
+                    logger.error("tts_default_voice_load_failed", voice_name=default_voice)
                     return False
 
                 # Set model to the current voice for compatibility
@@ -106,23 +121,25 @@ class TTSService(BaseAIService):
                     )
                 except FileNotFoundError as e:
                     logger.error(
-                        f"Model file not found: {self.model_path}. "
-                        f"Ensure the model is downloaded. Error: {e}"
+                        "tts_model_file_not_found",
+                        model_path=str(self.model_path),
+                        error=str(e),
+                        suggestion="Ensure the model is downloaded"
                     )
                     return False
                 except RuntimeError as e:
                     error_msg = str(e).lower()
                     if "cuda" in error_msg or "gpu" in error_msg:
                         logger.error(
-                            f"GPU error during model loading. "
-                            f"Try setting ENABLE_GPU=false for CPU-only mode. "
-                            f"Error: {e}"
+                            "tts_gpu_error",
+                            error=str(e),
+                            suggestion="Try setting ENABLE_GPU=false for CPU-only mode"
                         )
                     else:
-                        logger.error(f"Runtime error loading model: {e}")
+                        logger.error("tts_runtime_error", error=str(e), error_type=type(e).__name__)
                     return False
                 except Exception as e:
-                    logger.error(f"Failed to load Piper model: {e}")
+                    logger.error("tts_piper_load_failed", error=str(e), error_type=type(e).__name__)
                     return False
 
             # Warm up model if enabled (cache common phrases)
@@ -132,13 +149,13 @@ class TTSService(BaseAIService):
             return True
 
         except Exception as e:
-            logger.error(f"Exception during model loading: {e}", exc_info=True)
+            logger.error("tts_model_loading_exception", error=str(e), error_type=type(e).__name__)
             return False
 
     async def _warmup_and_cache(self):
         """Warm up model and cache common phrases"""
         try:
-            logger.info("Warming up TTS model and caching common phrases...")
+            logger.info("tts_warmup_starting")
             start_time = time.time()
 
             for phrase in tts_config.COMMON_PHRASES:
@@ -147,16 +164,17 @@ class TTSService(BaseAIService):
                     audio_samples = await self._synthesize_to_audio(phrase)
                     self._phrase_cache[phrase.lower()] = audio_samples
                 except Exception as e:
-                    logger.warning(f"Failed to cache phrase '{phrase}': {e}")
+                    logger.warning("phrase_cache_failed", phrase=phrase, error=str(e), error_type=type(e).__name__)
 
             warmup_time = time.time() - start_time
             logger.info(
-                f"Model warm-up completed in {warmup_time:.2f}s. "
-                f"Cached {len(self._phrase_cache)} phrases."
+                "tts_warmup_completed",
+                warmup_time_seconds=round(warmup_time, 2),
+                cached_phrases=len(self._phrase_cache)
             )
 
         except Exception as e:
-            logger.warning(f"Model warm-up failed (non-critical): {e}")
+            logger.warning("tts_warmup_failed", error=str(e), severity="non-critical")
 
     async def synthesize(
         self,
@@ -168,10 +186,10 @@ class TTSService(BaseAIService):
         voice: Optional[str] = None,
         emotion: Optional[str] = None,
     ) -> AudioData:
-        """Synthesize speech from text
+        """Synthesize speech from text (supports SSML)
 
         Args:
-            text: Text to synthesize
+            text: Text to synthesize (plain text or SSML markup)
             output_format: Output format (wav, mp3, ogg, raw). Defaults to config.
             length_scale: Speaking rate (1.0 = normal). Defaults to config.
             noise_scale: Pitch variation. Defaults to config.
@@ -182,24 +200,28 @@ class TTSService(BaseAIService):
         Returns:
             AudioData with synthesized speech
         """
+        # Check if input is SSML and SSML is enabled
+        if self.ssml_enabled and self.ssml_parser.is_ssml(text):
+            return await self._synthesize_ssml(text, output_format)
+
+        # Plain text synthesis (original path)
         # Apply emotion preset if specified
         if emotion:
-            emotion_params = get_emotion_parameters(emotion)
-            if emotion_params:
+            if emotion_params := get_emotion_parameters(emotion):
                 # Emotion preset overrides individual parameters
                 length_scale = emotion_params["length_scale"]
                 noise_scale = emotion_params["noise_scale"]
                 noise_w = emotion_params["noise_w"]
-                logger.debug(f"Applied emotion preset: {emotion}")
+                logger.debug("emotion_preset_applied", emotion=emotion)
             else:
-                logger.warning(f"Unknown emotion preset: {emotion}, using defaults")
+                logger.warning("unknown_emotion_preset", emotion=emotion, fallback="defaults")
 
         # Handle voice switching if multi-voice is enabled
         if voice and self.multi_voice_enabled:
             await self._switch_voice(voice)
 
         if not self.is_ready or self.model is None:
-            logger.error("Model not loaded, cannot synthesize")
+            logger.error("tts_model_not_loaded")
             return self._empty_result()
 
         try:
@@ -207,12 +229,15 @@ class TTSService(BaseAIService):
 
             # Validate input
             if not text or not text.strip():
-                logger.warning("Empty text provided for synthesis")
+                logger.warning("tts_empty_text")
                 return self._empty_result()
 
             if len(text) > tts_config.MAX_TEXT_LENGTH:
                 logger.warning(
-                    f"Text too long ({len(text)} chars), truncating to {tts_config.MAX_TEXT_LENGTH}"
+                    "tts_text_too_long",
+                    text_length=len(text),
+                    max_length=tts_config.MAX_TEXT_LENGTH,
+                    action="truncating"
                 )
                 text = text[:tts_config.MAX_TEXT_LENGTH]
 
@@ -220,12 +245,12 @@ class TTSService(BaseAIService):
             normalized_text = self._preprocess_text(text)
 
             if tts_config.LOG_SYNTHESES:
-                logger.debug(f"Synthesizing: '{normalized_text}'")
+                logger.debug("tts_synthesizing", text=normalized_text)
 
             # Check cache for common phrases
             cache_key = normalized_text.lower()
             if cache_key in self._phrase_cache:
-                logger.debug(f"Using cached audio for: '{normalized_text}'")
+                logger.debug("tts_using_cached_audio", text=normalized_text)
                 audio_samples = self._phrase_cache[cache_key]
             else:
                 # Synthesize audio
@@ -266,7 +291,115 @@ class TTSService(BaseAIService):
             )
 
         except Exception as e:
-            logger.error(f"Synthesis failed: {e}", exc_info=True)
+            logger.error("tts_synthesis_failed", error=str(e), error_type=type(e).__name__)
+            return self._empty_result()
+
+    async def _synthesize_ssml(self, ssml_text: str, output_format: Optional[str] = None) -> AudioData:
+        """Synthesize speech from SSML markup
+
+        Args:
+            ssml_text: SSML markup text
+            output_format: Output format. Defaults to config.
+
+        Returns:
+            AudioData with synthesized speech
+        """
+        try:
+            start_time = time.time()
+
+            # Parse SSML into segments
+            segments = self.ssml_parser.parse(ssml_text)
+
+            if not segments:
+                logger.warning("No segments parsed from SSML")
+                return self._empty_result()
+
+            logger.debug("ssml_segments_parsed", segment_count=len(segments))
+
+            # Synthesize each segment
+            all_audio_samples = []
+            total_duration_ms = 0
+            sample_rate = tts_config.SAMPLE_RATE
+
+            for i, segment in enumerate(segments):
+                # Add pause before segment if specified
+                if segment.pause_before > 0:
+                    silence_samples = int(segment.pause_before * sample_rate)
+                    all_audio_samples.append(np.zeros(silence_samples, dtype=np.float32))
+                    total_duration_ms += int(segment.pause_before * 1000)
+
+                # Switch voice if segment specifies one
+                if segment.voice and self.multi_voice_enabled:
+                    await self._switch_voice(segment.voice)
+
+                # Apply emotion if specified
+                length_scale = segment.length_scale
+                noise_scale = segment.noise_scale
+                noise_w = segment.noise_w
+
+                if segment.emotion:
+                    if emotion_params := get_emotion_parameters(segment.emotion):
+                        length_scale = emotion_params["length_scale"]
+                        noise_scale = emotion_params["noise_scale"]
+                        noise_w = emotion_params["noise_w"]
+
+                # Synthesize segment
+                if segment.text.strip():
+                    normalized_text = self._preprocess_text(segment.text)
+                    audio_samples = await self._synthesize_to_audio(
+                        normalized_text,
+                        length_scale=length_scale,
+                        noise_scale=noise_scale,
+                        noise_w=noise_w
+                    )
+                    all_audio_samples.append(audio_samples)
+                    segment_duration = int((len(audio_samples) / sample_rate) * 1000)
+                    total_duration_ms += segment_duration
+
+                # Add pause after segment if specified
+                if segment.pause_after > 0:
+                    silence_samples = int(segment.pause_after * sample_rate)
+                    all_audio_samples.append(np.zeros(silence_samples, dtype=np.float32))
+                    total_duration_ms += int(segment.pause_after * 1000)
+
+            # Concatenate all segments
+            if all_audio_samples:
+                final_audio = np.concatenate(all_audio_samples)
+            else:
+                logger.warning("No audio samples generated from SSML")
+                return self._empty_result()
+
+            # Encode to requested format
+            output_format = output_format or tts_config.OUTPUT_FORMAT
+            audio_bytes = self._encode_audio(final_audio, output_format)
+
+            # Calculate metrics
+            synthesis_time_ms = int((time.time() - start_time) * 1000)
+
+            # Extract plain text for logging
+            plain_text = " ".join(seg.text for seg in segments if seg.text.strip())
+            self._log_performance(total_duration_ms, synthesis_time_ms, plain_text[:50])
+
+            # Determine voice name
+            voice_name = (
+                self.voice_manager.get_current_voice_name()
+                if self.multi_voice_enabled
+                else tts_config.VOICE
+            )
+
+            return AudioData(
+                audio_bytes=audio_bytes,
+                sample_rate=sample_rate,
+                format=output_format,
+                duration_ms=total_duration_ms,
+                synthesis_time_ms=synthesis_time_ms,
+                text=plain_text,
+                voice=voice_name or "default",
+                phonemes=None
+            )
+
+        except Exception as e:
+            logger.error("ssml_synthesis_failed", error=str(e), error_type=type(e).__name__, exc_info=True)
             return self._empty_result()
 
     async def _synthesize_to_audio(
@@ -287,8 +420,6 @@ class TTSService(BaseAIService):
         Returns:
             Audio samples as numpy array (float32)
         """
-        from piper.config import SynthesisConfig
-
         model = self.model
         assert model is not None, "Model should be loaded"
 
@@ -365,7 +496,7 @@ class TTSService(BaseAIService):
                 quality=tts_config.OGG_QUALITY
             )
         except Exception as e:
-            logger.error(f"Audio encoding failed for format '{format}': {e}")
+            logger.error("audio_encoding_failed", format=format, error=str(e), error_type=type(e).__name__)
             # Fallback to WAV if encoding fails
             logger.info("Falling back to WAV format")
             return self.audio_encoder.encode_wav(audio_samples, tts_config.SAMPLE_RATE)
@@ -377,14 +508,15 @@ class TTSService(BaseAIService):
 
         if tts_config.LOG_PERFORMANCE_METRICS:
             logger.info(
-                f"Synthesis: {synthesis_time:.2f}s, "
-                f"audio={duration_ms}ms, "
-                f"RTF={rtf:.3f}, "
-                f"text_len={len(text)}"
+                "tts_synthesis_performance",
+                synthesis_time_seconds=round(synthesis_time, 2),
+                audio_duration_ms=duration_ms,
+                rtf=round(rtf, 3),
+                text_length=len(text)
             )
 
         if rtf > tts_config.WARNING_RTF_THRESHOLD:
-            logger.warning(f"Slow synthesis: RTF={rtf:.3f} (threshold: {tts_config.WARNING_RTF_THRESHOLD})")
+            logger.warning("tts_slow_synthesis", rtf=round(rtf, 3), threshold=tts_config.WARNING_RTF_THRESHOLD)
 
     def _empty_result(self) -> AudioData:
         """Return an empty audio result"""
@@ -424,11 +556,11 @@ class TTSService(BaseAIService):
             with open(file_path, 'wb') as f:
                 f.write(audio_data.audio_bytes)
 
-            logger.info(f"Audio saved to: {file_path}")
+            logger.info("audio_saved_to_file", file_path=file_path)
             return True
 
         except Exception as e:
-            logger.error(f"Failed to save audio file: {e}", exc_info=True)
+            logger.error("audio_file_save_failed", error=str(e), error_type=type(e).__name__, exc_info=True)
             return False
 
     def clear_cache(self):
@@ -454,15 +586,14 @@ class TTSService(BaseAIService):
             return True
 
         # Load voice if not already loaded
-        if not self.voice_manager.is_voice_loaded(voice_name):
-            if not await self.voice_manager.load_voice(voice_name, tts_config.ENABLE_GPU):
-                logger.error(f"Failed to load voice: {voice_name}")
-                return False
+        if not self.voice_manager.is_voice_loaded(voice_name) and not await self.voice_manager.load_voice(voice_name, tts_config.ENABLE_GPU):
+            logger.error("voice_load_failed", voice_name=voice_name)
+            return False
 
         # Switch to voice
         if self.voice_manager.set_current_voice(voice_name):
             self.model = self.voice_manager.get_current_voice()
-            logger.info(f"Switched to voice: {voice_name}")
+            logger.info("voice_switched", voice_name=voice_name)
             return True
 
         return False

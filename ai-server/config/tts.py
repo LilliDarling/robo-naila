@@ -77,8 +77,8 @@ COMMON_PHRASES = [
 MAX_SYNTHESIS_TIME_SECONDS = 30.0  # Timeout
 WARNING_RTF_THRESHOLD = 0.5  # Real-time factor (warn if slower)
 
-# SSML Support (architecture ready, not fully implemented)
-ENABLE_SSML = os.getenv("TTS_ENABLE_SSML", "false").lower() == "true"
+# SSML Support
+ENABLE_SSML = os.getenv("TTS_ENABLE_SSML", "true").lower() == "true"
 
 # Logging
 LOG_SYNTHESES = os.getenv("TTS_LOG_SYNTHESES", "true").lower() == "true"

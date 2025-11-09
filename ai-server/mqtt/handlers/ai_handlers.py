@@ -1,4 +1,3 @@
-import asyncio
 import base64
 from datetime import datetime, timezone
 from mqtt.core.models import MQTTMessage

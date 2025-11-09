@@ -7,7 +7,7 @@ import shutil
 from unittest.mock import Mock, AsyncMock, MagicMock
 from pathlib import Path
 from typing import Dict, Any, Generator
-from memory.conversation_memory import ConversationMemory
+from memory.conversation import ConversationMemory
 from datetime import datetime, timezone
 
 
@@ -49,7 +49,7 @@ def mock_sentence_transformer():
 def disable_hardware_optimization(monkeypatch):
     """Disable hardware optimization for consistent tests"""
     def mock_detect_hardware():
-        from config.hardware_config import HardwareInfo
+        from config.hardware import HardwareInfo
         return HardwareInfo(
             device_type="cpu",
             device_name="Test CPU",

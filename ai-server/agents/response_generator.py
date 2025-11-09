@@ -67,12 +67,21 @@ class ResponseGenerator(BaseAgent):
             try:
                 audio_data = await self.tts_service.synthesize(response)
                 state["response_audio"] = audio_data
-                self.logger.debug(f"Audio synthesized: {audio_data.duration_ms}ms, {audio_data.format}")
+                self.logger.debug(
+                    "audio_synthesized",
+                    duration_ms=audio_data.duration_ms,
+                    format=audio_data.format
+                )
             except Exception as e:
-                self.logger.warning(f"TTS synthesis failed: {e}")
+                self.logger.warning("tts_synthesis_failed", error=str(e), error_type=type(e).__name__)
                 # Continue without audio - text response is still available
 
-        self.logger.info(f"Generated: '{response}' (conf: {confidence:.2f}, {response_metadata['generation_time_ms']}ms)")
+        self.logger.info(
+            "response_generated",
+            response=response,
+            confidence=round(confidence, 2),
+            generation_time_ms=response_metadata['generation_time_ms']
+        )
         return state
     
     async def _generate_response(
@@ -95,13 +104,13 @@ class ResponseGenerator(BaseAgent):
             try:
                 response = await self._generate_llm_response(text, history)
                 if response:
-                    self.logger.info("Using LLM-generated response")
+                    self.logger.info("llm_response_used")
                     return response
             except Exception as e:
-                self.logger.warning(f"LLM generation failed, falling back to patterns: {e}")
+                self.logger.warning("llm_generation_failed", error=str(e), error_type=type(e).__name__, fallback="pattern-based")
 
         # Fallback to pattern-based responses
-        self.logger.debug("Using pattern-based response")
+        self.logger.debug("pattern_response_used")
 
         # Check for conversation continuity
         if history:
@@ -147,14 +156,18 @@ class ResponseGenerator(BaseAgent):
                 )
             except asyncio.TimeoutError as e:
                 last_exception = e
-                self.logger.warning(f"LLM generation timeout on attempt {attempt}/{max_retries}")
+                self.logger.warning("llm_timeout", attempt=attempt, max_retries=max_retries)
             except Exception as e:
                 last_exception = e
                 self.logger.warning(
-                    f"LLM generation error on attempt {attempt}/{max_retries}: {last_exception}"
+                    "llm_error",
+                    attempt=attempt,
+                    max_retries=max_retries,
+                    error=str(last_exception),
+                    error_type=type(last_exception).__name__
                 )
         # If all retries fail, log the final failure
-        self.logger.error(f"LLM generation failed after {max_retries} attempts: {last_exception}")
+        self.logger.error("llm_failed_all_retries", max_retries=max_retries, error=str(last_exception), error_type=type(last_exception).__name__)
         return ""
 
     def _generate_clarification_response(self, text: str, confidence: float) -> str:

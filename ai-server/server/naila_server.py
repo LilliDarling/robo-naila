@@ -1,13 +1,13 @@
-import logging
-from config.mqtt_config import MQTTConfig
+from config.mqtt import MQTTConfig
 from mqtt.core.service_coordinator import NailaMQTTService
 from mqtt.handlers.coordinator import ProtocolHandler
 from services.llm import LLMService
 from services.stt import STTService
 from .lifecycle import ServerLifecycleManager
+from utils import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class NailaAIServer:

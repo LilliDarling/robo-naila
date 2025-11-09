@@ -1,16 +1,16 @@
 import asyncio
 import contextlib
-import logging
 import os
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 from .health_monitor import HealthMonitor
-from .platform_utils import get_platform_info
+from utils.platform import get_platform_info
 from services.ai_model_manager import AIModelManager
+from utils import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class StartupStage(Enum):
@@ -56,16 +56,16 @@ class ServerLifecycleManager:
         self._start_time = datetime.now(timezone.utc)
         platform_info = get_platform_info()
 
-        logger.info("=" * 60)
-        logger.info("Starting NAILA AI Server")
-        logger.info(f"Platform: {platform_info['system']} {platform_info['architecture']}")
-        logger.info(f"Python: {platform_info['python_version']} ({platform_info['python_implementation']})")
-        logger.info(f"MQTT Broker: {self.mqtt_service.config.broker_host}:{self.mqtt_service.config.broker_port}")
-        logger.info("=" * 60)
+        logger.info("server_startup_banner", separator="=" * 60)
+        logger.info("server_starting", server_name="NAILA AI Server")
+        logger.info("platform_info", system=platform_info['system'], architecture=platform_info['architecture'])
+        logger.info("python_info", version=platform_info['python_version'], implementation=platform_info['python_implementation'])
+        logger.info("mqtt_broker_info", broker_host=self.mqtt_service.config.broker_host, broker_port=self.mqtt_service.config.broker_port)
+        logger.info("server_startup_banner_end", separator="=" * 60)
 
         try:
             # Stage: Load AI models
-            logger.info(f"{StartupStage.LOAD_AI_MODELS.value}...")
+            logger.info("startup_stage", stage=StartupStage.LOAD_AI_MODELS.value)
             await self.ai_model_manager.load_models()
 
             if llm_service := self.ai_model_manager.get_llm_service():
@@ -78,40 +78,40 @@ class ServerLifecycleManager:
                 self.protocol_handlers.set_tts_service(tts_service)
 
             # Stage: Register protocol handlers
-            logger.info(f"{StartupStage.REGISTER_HANDLERS.value}...")
+            logger.info("startup_stage", stage=StartupStage.REGISTER_HANDLERS.value)
             self.protocol_handlers.register_all_handlers()
-            logger.info(f"Registered handlers for {len(self.mqtt_service.event_handlers)} topics")
+            logger.info("handlers_registered", topic_count=len(self.mqtt_service.event_handlers))
 
             # Stage: Start MQTT service
-            logger.info(f"{StartupStage.START_MQTT.value}...")
+            logger.info("startup_stage", stage=StartupStage.START_MQTT.value)
             await self.mqtt_service.start()
-            logger.info("MQTT service connected and subscribed")
+            logger.info("mqtt_service_ready")
 
             # Stage: Start health monitoring
-            logger.info(f"{StartupStage.START_HEALTH_MONITORING.value}...")
+            logger.info("startup_stage", stage=StartupStage.START_HEALTH_MONITORING.value)
             await self.health_monitor.start_monitoring(interval=30)
-            logger.info("Health monitoring active")
+            logger.info("health_monitoring_active")
 
             # Stage: Publish initial status
-            logger.info(f"{StartupStage.PUBLISH_STATUS.value}...")
+            logger.info("startup_stage", stage=StartupStage.PUBLISH_STATUS.value)
             await self._publish_startup_status()
-            logger.info("Initial status published")
+            logger.info("initial_status_published")
 
             self._running = True
 
             # Success banner
-            logger.info("=" * 60)
-            logger.info("NAILA AI Server ONLINE")
-            logger.info(f"MQTT: Connected to {self.mqtt_service.config.broker_host}:{self.mqtt_service.config.broker_port}")
-            logger.info(f"Handlers: {len(self.mqtt_service.event_handlers)} topics registered")
-            logger.info("Ready for robot connections")
-            logger.info("=" * 60)
+            logger.info("server_online_banner", separator="=" * 60)
+            logger.info("server_online")
+            logger.info("mqtt_connected", broker_host=self.mqtt_service.config.broker_host, broker_port=self.mqtt_service.config.broker_port)
+            logger.info("handlers_ready", topic_count=len(self.mqtt_service.event_handlers))
+            logger.info("ready_for_connections")
+            logger.info("server_online_banner_end", separator="=" * 60)
 
             # Main server loop
             await self._main_loop()
 
         except Exception as e:
-            logger.error(f"Server startup failed: {e}")
+            logger.error("server_startup_failed", error=str(e), error_type=type(e).__name__)
             await self._emergency_shutdown()
             raise
     
@@ -133,10 +133,10 @@ class ServerLifecycleManager:
                     last_heartbeat = current_time
 
             except asyncio.CancelledError:
-                logger.info("Main loop cancelled")
+                logger.info("main_loop_cancelled")
                 break
             except Exception as e:
-                logger.error(f"Main loop error: {e}")
+                logger.error("main_loop_error", error=str(e), error_type=type(e).__name__)
                 await asyncio.sleep(1)
 
 
@@ -144,21 +144,22 @@ class ServerLifecycleManager:
         """Perform periodic health checks"""
         try:
             if not self.mqtt_service.is_connected():
-                logger.warning("MQTT connection lost, attempting reconnection...")
-            
+                logger.warning("mqtt_connection_lost")
+
             # Log performance metrics periodically (every 10 heartbeats = ~50 seconds)
             self._heartbeat_count += 1
-            
+
             if self._heartbeat_count % 10 == 0:
                 stats = self.mqtt_service.get_stats()
                 logger.info(
-                    f"Performance: {stats['message_count']} msgs, "
-                    f"{stats['error_rate']:.1%} error rate, "
-                    f"{stats['uptime_seconds']:.0f}s uptime"
+                    "performance_metrics",
+                    message_count=stats['message_count'],
+                    error_rate=round(stats['error_rate'] * 100, 1),
+                    uptime_seconds=int(stats['uptime_seconds'])
                 )
-        
+
         except Exception as e:
-            logger.error(f"Heartbeat check failed: {e}")
+            logger.error("heartbeat_check_failed", error=str(e), error_type=type(e).__name__)
     
     async def _publish_startup_status(self):
         """Publish comprehensive startup status"""
@@ -213,48 +214,46 @@ class ServerLifecycleManager:
                 await asyncio.sleep(0.5)
 
             # Stage: Stop health monitoring
-            logger.info(f"{ShutdownStage.STOP_HEALTH_MONITORING.value}...")
+            logger.info("shutdown_stage", stage=ShutdownStage.STOP_HEALTH_MONITORING.value)
             await self.health_monitor.stop_monitoring()
 
             # Stage: Stop MQTT service
-            logger.info(f"{ShutdownStage.STOP_MQTT.value}...")
+            logger.info("shutdown_stage", stage=ShutdownStage.STOP_MQTT.value)
             await self.mqtt_service.stop()
 
             # Stage: Unload AI models
-            logger.info(f"{ShutdownStage.UNLOAD_AI_MODELS.value}...")
+            logger.info("shutdown_stage", stage=ShutdownStage.UNLOAD_AI_MODELS.value)
             self.ai_model_manager.unload_models()
 
             self._running = False
-            
+
             # Final stats
             if self._start_time:
                 uptime = (datetime.now(timezone.utc) - self._start_time).total_seconds()
-                logger.info(f"Server stopped gracefully (uptime: {uptime:.1f}s)")
+                logger.info("server_stopped_gracefully", uptime_seconds=round(uptime, 1))
             else:
-                logger.info("Server stopped gracefully")
-                
+                logger.info("server_stopped_gracefully")
+
         except Exception as e:
-            logger.error(f"Error during shutdown: {e}")
+            logger.error("shutdown_error", error=str(e), error_type=type(e).__name__)
         
-        logger.info("NAILA AI Server shutdown complete")
-    
+        logger.info("shutdown_complete", server="NAILA AI Server")
+
     async def _emergency_shutdown(self):
         """Emergency shutdown for critical errors"""
-        logger.critical("EMERGENCY SHUTDOWN INITIATED")
+        logger.critical("emergency_shutdown_initiated")
 
         try:
             if self.mqtt_service.is_connected():
                 emergency_data = {
                     "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "reason": "critical_error"
-                }
-                self.mqtt_service.publish_system_message("health", "emergency", emergency_data, qos=2)
-        except Exception as exc:
-            logger.error("Exception during emergency shutdown: %s", exc, exc_info=True)
                     "event": "emergency_shutdown",
                     "reason": "critical_error"
                 }
                 self.mqtt_service.publish_system_message("health", "emergency", emergency_data, qos=2)
+        except Exception as exc:
+            logger.error("emergency_shutdown_exception", error=str(exc), error_type=type(exc).__name__)
+
         # Force stop everything
         self._running = False
         with contextlib.suppress(Exception):

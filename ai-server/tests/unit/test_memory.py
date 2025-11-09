@@ -6,7 +6,7 @@ import threading
 from datetime import datetime, timedelta
 from unittest.mock import Mock
 from freezegun import freeze_time
-from memory.conversation_memory import ConversationMemory
+from memory.conversation import ConversationMemory
 
 
 class TestConversationMemory:

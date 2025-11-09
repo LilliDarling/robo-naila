@@ -2,15 +2,15 @@
 
 
 import contextlib
-import logging
 import re
 
 from num2words import num2words
 
-from services import text_patterns
+from utils import text_patterns
+from utils import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TextNormalizer:

@@ -28,6 +28,7 @@ dependencies = [
     "resampy>=0.4.3",
     "sentence-transformers>=5.1.2",
     "soundfile>=0.13.1",
+    "structlog>=25.5.0",
     "torch>=2.9.0",
     "torchvision>=0.24.0",
     "ultralytics>=8.3.225",

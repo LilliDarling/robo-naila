@@ -1,7 +1,7 @@
 """Input processing agent with NLP libraries"""
 
 import time
-from typing import Any, Dict, Tuple
+from typing import Any, Dict
 from functools import lru_cache
 from datetime import datetime, timezone
 from agents.base import BaseAgent
@@ -12,6 +12,13 @@ try:
     HAS_TRANSFORMERS = True
 except ImportError:
     HAS_TRANSFORMERS = False
+    SentenceTransformer = None
+    np = None
+
+try:
+    from config.hardware import hardware_optimizer
+except ImportError:
+    hardware_optimizer = None
 
 
 class InputProcessor(BaseAgent):
@@ -26,14 +33,13 @@ class InputProcessor(BaseAgent):
     
     async def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Process input based on type"""
-        import time
         start_time = time.time()
-        
+
         self.log_state(state, "start")
-        
+
         input_type = state.get("input_type", "text")
         raw_input = state.get("raw_input", "")
-        
+
         # Process based on input type
         if input_type == "text":
             processed_text = raw_input.strip()
@@ -42,20 +48,25 @@ class InputProcessor(BaseAgent):
             processed_text = state.get("transcription", raw_input)
         else:
             processed_text = str(raw_input)
-        
+
         # Basic intent detection
         intent = self._detect_intent(processed_text)
-        
+
         # Calculate processing time
         processing_time_ms = int((time.time() - start_time) * 1000)
-        
+
         # Update state
         state["processed_text"] = processed_text
         state["intent"] = intent
         state["timestamp"] = datetime.now(timezone.utc).isoformat()
         state["processing_time_ms"] = processing_time_ms
-        
-        self.logger.info(f"Processed: '{processed_text}' -> intent: {intent} ({processing_time_ms}ms)")
+
+        self.logger.info(
+            "input_processed",
+            text=processed_text,
+            intent=intent,
+            processing_time_ms=processing_time_ms
+        )
         return state
     
     def _setup_model(self):
@@ -63,15 +74,15 @@ class InputProcessor(BaseAgent):
         try:
             self._load_transformer()
         except ImportError:
-            self.logger.info("sentence-transformers not available, using fallback patterns")
+            self.logger.info("transformers_unavailable", reason="sentence-transformers not installed")
             self.has_model = False
         except Exception as e:
-            self.logger.warning(f"Failed to load model: {e}, using fallback")
+            self.logger.warning("model_load_failed", error=str(e), error_type=type(e).__name__)
             self.has_model = False
 
     def _load_transformer(self):
-        from sentence_transformers import SentenceTransformer
-        from config.hardware_config import hardware_optimizer
+        if not hardware_optimizer or not SentenceTransformer:
+            raise ImportError("Required dependencies not available")
 
         # Get optimal hardware configuration
         model_config = hardware_optimizer.get_model_config("sentence_transformer")
@@ -90,13 +101,14 @@ class InputProcessor(BaseAgent):
 
         self._setup_intent_embeddings()
         self.has_model = True
-        self.logger.info(f"Loaded sentence transformer on {device} for intent detection")
+        self.logger.info("transformer_loaded", device=device, purpose="intent_detection")
     
     
     def _setup_intent_embeddings(self):
         """Pre-compute intent embeddings for fast comparison"""
-        import numpy as np
-        
+        if not self.model or not np:
+            return
+
         intent_examples = {
             "greeting": ["hello", "hi there", "hey", "good morning", "good afternoon"],
             "time_query": ["what time is it", "current time", "tell me the time", "what's the time"],
@@ -106,7 +118,7 @@ class InputProcessor(BaseAgent):
             "goodbye": ["goodbye", "bye", "see you later", "talk to you soon"],
             "general": ["tell me about", "I want to know", "can you help", "please do"]
         }
-        
+
         self.intent_embeddings = {}
         for intent, examples in intent_examples.items():
             embeddings = self.model.encode(examples)
@@ -128,25 +140,26 @@ class InputProcessor(BaseAgent):
     
     def _detect_intent_semantic(self, text: str) -> str:
         """Use sentence similarity for intent detection"""
-        import numpy as np
-        
+        if not self.model or not np:
+            return "general"
+
         # Get text embedding
         text_embedding = self.model.encode([text.lower()])[0]
-        
+
         # Find most similar intent
         best_intent = "general"
         best_score = 0.4
-        
+
         for intent, intent_embedding in self.intent_embeddings.items():
             # Compute cosine similarity
             similarity = np.dot(text_embedding, intent_embedding) / (
                 np.linalg.norm(text_embedding) * np.linalg.norm(intent_embedding)
             )
-            
+
             if similarity > best_score:
                 best_score = similarity
                 best_intent = intent
-        
+
         return best_intent
     
     def _detect_intent_patterns(self, text: str) -> str:

@@ -1,11 +1,10 @@
 import asyncio
-import logging
 from typing import Dict, Any, Optional, Set
-from datetime import datetime, timezone
 from dataclasses import dataclass, field
+from utils import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 @dataclass
 class DeviceState:

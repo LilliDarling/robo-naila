@@ -5,13 +5,14 @@ and efficient voice loading/unloading.
 """
 
 import asyncio
-import logging
 from pathlib import Path
 from typing import Dict, Optional, List
 from dataclasses import dataclass
+from piper import PiperVoice
+from utils import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -41,7 +42,7 @@ class VoiceManager:
             config: Voice configuration
         """
         self._voice_configs[config.name] = config
-        logger.info(f"Registered voice: {config.name} ({config.description})")
+        logger.info("voice_registered", voice_name=config.name, description=config.description)
 
     async def load_voice(self, voice_name: str, use_cuda: bool = False) -> bool:
         """Load a specific voice model
@@ -54,18 +55,16 @@ class VoiceManager:
             True if loaded successfully, False otherwise
         """
         if voice_name in self._voices:
-            logger.info(f"Voice '{voice_name}' already loaded")
+            logger.info("voice_already_loaded", voice_name=voice_name)
             return True
 
         if voice_name not in self._voice_configs:
-            logger.error(f"Voice '{voice_name}' not registered")
+            logger.error("voice_not_registered", voice_name=voice_name)
             return False
 
         config = self._voice_configs[voice_name]
 
         try:
-            from piper import PiperVoice
-
             # Load model in executor (blocking operation)
             loop = asyncio.get_event_loop()
             model = await loop.run_in_executor(
@@ -80,9 +79,10 @@ class VoiceManager:
             self._use_cuda = use_cuda
 
             logger.info(
-                f"Loaded voice: {voice_name} "
-                f"(sample_rate={config.sample_rate}Hz, "
-                f"model={config.model_path.name})"
+                "voice_loaded",
+                voice_name=voice_name,
+                sample_rate=config.sample_rate,
+                model_file=config.model_path.name
             )
 
             # Set as current if first voice loaded
@@ -92,10 +92,10 @@ class VoiceManager:
             return True
 
         except FileNotFoundError:
-            logger.error(f"Model file not found: {config.model_path}")
+            logger.error("voice_model_file_not_found", voice_name=voice_name, model_path=str(config.model_path))
             return False
         except Exception as e:
-            logger.error(f"Failed to load voice '{voice_name}': {e}")
+            logger.error("voice_load_failed", voice_name=voice_name, error=str(e), error_type=type(e).__name__)
             return False
 
     def unload_voice(self, voice_name: str):
@@ -106,7 +106,7 @@ class VoiceManager:
         """
         if voice_name in self._voices:
             del self._voices[voice_name]
-            logger.info(f"Unloaded voice: {voice_name}")
+            logger.info("voice_unloaded", voice_name=voice_name)
 
             # Clear current voice if it was unloaded
             if self._current_voice == voice_name:
@@ -128,11 +128,11 @@ class VoiceManager:
             True if successful, False if voice not loaded
         """
         if voice_name not in self._voices:
-            logger.error(f"Cannot set current voice: '{voice_name}' not loaded")
+            logger.error("cannot_set_current_voice", voice_name=voice_name, reason="not_loaded")
             return False
 
         self._current_voice = voice_name
-        logger.info(f"Current voice set to: {voice_name}")
+        logger.info("current_voice_set", voice_name=voice_name)
         return True
 
     def get_current_voice(self) -> Optional[any]:

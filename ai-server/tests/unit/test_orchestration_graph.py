@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime
-from graphs.orchestration_graph import NAILAOrchestrationGraph
+from graphs.orchestration import NAILAOrchestrationGraph
 
 
 class TestNAILAOrchestrationGraph:

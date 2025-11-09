@@ -1,14 +1,22 @@
 """Audio encoding utilities for TTS output formatting"""
 
 import io
-import logging
 import wave
 from typing import Optional
 
 import numpy as np
 
+try:
+    from pydub import AudioSegment
+    HAS_PYDUB = True
+except ImportError:
+    AudioSegment = None  # type: ignore[assignment,misc]
+    HAS_PYDUB = False
 
-logger = logging.getLogger(__name__)
+from utils import get_logger
+
+
+logger = get_logger(__name__)
 
 
 class AudioEncoder:
@@ -61,11 +69,9 @@ class AudioEncoder:
         Returns:
             MP3 file bytes
         """
-        try:
-            from pydub import AudioSegment
-        except ImportError:
-            logger.error("pydub not installed, cannot encode MP3")
-            raise
+        if not HAS_PYDUB or AudioSegment is None:
+            logger.error("pydub_not_installed", format="mp3", suggestion="Run: uv add pydub")
+            raise ImportError("pydub is required for MP3 encoding")
 
         # Convert float32 to int16
         audio_int16 = (audio_samples * 32767).astype(np.int16)
@@ -104,11 +110,9 @@ class AudioEncoder:
         Returns:
             OGG file bytes
         """
-        try:
-            from pydub import AudioSegment
-        except ImportError:
-            logger.error("pydub not installed, cannot encode OGG")
-            raise
+        if not HAS_PYDUB or AudioSegment is None:
+            logger.error("pydub_not_installed", format="ogg", suggestion="Run: uv add pydub")
+            raise ImportError("pydub is required for OGG encoding")
 
         # Convert float32 to int16
         audio_int16 = (audio_samples * 32767).astype(np.int16)
@@ -171,13 +175,13 @@ class AudioEncoder:
         """
         format_lower = format.lower()
 
-        if format_lower == "wav":
-            return AudioEncoder.encode_wav(audio_samples, sample_rate)
-        elif format_lower == "mp3":
+        if format_lower == "mp3":
             return AudioEncoder.encode_mp3(audio_samples, sample_rate, bitrate or 128)
         elif format_lower == "ogg":
             return AudioEncoder.encode_ogg(audio_samples, sample_rate, quality or 6)
         elif format_lower == "raw":
             return AudioEncoder.encode_raw(audio_samples)
+        elif format_lower == "wav":
+            return AudioEncoder.encode_wav(audio_samples, sample_rate)
         else:
             raise ValueError(f"Unsupported audio format: {format}")

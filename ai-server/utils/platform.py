@@ -1,11 +1,13 @@
+import platform
 import signal
 import sys
-import logging
 import asyncio
 from typing import Optional, Callable
 
+from utils import get_logger
 
-logger = logging.getLogger(__name__)
+
+logger = get_logger(__name__)
 
 
 class CrossPlatformSignalHandler:
@@ -22,17 +24,17 @@ class CrossPlatformSignalHandler:
                 # Windows support
                 signal.signal(signal.SIGINT, self._signal_handler)
                 signal.signal(signal.SIGTERM, self._signal_handler)
-                logger.debug("Windows signal handlers configured (SIGINT, SIGTERM)")
+                logger.debug("signal_handlers_configured", platform="windows", signals="SIGINT, SIGTERM")
             else:
                 # Unix-like systems (Linux, macOS)
                 signal.signal(signal.SIGINT, self._signal_handler)
                 signal.signal(signal.SIGTERM, self._signal_handler)
                 if hasattr(signal, 'SIGHUP'):
                     signal.signal(signal.SIGHUP, self._signal_handler)
-                logger.debug("Unix signal handlers configured (SIGINT, SIGTERM, SIGHUP)")
-                
+                logger.debug("signal_handlers_configured", platform="unix", signals="SIGINT, SIGTERM, SIGHUP")
+
         except Exception as e:
-            logger.warning(f"Failed to setup signal handlers: {e}")
+            logger.warning("signal_handler_setup_failed", error=str(e), error_type=type(e).__name__)
     
     def _signal_handler(self, signum: int, frame):
         """Handle shutdown signals across platforms"""
@@ -48,8 +50,8 @@ class CrossPlatformSignalHandler:
             signal_names[signal.SIGHUP] = "SIGHUP"
         
         signal_name = signal_names.get(signum, f"Signal {signum}")
-        logger.info(f"Received {signal_name}, initiating graceful shutdown...")
-        
+        logger.info("shutdown_signal_received", signal=signal_name, action="graceful_shutdown")
+
         self._shutdown_initiated = True
         
         # Schedule shutdown in the event loop
@@ -64,8 +66,6 @@ class CrossPlatformSignalHandler:
 
 def get_platform_info() -> dict:
     """Get cross-platform system information"""
-    import platform
-    
     return {
         "system": platform.system(),
         "platform": sys.platform,
@@ -82,7 +82,7 @@ def check_python_version(min_version: tuple = (3, 8)) -> bool:
     if current_version < min_version:
         min_version_str = ".".join(map(str, min_version))
         current_version_str = ".".join(map(str, current_version))
-        logger.error(f"Python {min_version_str}+ required, found {current_version_str}")
+        logger.error("python_version_mismatch", required_version=min_version_str, current_version=current_version_str)
         return False
     
     return True

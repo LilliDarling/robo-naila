@@ -1,7 +1,6 @@
 """State definitions for LangGraph workflows"""
 
 from typing import TypedDict, List, Dict, Optional, Any
-from datetime import datetime
 
 
 class NAILAState(TypedDict):

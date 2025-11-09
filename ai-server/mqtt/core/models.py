@@ -1,8 +1,8 @@
 import asyncio
-import logging
-from typing import Dict, Callable, Any, Optional, List
+from typing import Callable, Optional, List
 from enum import Enum
 from dataclasses import dataclass
+from utils import get_logger
 
 
 class TopicCategory(Enum):
@@ -46,12 +46,13 @@ class MQTTMessage:
 
 
 class MQTTEventHandler:
-    __slots__ = ['handler_func', 'topics']
-    
+    __slots__ = ['handler_func', 'topics', 'logger']
+
     def __init__(self, handler_func: Callable[[MQTTMessage], None], topics: List[str]):
         self.handler_func = handler_func
         self.topics = topics
-    
+        self.logger = get_logger(__name__)
+
     async def handle(self, message: MQTTMessage):
         """Fast async handler execution with error isolation"""
         try:
@@ -61,6 +62,9 @@ class MQTTEventHandler:
                 self.handler_func(message)
         except Exception as e:
             # Isolate handler errors - don't let one handler crash the service
-            logging.getLogger(__name__).error(
-                f"Handler error for {message.topic}: {e.__class__.__name__}: {e}"
+            self.logger.error(
+                "handler_error",
+                topic=message.topic,
+                error=str(e),
+                error_type=type(e).__name__
             )
