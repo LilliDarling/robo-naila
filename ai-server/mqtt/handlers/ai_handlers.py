@@ -14,11 +14,15 @@ TOPIC_AI_PERSONALITY_RESPONSE = "naila/ai/orchestration/personality/response"
 
 class AIHandlers(BaseHandler):
     """Handlers for AI processing and orchestration messages"""
-    
+
     def __init__(self, mqtt_service):
         super().__init__(mqtt_service)
         self.orchestrator = NAILAOrchestrator(mqtt_service)
-    
+
+    def set_llm_service(self, llm_service):
+        """Set LLM service for the orchestrator"""
+        self.orchestrator = NAILAOrchestrator(self.mqtt_service, llm_service=llm_service)
+
     def register_handlers(self):
         """Register all AI-related handlers"""
         handlers = {

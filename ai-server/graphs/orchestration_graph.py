@@ -14,10 +14,10 @@ logger = logging.getLogger(__name__)
 
 class NAILAOrchestrationGraph:
     """Main orchestration workflow for NAILA"""
-    
-    def __init__(self):
+
+    def __init__(self, llm_service=None):
         self.input_processor = InputProcessor()
-        self.response_generator = ResponseGenerator()
+        self.response_generator = ResponseGenerator(llm_service=llm_service)
         self.workflow = self._build_graph()
         self.app = self.workflow.compile()
     
@@ -100,19 +100,19 @@ class NAILAOrchestrationGraph:
     async def run(self, initial_state: Dict[str, Any]) -> Dict[str, Any]:
         """Run the orchestration graph"""
         logger.info(f"Starting orchestration for task {initial_state.get('task_id')}")
-        
+
         # Ensure required fields
         initial_state.setdefault("context", {})
         initial_state.setdefault("conversation_history", [])
         initial_state.setdefault("errors", [])
         initial_state.setdefault("confidence", 1.0)
-        
+
         # Run the graph
         result = await self.app.ainvoke(initial_state)
-        
+
         if result.get("errors"):
             logger.warning(f"Completed with errors: {result['errors']}")
         else:
-            logger.info(f"Orchestration completed successfully")
-        
+            logger.info("Orchestration completed successfully")
+
         return result

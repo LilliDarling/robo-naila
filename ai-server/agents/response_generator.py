@@ -1,5 +1,6 @@
 """Context-aware response generation agent"""
 
+import asyncio
 import time
 from typing import Any, Dict, List, Optional
 from functools import lru_cache
@@ -9,11 +10,12 @@ from agents.base import BaseAgent
 
 class ResponseGenerator(BaseAgent):
     """Generate context-aware responses with conversation continuity"""
-    
-    def __init__(self):
+
+    def __init__(self, llm_service=None):
         super().__init__("response_generator")
         self._response_cache = {}
         self._cache_ttl = 600  # 10 minutes
+        self.llm_service = llm_service
     
     async def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Generate context-aware response"""
@@ -27,9 +29,12 @@ class ResponseGenerator(BaseAgent):
         confidence = state.get("confidence", 1.0)
         device_id = state.get("device_id", "")
         
+        # Check LLM readiness dynamically
+        use_llm = self.llm_service is not None and self.llm_service.is_ready
+
         # Generate context-aware response
-        response = self._generate_response(
-            intent, processed_text, context, conversation_history, confidence
+        response = await self._generate_response(
+            intent, processed_text, context, conversation_history, confidence, use_llm=use_llm
         )
         
         # Add response metadata
@@ -59,42 +64,87 @@ class ResponseGenerator(BaseAgent):
         self.logger.info(f"Generated: '{response}' (conf: {confidence:.2f}, {response_metadata['generation_time_ms']}ms)")
         return state
     
-    def _generate_response(
-        self, 
-        intent: str, 
-        text: str, 
-        context: Dict[str, Any], 
-        history: List[Dict], 
-        confidence: float
+    async def _generate_response(
+        self,
+        intent: str,
+        text: str,
+        context: Dict[str, Any],
+        history: List[Dict],
+        confidence: float,
+        use_llm: bool = False
     ) -> str:
         """Generate context-aware response with conversation continuity"""
-        
+
         # Handle low confidence inputs
         if confidence < 0.6:
             return self._generate_clarification_response(text, confidence)
-        
+
+        # Try LLM generation first if available
+        if use_llm:
+            try:
+                response = await self._generate_llm_response(text, history)
+                if response:
+                    self.logger.info("Using LLM-generated response")
+                    return response
+            except Exception as e:
+                self.logger.warning(f"LLM generation failed, falling back to patterns: {e}")
+
+        # Fallback to pattern-based responses
+        self.logger.debug("Using pattern-based response")
+
         # Check for conversation continuity
         if history:
             last_exchange = history[-1]
             last_intent = last_exchange.get("metadata", {}).get("intent", "")
-            
+
             # Handle follow-up questions
             if intent == "question" and last_intent in ["time_query", "weather_query"]:
                 return self._generate_followup_response(intent, text, last_intent, last_exchange)
-        
+
         # Use cached response for repeated queries (speed optimization)
         cache_key = f"{intent}:{text.lower().strip()}"
-        cached_response = self._get_cached_response(cache_key)
-        if cached_response:
+        if cached_response := self._get_cached_response(cache_key):
             return self._personalize_response(cached_response, context)
-        
+
         # Generate new response
         response = self._generate_base_response(intent, text, context, history)
         self._cache_response(cache_key, response)
-        
+
         # Apply personalization to new responses too
         return self._personalize_response(response, context)
-    
+
+    async def _generate_llm_response(
+        self,
+        query: str,
+        history: List[Dict],
+        timeout: float = 10.0,
+        max_retries: int = 3,
+    ) -> str:
+        """Generate response using LLM with timeout and retry logic"""
+        if not self.llm_service or not self.llm_service.is_ready:
+            return ""
+
+        # Build chat messages with history
+        messages = self.llm_service.build_chat_messages(query, history)
+
+        last_exception = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                return await asyncio.wait_for(
+                    self.llm_service.generate_chat(messages),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError as e:
+                last_exception = e
+                self.logger.warning(f"LLM generation timeout on attempt {attempt}/{max_retries}")
+            except Exception as e:
+                last_exception = e
+                self.logger.warning(f"LLM generation error on attempt {attempt}/{max_retries}: {e}")
+
+        # If all retries fail, log the final failure
+        self.logger.error(f"LLM generation failed after {max_retries} attempts: {last_exception}")
+        return ""
+
     def _generate_clarification_response(self, text: str, confidence: float) -> str:
         """Generate response for low-confidence input"""
         return f"I didn't catch that clearly (confidence: {confidence:.1f}). Could you repeat that or rephrase?"

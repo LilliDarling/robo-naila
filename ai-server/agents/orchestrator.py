@@ -12,9 +12,9 @@ logger = logging.getLogger(__name__)
 
 class NAILAOrchestrator:
     """Main orchestrator for NAILA AI system"""
-    
-    def __init__(self, mqtt_service=None):
-        self.graph = NAILAOrchestrationGraph()
+
+    def __init__(self, mqtt_service=None, llm_service=None):
+        self.graph = NAILAOrchestrationGraph(llm_service=llm_service)
         self.mqtt_service = mqtt_service
         self.memory = memory_manager
     

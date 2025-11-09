@@ -1,30 +1,49 @@
 import asyncio
+import contextlib
 import logging
-import sys
 import os
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Optional
 from .health_monitor import HealthMonitor
 from .platform_utils import get_platform_info
+from services.ai_model_manager import AIModelManager
 
 
 logger = logging.getLogger(__name__)
 
 
+class StartupStage(Enum):
+    """Descriptive startup stages for server initialization"""
+    LOAD_AI_MODELS = "Loading AI models"
+    REGISTER_HANDLERS = "Registering protocol handlers"
+    START_MQTT = "Starting MQTT service"
+    START_HEALTH_MONITORING = "Starting health monitoring"
+    PUBLISH_STATUS = "Publishing initial system status"
+
+
+class ShutdownStage(Enum):
+    """Descriptive shutdown stages for graceful termination"""
+    STOP_HEALTH_MONITORING = "Stopping health monitoring"
+    STOP_MQTT = "Stopping MQTT service"
+    UNLOAD_AI_MODELS = "Unloading AI models"
+
+
 class ServerLifecycleManager:
     """Manages server startup, shutdown, and lifecycle events"""
-    
-    def __init__(self, mqtt_service, protocol_handlers):
+
+    def __init__(self, mqtt_service, protocol_handlers, llm_service=None):
         self.mqtt_service = mqtt_service
         self.protocol_handlers = protocol_handlers
+        self.ai_model_manager = AIModelManager(llm_service)
         self.health_monitor = HealthMonitor(mqtt_service, protocol_handlers)
-        
+
         # Server state
         self._running = False
         self._shutdown_requested = False
         self._shutdown_event = asyncio.Event()
         self._start_time: Optional[datetime] = None
-        
+
         # Performance tracking
         self._heartbeat_count = 0
     
@@ -45,23 +64,31 @@ class ServerLifecycleManager:
         logger.info("=" * 60)
         
         try:
-            # Phase 1: Register protocol handlers
-            logger.info("Phase 1: Registering protocol handlers...")
+            # Stage: Load AI models
+            logger.info(f"{StartupStage.LOAD_AI_MODELS.value}...")
+            await self.ai_model_manager.load_models()
+            # Pass LLM service to protocol handlers if available
+            llm_service = self.ai_model_manager.get_llm_service()
+            if llm_service:
+                self.protocol_handlers.set_llm_service(llm_service)
+
+            # Stage: Register protocol handlers
+            logger.info(f"{StartupStage.REGISTER_HANDLERS.value}...")
             self.protocol_handlers.register_all_handlers()
             logger.info(f"Registered handlers for {len(self.mqtt_service.event_handlers)} topics")
-            
-            # Phase 2: Start MQTT service
-            logger.info("Phase 2: Starting MQTT service...")
+
+            # Stage: Start MQTT service
+            logger.info(f"{StartupStage.START_MQTT.value}...")
             await self.mqtt_service.start()
             logger.info("MQTT service connected and subscribed")
-            
-            # Phase 3: Start health monitoring
-            logger.info("Phase 3: Starting health monitoring...")
+
+            # Stage: Start health monitoring
+            logger.info(f"{StartupStage.START_HEALTH_MONITORING.value}...")
             await self.health_monitor.start_monitoring(interval=30)
             logger.info("Health monitoring active")
-            
-            # Phase 4: Publish initial status
-            logger.info("Phase 4: Publishing initial system status...")
+
+            # Stage: Publish initial status
+            logger.info(f"{StartupStage.PUBLISH_STATUS.value}...")
             await self._publish_startup_status()
             logger.info("Initial status published")
             
@@ -87,29 +114,27 @@ class ServerLifecycleManager:
         """Main server event loop with health monitoring"""
         heartbeat_interval = 5.0  # Heartbeat every 5 seconds
         last_heartbeat = 0
-        
+
         while self._running and not self._shutdown_requested:
             try:
                 # Non-blocking wait with timeout
-                try:
+                with contextlib.suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(self._shutdown_event.wait(), timeout=heartbeat_interval)
                     break  # Shutdown requested
-                except asyncio.TimeoutError:
-                    pass  # Normal timeout, continue loop
-                
                 # Periodic heartbeat and health checks
                 current_time = datetime.now(timezone.utc).timestamp()
                 if current_time - last_heartbeat > heartbeat_interval:
                     await self._heartbeat_check()
                     last_heartbeat = current_time
-                
+
             except asyncio.CancelledError:
                 logger.info("Main loop cancelled")
                 break
             except Exception as e:
                 logger.error(f"Main loop error: {e}")
                 await asyncio.sleep(1)
-    
+
+
     async def _heartbeat_check(self):
         """Perform periodic health checks"""
         try:
@@ -171,7 +196,7 @@ class ServerLifecycleManager:
         self._shutdown_event.set()
         
         try:
-            # Phase 1: Publish shutdown notification
+            # Publish shutdown notification
             if self.mqtt_service.is_connected():
                 shutdown_data = {
                     "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -181,15 +206,19 @@ class ServerLifecycleManager:
                 }
                 self.mqtt_service.publish_system_message("health", "shutdown", shutdown_data, qos=1)
                 await asyncio.sleep(0.5)
-            
-            # Phase 2: Stop health monitoring
-            logger.info("Phase 1: Stopping health monitoring...")
+
+            # Stage: Stop health monitoring
+            logger.info(f"{ShutdownStage.STOP_HEALTH_MONITORING.value}...")
             await self.health_monitor.stop_monitoring()
-            
-            # Phase 3: Stop MQTT service
-            logger.info("Phase 2: Stopping MQTT service...")
+
+            # Stage: Stop MQTT service
+            logger.info(f"{ShutdownStage.STOP_MQTT.value}...")
             await self.mqtt_service.stop()
-            
+
+            # Stage: Unload AI models
+            logger.info(f"{ShutdownStage.UNLOAD_AI_MODELS.value}...")
+            self.ai_model_manager.unload_models()
+
             self._running = False
             
             # Final stats
@@ -207,8 +236,8 @@ class ServerLifecycleManager:
     async def _emergency_shutdown(self):
         """Emergency shutdown for critical errors"""
         logger.critical("EMERGENCY SHUTDOWN INITIATED")
-        
-        try:
+
+        with contextlib.suppress(Exception):
             if self.mqtt_service.is_connected():
                 emergency_data = {
                     "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -216,15 +245,10 @@ class ServerLifecycleManager:
                     "reason": "critical_error"
                 }
                 self.mqtt_service.publish_system_message("health", "emergency", emergency_data, qos=2)
-        except:
-            pass  # Don't let emergency shutdown fail
-        
         # Force stop everything
         self._running = False
-        try:
+        with contextlib.suppress(Exception):
             await self.mqtt_service.stop()
-        except:
-            pass
     
     def is_running(self) -> bool:
         """Check if server is running"""
