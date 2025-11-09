@@ -13,6 +13,8 @@ from config import tts as tts_config
 from services.audio_encoder import AudioEncoder
 from services.base import BaseAIService
 from services.text_normalizer import TextNormalizer
+from services.voice_manager import VoiceManager, VoiceConfig
+from services.emotion_presets import get_emotion_parameters, list_emotions
 
 
 logger = logging.getLogger(__name__)
@@ -27,6 +29,7 @@ class AudioData:
     duration_ms: int
     synthesis_time_ms: int
     text: str
+    voice: str = "default"
     phonemes: Optional[str] = None
 
 
@@ -38,6 +41,10 @@ class TTSService(BaseAIService):
         self.text_normalizer = TextNormalizer(language="en")
         self.audio_encoder = AudioEncoder()
         self._phrase_cache: Dict[str, np.ndarray] = {}
+
+        # Multi-voice support
+        self.voice_manager = VoiceManager()
+        self.multi_voice_enabled = tts_config.ENABLE_MULTI_VOICE
 
     def _get_model_type(self) -> str:
         """Get the model type name for logging"""
@@ -61,36 +68,62 @@ class TTSService(BaseAIService):
                 logger.error("piper-tts not installed. Run: uv add piper-tts")
                 return False
 
-            # Load model (blocking, run in executor)
-            loop = asyncio.get_event_loop()
-            try:
-                self.model = await loop.run_in_executor(
-                    None,
-                    lambda: PiperVoice.load(
-                        str(self.model_path),
-                        use_cuda=tts_config.ENABLE_GPU
+            if self.multi_voice_enabled:
+                # Multi-voice mode: Register and load available voices
+                logger.info("Multi-voice mode enabled")
+
+                # Register all available voices
+                for voice_name, voice_config in tts_config.AVAILABLE_VOICES.items():
+                    config = VoiceConfig(
+                        name=voice_name,
+                        model_path=Path(voice_config["model_path"]),
+                        language=voice_config.get("language", "en_US"),
+                        sample_rate=voice_config.get("sample_rate", 22050),
+                        description=voice_config.get("description", ""),
+                        speaker_id=voice_config.get("speaker_id", 0)
                     )
-                )
-            except FileNotFoundError as e:
-                logger.error(
-                    f"Model file not found: {self.model_path}. "
-                    f"Ensure the model is downloaded. Error: {e}"
-                )
-                return False
-            except RuntimeError as e:
-                error_msg = str(e).lower()
-                if "cuda" in error_msg or "gpu" in error_msg:
+                    self.voice_manager.register_voice(config)
+
+                # Load default voice
+                default_voice = tts_config.DEFAULT_VOICE
+                if not await self.voice_manager.load_voice(default_voice, tts_config.ENABLE_GPU):
+                    logger.error(f"Failed to load default voice: {default_voice}")
+                    return False
+
+                # Set model to the current voice for compatibility
+                self.model = self.voice_manager.get_current_voice()
+
+            else:
+                # Single-voice mode: Load model directly (legacy behavior)
+                loop = asyncio.get_event_loop()
+                try:
+                    self.model = await loop.run_in_executor(
+                        None,
+                        lambda: PiperVoice.load(
+                            str(self.model_path),
+                            use_cuda=tts_config.ENABLE_GPU
+                        )
+                    )
+                except FileNotFoundError as e:
                     logger.error(
-                        f"GPU error during model loading. "
-                        f"Try setting ENABLE_GPU=false for CPU-only mode. "
-                        f"Error: {e}"
+                        f"Model file not found: {self.model_path}. "
+                        f"Ensure the model is downloaded. Error: {e}"
                     )
-                else:
-                    logger.error(f"Runtime error loading model: {e}")
-                return False
-            except Exception as e:
-                logger.error(f"Failed to load Piper model: {e}")
-                return False
+                    return False
+                except RuntimeError as e:
+                    error_msg = str(e).lower()
+                    if "cuda" in error_msg or "gpu" in error_msg:
+                        logger.error(
+                            f"GPU error during model loading. "
+                            f"Try setting ENABLE_GPU=false for CPU-only mode. "
+                            f"Error: {e}"
+                        )
+                    else:
+                        logger.error(f"Runtime error loading model: {e}")
+                    return False
+                except Exception as e:
+                    logger.error(f"Failed to load Piper model: {e}")
+                    return False
 
             # Warm up model if enabled (cache common phrases)
             if tts_config.CACHE_COMMON_PHRASES:
@@ -132,6 +165,8 @@ class TTSService(BaseAIService):
         length_scale: Optional[float] = None,
         noise_scale: Optional[float] = None,
         noise_w: Optional[float] = None,
+        voice: Optional[str] = None,
+        emotion: Optional[str] = None,
     ) -> AudioData:
         """Synthesize speech from text
 
@@ -141,10 +176,28 @@ class TTSService(BaseAIService):
             length_scale: Speaking rate (1.0 = normal). Defaults to config.
             noise_scale: Pitch variation. Defaults to config.
             noise_w: Energy variation. Defaults to config.
+            voice: Voice name to use (only if multi-voice enabled). Defaults to current voice.
+            emotion: Emotion/tone preset (happy, sad, calm, etc.). Overrides length/noise params.
 
         Returns:
             AudioData with synthesized speech
         """
+        # Apply emotion preset if specified
+        if emotion:
+            emotion_params = get_emotion_parameters(emotion)
+            if emotion_params:
+                # Emotion preset overrides individual parameters
+                length_scale = emotion_params["length_scale"]
+                noise_scale = emotion_params["noise_scale"]
+                noise_w = emotion_params["noise_w"]
+                logger.debug(f"Applied emotion preset: {emotion}")
+            else:
+                logger.warning(f"Unknown emotion preset: {emotion}, using defaults")
+
+        # Handle voice switching if multi-voice is enabled
+        if voice and self.multi_voice_enabled:
+            await self._switch_voice(voice)
+
         if not self.is_ready or self.model is None:
             logger.error("Model not loaded, cannot synthesize")
             return self._empty_result()
@@ -194,6 +247,13 @@ class TTSService(BaseAIService):
             synthesis_time_ms = int((time.time() - start_time) * 1000)
             self._log_performance(duration_ms, synthesis_time_ms, normalized_text)
 
+            # Determine voice name
+            voice_name = voice or (
+                self.voice_manager.get_current_voice_name()
+                if self.multi_voice_enabled
+                else tts_config.VOICE
+            )
+
             return AudioData(
                 audio_bytes=audio_bytes,
                 sample_rate=tts_config.SAMPLE_RATE,
@@ -201,6 +261,7 @@ class TTSService(BaseAIService):
                 duration_ms=duration_ms,
                 synthesis_time_ms=synthesis_time_ms,
                 text=normalized_text,
+                voice=voice_name or "default",
                 phonemes=None  # Could be populated if needed
             )
 
@@ -375,13 +436,129 @@ class TTSService(BaseAIService):
         self._phrase_cache.clear()
         logger.info("Phrase cache cleared")
 
+    async def _switch_voice(self, voice_name: str) -> bool:
+        """Switch to a different voice
+
+        Args:
+            voice_name: Name of the voice to switch to
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.multi_voice_enabled:
+            logger.warning("Multi-voice not enabled, cannot switch voice")
+            return False
+
+        # Check if voice is already current
+        if self.voice_manager.get_current_voice_name() == voice_name:
+            return True
+
+        # Load voice if not already loaded
+        if not self.voice_manager.is_voice_loaded(voice_name):
+            if not await self.voice_manager.load_voice(voice_name, tts_config.ENABLE_GPU):
+                logger.error(f"Failed to load voice: {voice_name}")
+                return False
+
+        # Switch to voice
+        if self.voice_manager.set_current_voice(voice_name):
+            self.model = self.voice_manager.get_current_voice()
+            logger.info(f"Switched to voice: {voice_name}")
+            return True
+
+        return False
+
+    async def load_voice(self, voice_name: str) -> bool:
+        """Load an additional voice (multi-voice mode only)
+
+        Args:
+            voice_name: Name of the voice to load
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.multi_voice_enabled:
+            logger.warning("Multi-voice not enabled")
+            return False
+
+        return await self.voice_manager.load_voice(voice_name, tts_config.ENABLE_GPU)
+
+    def unload_voice(self, voice_name: str):
+        """Unload a voice (multi-voice mode only)
+
+        Args:
+            voice_name: Name of the voice to unload
+        """
+        if not self.multi_voice_enabled:
+            logger.warning("Multi-voice not enabled")
+            return
+
+        self.voice_manager.unload_voice(voice_name)
+
+    def get_available_voices(self) -> list:
+        """Get list of available voice names
+
+        Returns:
+            List of voice names
+        """
+        if self.multi_voice_enabled:
+            return self.voice_manager.get_registered_voices()
+        else:
+            return [tts_config.VOICE]
+
+    def get_loaded_voices(self) -> list:
+        """Get list of currently loaded voice names
+
+        Returns:
+            List of voice names
+        """
+        if self.multi_voice_enabled:
+            return self.voice_manager.get_loaded_voices()
+        else:
+            return [tts_config.VOICE] if self.is_ready else []
+
+    def get_current_voice(self) -> str:
+        """Get name of current active voice
+
+        Returns:
+            Voice name
+        """
+        if self.multi_voice_enabled:
+            return self.voice_manager.get_current_voice_name() or tts_config.DEFAULT_VOICE
+        else:
+            return tts_config.VOICE
+
+    def get_available_emotions(self) -> list[str]:
+        """Get list of available emotion presets
+
+        Returns:
+            List of emotion names
+        """
+        return list_emotions()
+
     def get_status(self) -> Dict:
         """Get current service status"""
         status = super().get_status()
-        status.update({
-            "voice": tts_config.VOICE,
-            "sample_rate": tts_config.SAMPLE_RATE,
-            "output_format": tts_config.OUTPUT_FORMAT,
-            "cached_phrases": len(self._phrase_cache),
-        })
+
+        if self.multi_voice_enabled:
+            # Multi-voice status
+            voice_status = self.voice_manager.get_status()
+            status.update({
+                "multi_voice_enabled": True,
+                "current_voice": voice_status["current_voice"],
+                "loaded_voices": voice_status["loaded_voices"],
+                "available_voices": voice_status["registered_voices"],
+                "sample_rate": tts_config.SAMPLE_RATE,
+                "output_format": tts_config.OUTPUT_FORMAT,
+                "cached_phrases": len(self._phrase_cache),
+            })
+        else:
+            # Single-voice status (legacy)
+            status.update({
+                "multi_voice_enabled": False,
+                "voice": tts_config.VOICE,
+                "sample_rate": tts_config.SAMPLE_RATE,
+                "output_format": tts_config.OUTPUT_FORMAT,
+                "cached_phrases": len(self._phrase_cache),
+            })
+
         return status

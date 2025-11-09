@@ -13,6 +13,31 @@ VOICE = os.getenv("TTS_VOICE", "lessac")
 LANGUAGE = os.getenv("TTS_LANGUAGE", "en_US")
 SPEAKER_ID = int(os.getenv("TTS_SPEAKER_ID", "0"))
 
+# Multi-Voice Support
+ENABLE_MULTI_VOICE = os.getenv("TTS_ENABLE_MULTI_VOICE", "false").lower() == "true"
+DEFAULT_VOICE = os.getenv("TTS_DEFAULT_VOICE", "lessac")
+
+# Voice Definitions
+# Add voice configurations here as you download more Piper models
+# Format: name -> (model_path, description, sample_rate, speaker_id)
+AVAILABLE_VOICES = {
+    "lessac": {
+        "model_path": "models/tts/en/en_US/lessac/medium/en_US-lessac-medium.onnx",
+        "description": "Clear, professional female voice",
+        "sample_rate": 22050,
+        "speaker_id": 0,
+        "language": "en_US"
+    },
+    # Add more voices here:
+    # "amy": {
+    #     "model_path": "models/tts/en/en_US/amy/medium/en_US-amy-medium.onnx",
+    #     "description": "Friendly female voice",
+    #     "sample_rate": 22050,
+    #     "speaker_id": 0,
+    #     "language": "en_US"
+    # },
+}
+
 # Synthesis Parameters
 SAMPLE_RATE = int(os.getenv("TTS_SAMPLE_RATE", "22050"))
 LENGTH_SCALE = float(os.getenv("TTS_LENGTH_SCALE", "1.0"))  # Speaking rate
