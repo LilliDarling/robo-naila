@@ -6,8 +6,8 @@ import json
 import time
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from datetime import datetime, timezone
-from graphs.orchestration_graph import NAILAOrchestrationGraph
-from memory.conversation_memory import ConversationMemory
+from graphs.orchestration import NAILAOrchestrationGraph
+from memory.conversation import ConversationMemory
 from agents.input_processor import InputProcessor
 from agents.response_generator import ResponseGenerator
 
@@ -51,8 +51,8 @@ class TestEndToEndWorkflow:
             response_generator = ResponseGenerator()
             
             # Create orchestrator
-            with patch('graphs.orchestration_graph.InputProcessor', return_value=input_processor), \
-                 patch('graphs.orchestration_graph.ResponseGenerator', return_value=response_generator):
+            with patch('graphs.orchestration.InputProcessor', return_value=input_processor), \
+                 patch('graphs.orchestration.ResponseGenerator', return_value=response_generator):
                 orchestrator = NAILAOrchestrationGraph()
             
             yield {

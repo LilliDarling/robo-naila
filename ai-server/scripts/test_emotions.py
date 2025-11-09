@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from services.tts import TTSService
-from services.emotion_presets import EMOTION_CATEGORIES, get_categories
+from utils.emotion_presets import EMOTION_CATEGORIES, get_categories
 
 
 async def test_emotions():

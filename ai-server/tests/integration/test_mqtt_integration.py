@@ -5,7 +5,7 @@ import asyncio
 import json
 from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime, timezone
-from graphs.orchestration_graph import NAILAOrchestrationGraph
+from graphs.orchestration import NAILAOrchestrationGraph
 from mqtt.core.models import MQTTMessage, TopicCategory
 
 
@@ -379,7 +379,7 @@ class TestMQTTIntegration:
     @pytest.mark.asyncio
     async def test_conversation_memory_integration(self, mock_mqtt_service):
         """Test integration between MQTT flow and conversation memory"""
-        from memory.conversation_memory import ConversationMemory
+        from memory.conversation import ConversationMemory
         
         memory = ConversationMemory(max_history=3, ttl_hours=1)
         # Disable background task for testing

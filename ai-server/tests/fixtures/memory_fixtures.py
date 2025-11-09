@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import Mock
-from memory.conversation_memory import ConversationMemory
+from memory.conversation import ConversationMemory
 import factory
 
 

@@ -7,10 +7,10 @@ import statistics
 from unittest.mock import Mock, AsyncMock, patch
 from concurrent.futures import ThreadPoolExecutor
 import threading
-from memory.conversation_memory import ConversationMemory
+from memory.conversation import ConversationMemory
 from agents.input_processor import InputProcessor
 from agents.response_generator import ResponseGenerator
-from graphs.orchestration_graph import NAILAOrchestrationGraph
+from graphs.orchestration import NAILAOrchestrationGraph
 
 
 class TestPerformance:
