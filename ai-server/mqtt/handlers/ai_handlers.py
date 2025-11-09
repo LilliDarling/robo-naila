@@ -21,6 +21,7 @@ class AIHandlers(BaseHandler):
         super().__init__(mqtt_service)
         self.orchestrator = NAILAOrchestrator(mqtt_service)
         self.stt_service = None
+        self.tts_service = None
 
     def set_llm_service(self, llm_service):
         """Set LLM service for the orchestrator"""
@@ -29,6 +30,13 @@ class AIHandlers(BaseHandler):
     def set_stt_service(self, stt_service):
         """Set STT service for audio transcription"""
         self.stt_service = stt_service
+
+    def set_tts_service(self, tts_service):
+        """Set TTS service for audio synthesis"""
+        self.tts_service = tts_service
+        # Update orchestrator with TTS service
+        if hasattr(self.orchestrator, 'set_tts_service'):
+            self.orchestrator.set_tts_service(tts_service)
 
     def register_handlers(self):
         """Register all AI-related handlers"""

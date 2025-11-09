@@ -11,11 +11,12 @@ from agents.base import BaseAgent
 class ResponseGenerator(BaseAgent):
     """Generate context-aware responses with conversation continuity"""
 
-    def __init__(self, llm_service=None):
+    def __init__(self, llm_service=None, tts_service=None):
         super().__init__("response_generator")
         self._response_cache = {}
         self._cache_ttl = 600  # 10 minutes
         self.llm_service = llm_service
+        self.tts_service = tts_service
     
     async def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Generate context-aware response"""
@@ -60,7 +61,17 @@ class ResponseGenerator(BaseAgent):
         state["response_text"] = response
         state["conversation_history"] = conversation_history[-10:]  # Keep last 10
         state["response_metadata"] = response_metadata
-        
+
+        # Synthesize audio response if TTS is available
+        if self.tts_service and self.tts_service.is_ready:
+            try:
+                audio_data = await self.tts_service.synthesize(response)
+                state["response_audio"] = audio_data
+                self.logger.debug(f"Audio synthesized: {audio_data.duration_ms}ms, {audio_data.format}")
+            except Exception as e:
+                self.logger.warning(f"TTS synthesis failed: {e}")
+                # Continue without audio - text response is still available
+
         self.logger.info(f"Generated: '{response}' (conf: {confidence:.2f}, {response_metadata['generation_time_ms']}ms)")
         return state
     

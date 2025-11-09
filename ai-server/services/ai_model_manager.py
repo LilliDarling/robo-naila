@@ -6,6 +6,7 @@ import os
 from typing import Dict, Optional
 from services.llm import LLMService
 from services.stt import STTService
+from services.tts import TTSService
 from config.hardware_config import HardwareOptimizer
 
 
@@ -15,9 +16,15 @@ logger = logging.getLogger(__name__)
 class AIModelManager:
     """Manages loading, unloading, and lifecycle of AI models"""
 
-    def __init__(self, llm_service: Optional[LLMService] = None, stt_service: Optional[STTService] = None):
+    def __init__(
+        self,
+        llm_service: Optional[LLMService] = None,
+        stt_service: Optional[STTService] = None,
+        tts_service: Optional[TTSService] = None
+    ):
         self.llm_service = llm_service
         self.stt_service = stt_service
+        self.tts_service = tts_service
         self._models_loaded = False
         self._hardware_info = None
 
@@ -65,6 +72,13 @@ class AIModelManager:
         else:
             logger.info("No STT service configured - audio input disabled")
 
+        if self.tts_service:
+            logger.info("Loading TTS model...")
+            tasks.append(self.tts_service.load_model(hardware_info=hardware_info))
+            task_names.append("TTS")
+        else:
+            logger.info("No TTS service configured - audio output disabled")
+
         # Load all models in parallel if there are any to load
         if tasks:
             logger.info(f"Loading {len(tasks)} model(s) in parallel...")
@@ -106,6 +120,11 @@ class AIModelManager:
             self.stt_service.unload_model()
             logger.info("STT model unloaded")
 
+        # Unload TTS model
+        if self.tts_service and self.tts_service.is_ready:
+            self.tts_service.unload_model()
+            logger.info("TTS model unloaded")
+
         self._models_loaded = False
 
     def get_llm_service(self) -> Optional[LLMService]:
@@ -116,6 +135,10 @@ class AIModelManager:
         """Get the STT service instance"""
         return self.stt_service
 
+    def get_tts_service(self) -> Optional[TTSService]:
+        """Get the TTS service instance"""
+        return self.tts_service
+
     def is_ready(self) -> bool:
         """Check if models are loaded and ready"""
         return self._models_loaded
@@ -125,7 +148,8 @@ class AIModelManager:
         status = {
             "models_loaded": self._models_loaded,
             "llm": None,
-            "stt": None
+            "stt": None,
+            "tts": None
         }
 
         if self.llm_service:
@@ -133,5 +157,8 @@ class AIModelManager:
 
         if self.stt_service:
             status["stt"] = self.stt_service.get_status()
+
+        if self.tts_service:
+            status["tts"] = self.tts_service.get_status()
 
         return status

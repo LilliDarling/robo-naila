@@ -15,9 +15,11 @@ logger = logging.getLogger(__name__)
 class NAILAOrchestrationGraph:
     """Main orchestration workflow for NAILA"""
 
-    def __init__(self, llm_service=None):
+    def __init__(self, llm_service=None, tts_service=None):
+        self.llm_service = llm_service
+        self.tts_service = tts_service
         self.input_processor = InputProcessor()
-        self.response_generator = ResponseGenerator(llm_service=llm_service)
+        self.response_generator = ResponseGenerator(llm_service=llm_service, tts_service=tts_service)
         self.workflow = self._build_graph()
         self.app = self.workflow.compile()
     

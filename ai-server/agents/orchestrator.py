@@ -13,10 +13,14 @@ logger = logging.getLogger(__name__)
 class NAILAOrchestrator:
     """Main orchestrator for NAILA AI system"""
 
-    def __init__(self, mqtt_service=None, llm_service=None):
-        self.graph = NAILAOrchestrationGraph(llm_service=llm_service)
+    def __init__(self, mqtt_service=None, llm_service=None, tts_service=None):
+        self.graph = NAILAOrchestrationGraph(llm_service=llm_service, tts_service=tts_service)
         self.mqtt_service = mqtt_service
         self.memory = memory_manager
+
+    def set_tts_service(self, tts_service):
+        """Set TTS service for the orchestration graph"""
+        self.graph = NAILAOrchestrationGraph(llm_service=self.graph.llm_service, tts_service=tts_service)
     
     async def process_task(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
         """Process a task from MQTT"""
@@ -59,8 +63,10 @@ class NAILAOrchestrator:
     
     async def _publish_response(self, device_id: str, task_id: str, result: Dict[str, Any]):
         """Publish AI response via MQTT - Command server will handle device commands"""
-        
-        # Build AI response
+        import base64
+        from config.mqtt_topics import OUTPUT
+
+        # Build AI text response
         ai_response = {
             "task_id": task_id,
             "source": "ai_server",
@@ -73,14 +79,40 @@ class NAILAOrchestrator:
                 "context": result.get("context", {})
             }
         }
-        
-        # Publish AI response - Command server subscribes to this
-        from config.mqtt_topics import OUTPUT
+
+        # Publish text response - Command server subscribes to this
         self.mqtt_service.publish(
             OUTPUT.ai_response_text,
             ai_response,
             qos=1
         )
+
+        # Publish audio response if available
+        if "response_audio" in result:
+            audio_data = result["response_audio"]
+            audio_response = {
+                "task_id": task_id,
+                "device_id": device_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "audio_data": base64.b64encode(audio_data.audio_bytes).decode('utf-8'),
+                "format": audio_data.format,
+                "sample_rate": audio_data.sample_rate,
+                "duration_ms": audio_data.duration_ms,
+                "text": audio_data.text,
+                "metadata": {
+                    "voice": "lessac",
+                    "language": "en_US",
+                    "synthesis_time_ms": audio_data.synthesis_time_ms
+                }
+            }
+
+            self.mqtt_service.publish(
+                OUTPUT.ai_response_audio,
+                audio_response,
+                qos=1
+            )
+
+            self.logger.info(f"Published audio response: {audio_data.duration_ms}ms, {audio_data.format}")
         
         logger.info(f"Published AI response for task {task_id}")
     
