@@ -36,7 +36,7 @@ class ServerLifecycleManager:
         self.mqtt_service = mqtt_service
         self.protocol_handlers = protocol_handlers
         self.ai_model_manager = AIModelManager(llm_service, stt_service, tts_service)
-        self.health_monitor = HealthMonitor(mqtt_service, protocol_handlers)
+        self.health_monitor = HealthMonitor(mqtt_service, protocol_handlers, self.ai_model_manager)
 
         # Server state
         self._running = False

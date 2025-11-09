@@ -153,7 +153,7 @@ class TTSService(BaseAIService):
             start_time = time.time()
 
             # Validate input
-            if not text or len(text.strip()) == 0:
+            if not text or not text.strip():
                 logger.warning("Empty text provided for synthesis")
                 return self._empty_result()
 
@@ -226,6 +226,8 @@ class TTSService(BaseAIService):
         Returns:
             Audio samples as numpy array (float32)
         """
+        from piper.config import SynthesisConfig
+
         model = self.model
         assert model is not None, "Model should be loaded"
 
@@ -234,20 +236,32 @@ class TTSService(BaseAIService):
         noise_scale = noise_scale or tts_config.NOISE_SCALE
         noise_w = noise_w or tts_config.NOISE_W
 
-        # Run synthesis in executor (blocking operation)
-        loop = asyncio.get_event_loop()
-        audio_samples = await loop.run_in_executor(
-            None,
-            lambda: model.synthesize(
-                text,
-                length_scale=length_scale,
-                noise_scale=noise_scale,
-                noise_w=noise_w,
-                speaker_id=tts_config.SPEAKER_ID
-            )
+        # Create synthesis config
+        syn_config = SynthesisConfig(
+            speaker_id=tts_config.SPEAKER_ID,
+            length_scale=length_scale,
+            noise_scale=noise_scale,
+            noise_w_scale=noise_w,
         )
 
-        return audio_samples
+        # Run synthesis in executor (blocking operation)
+        loop = asyncio.get_event_loop()
+
+        def _synthesize():
+            # Synthesize returns an iterable of AudioChunk objects
+            audio_chunks = []
+            for chunk in model.synthesize(text, syn_config):
+                # AudioChunk has audio_int16_array which is already a numpy array
+                audio_chunks.append(chunk.audio_int16_array)
+            # Concatenate all chunks into a single array
+            if audio_chunks:
+                # Convert int16 to float32 in range [-1.0, 1.0]
+                audio_int16 = np.concatenate(audio_chunks)
+                audio_float32 = audio_int16.astype(np.float32) / 32768.0
+                return audio_float32
+            return np.array([], dtype=np.float32)
+
+        return await loop.run_in_executor(None, _synthesize)
 
     def _preprocess_text(self, text: str) -> str:
         """Preprocess and normalize text for synthesis
@@ -336,9 +350,7 @@ class TTSService(BaseAIService):
         try:
             # Infer format from file extension if not specified
             if output_format is None:
-                output_format = Path(file_path).suffix.lstrip('.').lower()
-                if not output_format:
-                    output_format = tts_config.OUTPUT_FORMAT
+                output_format = Path(file_path).suffix.lstrip('.').lower() or tts_config.OUTPUT_FORMAT
 
             # Synthesize
             audio_data = await self.synthesize(text, output_format=output_format)

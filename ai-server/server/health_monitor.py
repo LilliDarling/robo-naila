@@ -11,10 +11,11 @@ logger = logging.getLogger(__name__)
 
 class HealthMonitor:
     """System health monitoring and metrics collection"""
-    
-    def __init__(self, mqtt_service, protocol_handlers):
+
+    def __init__(self, mqtt_service, protocol_handlers, ai_model_manager=None):
         self.mqtt_service = mqtt_service
         self.protocol_handlers = protocol_handlers
+        self.ai_model_manager = ai_model_manager
         self.start_time = datetime.now(timezone.utc)
         self._monitoring_task: Optional[asyncio.Task] = None
         
@@ -75,7 +76,8 @@ class HealthMonitor:
                     "device_states": handler_stats["device_states"],
                     "conversation_contexts": handler_stats["conversation_contexts"],
                     "task_queue_utilization": handler_stats.get("task_queue_size", 0) / max(handler_stats.get("task_queue_max", 1), 1)
-                }
+                },
+                "ai_services": self._get_ai_services_status()
             }
             
             # Only publish if connected
@@ -104,3 +106,54 @@ class HealthMonitor:
         cache_size = stats.get("cache_size", 0)
         handlers_registered = stats.get("handlers_registered", 1)
         return min(cache_size / max(handlers_registered, 1), 1.0)
+
+    def _get_ai_services_status(self) -> Dict[str, Any]:
+        """Get AI services (LLM, STT, TTS) health status"""
+        if not self.ai_model_manager:
+            return {"status": "not_configured"}
+
+        try:
+            ai_status = self.ai_model_manager.get_status()
+
+            # Build comprehensive status
+            services_status = {
+                "status": "healthy" if ai_status.get("models_loaded") else "unhealthy",
+                "models_loaded": ai_status.get("models_loaded", False),
+                "services": {}
+            }
+
+            # LLM status
+            if ai_status.get("llm"):
+                llm_status = ai_status["llm"]
+                services_status["services"]["llm"] = {
+                    "status": "ready" if llm_status.get("ready") else "not_ready",
+                    "model": llm_status.get("model_path", "").split("/")[-1] if llm_status.get("model_path") else "none",
+                    "hardware": llm_status.get("hardware", {}).get("device_type", "unknown"),
+                }
+
+            # STT status
+            if ai_status.get("stt"):
+                stt_status = ai_status["stt"]
+                services_status["services"]["stt"] = {
+                    "status": "ready" if stt_status.get("ready") else "not_ready",
+                    "model": stt_status.get("model_path", "").split("/")[-1] if stt_status.get("model_path") else "none",
+                    "hardware": stt_status.get("hardware", {}).get("device_type", "unknown"),
+                }
+
+            # TTS status
+            if ai_status.get("tts"):
+                tts_status = ai_status["tts"]
+                services_status["services"]["tts"] = {
+                    "status": "ready" if tts_status.get("ready") else "not_ready",
+                    "model": tts_status.get("model_path", "").split("/")[-1] if tts_status.get("model_path") else "none",
+                    "voice": tts_status.get("voice", "unknown"),
+                    "sample_rate": tts_status.get("sample_rate", 0),
+                    "output_format": tts_status.get("output_format", "unknown"),
+                    "cached_phrases": tts_status.get("cached_phrases", 0),
+                }
+
+            return services_status
+
+        except Exception as e:
+            logger.error(f"Failed to get AI services status: {e}")
+            return {"status": "error", "error": str(e)}

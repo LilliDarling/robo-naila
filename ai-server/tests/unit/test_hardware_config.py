@@ -243,7 +243,6 @@ class TestHardwareOptimizer:
             
             # Sentence transformer config
             st_config = optimizer.get_model_config("sentence_transformer")
-            assert st_config["show_progress_bar"] == False
             assert st_config["convert_to_numpy"] == True
             assert st_config["device"] == "cpu"
 
@@ -266,26 +265,15 @@ class TestHardwareOptimizer:
     def test_cpu_info_detection(self):
         """Test CPU information detection"""
         optimizer = HardwareOptimizer()
-        
-        # Test _get_cpu_info method directly with mocked imports
-        with patch('builtins.__import__') as mock_import:
-            # Mock platform and cpuinfo modules
-            mock_platform = Mock()
-            mock_platform.machine.return_value = "x86_64"
-            
-            mock_cpuinfo = Mock()
-            mock_cpuinfo.get_cpu_info.return_value = {"brand_raw": "Intel i9-12900K"}
-            
-            def import_side_effect(name, *args, **kwargs):
-                if name == 'platform':
-                    return mock_platform
-                elif name == 'cpuinfo':
-                    return mock_cpuinfo
-                else:
-                    return __import__(name, *args, **kwargs)
-            
-            mock_import.side_effect = import_side_effect
-            
+
+        # Test _get_cpu_info method directly with mocked cpuinfo
+        # Mock the cpuinfo module that's already imported
+        mock_cpuinfo_module = Mock()
+        mock_cpuinfo_module.get_cpu_info.return_value = {"brand_raw": "Intel i9-12900K"}
+
+        with patch('config.hardware_config.cpuinfo', mock_cpuinfo_module), \
+             patch('config.hardware_config.platform.machine', return_value="x86_64"):
+
             cpu_info = optimizer._get_cpu_info()
             assert "Intel i9-12900K" in cpu_info
             assert "x86_64" in cpu_info

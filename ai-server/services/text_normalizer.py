@@ -1,10 +1,13 @@
 """Text normalization utilities for TTS preprocessing"""
 
+
+import contextlib
 import logging
 import re
-from typing import Optional
 
 from num2words import num2words
+
+from services import text_patterns
 
 
 logger = logging.getLogger(__name__)
@@ -29,25 +32,6 @@ class TextNormalizer:
             language: Language code for num2words (default: en)
         """
         self.language = language
-
-        # Common abbreviations mapping
-        self.abbreviations = {
-            "Dr.": "Doctor",
-            "Mr.": "Mister",
-            "Mrs.": "Misses",
-            "Ms.": "Miss",
-            "Prof.": "Professor",
-            "Sr.": "Senior",
-            "Jr.": "Junior",
-            "St.": "Saint",
-            "Ave.": "Avenue",
-            "Blvd.": "Boulevard",
-            "Rd.": "Road",
-            "etc.": "et cetera",
-            "vs.": "versus",
-            "e.g.": "for example",
-            "i.e.": "that is",
-        }
 
     def normalize(self, text: str) -> str:
         """Apply all normalization steps to text
@@ -74,28 +58,18 @@ class TextNormalizer:
         return text.strip()
 
     def _normalize_abbreviations(self, text: str) -> str:
-        """Expand common abbreviations"""
-        for abbr, expansion in self.abbreviations.items():
-            # Use word boundaries to avoid partial matches
-            pattern = r'\b' + re.escape(abbr) + r'\b'
-            text = re.sub(pattern, expansion, text)
+        """Expand common abbreviations using context-aware patterns"""
+        for pattern, replacement, flags in text_patterns.ABBREVIATION_PATTERNS:
+            text = re.sub(pattern, replacement, text, flags=flags)
         return text
 
     def _normalize_urls_emails(self, text: str) -> str:
         """Remove or simplify URLs and emails"""
         # Remove URLs
-        text = re.sub(
-            r'https?://[^\s]+',
-            'link',
-            text
-        )
+        text = re.sub(text_patterns.URL_PATTERN, 'link', text)
 
         # Simplify email addresses
-        text = re.sub(
-            r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-            'email address',
-            text
-        )
+        text = re.sub(text_patterns.EMAIL_PATTERN, 'email address', text)
 
         return text
 
@@ -110,22 +84,22 @@ class TextNormalizer:
                 cents = int(round((amount - dollars) * 100))
 
                 if cents == 0:
-                    if dollars == 1:
-                        return "one dollar"
-                    return f"{num2words(dollars, lang=self.language)} dollars"
-                else:
-                    dollar_words = num2words(dollars, lang=self.language) if dollars != 0 else "zero"
-                    cent_words = num2words(cents, lang=self.language)
-                    return f"{dollar_words} dollars and {cent_words} cents"
+                    return (
+                        "one dollar"
+                        if dollars == 1
+                        else f"{num2words(dollars, lang=self.language)} dollars"
+                    )
+                dollar_words = num2words(dollars, lang=self.language) if dollars != 0 else "zero"
+                cent_words = num2words(cents, lang=self.language)
+                return f"{dollar_words} dollars and {cent_words} cents"
             except (ValueError, OverflowError):
                 return match.group(0)
 
-        text = re.sub(r'\$(\d+(?:\.\d{1,2})?)', replace_dollars, text)
+        text = re.sub(text_patterns.DOLLAR_PATTERN, replace_dollars, text)
 
         # Simple currency symbols
-        text = text.replace('€', 'euros')
-        text = text.replace('£', 'pounds')
-        text = text.replace('¥', 'yen')
+        for symbol, word in text_patterns.CURRENCY_SYMBOLS.items():
+            text = text.replace(symbol, word)
 
         return text
 
@@ -148,8 +122,7 @@ class TextNormalizer:
                 return number_str
 
         # Match numbers (including decimals) that aren't part of dates/times
-        # This is a simplified pattern - more complex logic could be added
-        text = re.sub(r'\b\d+(?:\.\d+)?\b', replace_number, text)
+        text = re.sub(text_patterns.NUMBER_PATTERN, replace_number, text)
 
         return text
 
@@ -158,19 +131,13 @@ class TextNormalizer:
         # Pattern: MM/DD/YYYY or M/D/YYYY
         def replace_date(match):
             month, day, year = match.groups()
-            try:
+            with contextlib.suppress(ValueError, IndexError):
                 month_num = int(month)
                 day_num = int(day)
                 year_num = int(year)
 
-                # Month names
-                month_names = [
-                    "January", "February", "March", "April", "May", "June",
-                    "July", "August", "September", "October", "November", "December"
-                ]
-
                 if 1 <= month_num <= 12:
-                    month_name = month_names[month_num - 1]
+                    month_name = text_patterns.MONTH_NAMES[month_num - 1]
                     # Convert day to ordinal
                     day_ordinal = num2words(day_num, lang=self.language, to='ordinal')
                     # Handle year
@@ -180,17 +147,15 @@ class TextNormalizer:
                         # Split year into two parts for better pronunciation (e.g., 1999 -> nineteen ninety-nine)
                         first_part = year_num // 100
                         second_part = year_num % 100
-                        if second_part == 0:
-                            year_words = num2words(first_part, lang=self.language) + " hundred"
-                        else:
-                            year_words = f"{num2words(first_part, lang=self.language)} {num2words(second_part, lang=self.language)}"
-
+                        year_words = (
+                            f"{num2words(first_part, lang=self.language)} hundred"
+                            if second_part == 0
+                            else f"{num2words(first_part, lang=self.language)} {num2words(second_part, lang=self.language)}"
+                        )
                     return f"{month_name} {day_ordinal}, {year_words}"
-            except (ValueError, IndexError):
-                pass
             return match.group(0)
 
-        text = re.sub(r'(\d{1,2})/(\d{1,2})/(\d{4})', replace_date, text)
+        text = re.sub(text_patterns.DATE_PATTERN, replace_date, text)
 
         return text
 
@@ -221,32 +186,18 @@ class TextNormalizer:
                 return match.group(0)
 
         # Match time with optional AM/PM
-        text = re.sub(r'(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)?', replace_time, text)
+        text = re.sub(text_patterns.TIME_PATTERN, replace_time, text)
 
         return text
 
     def _normalize_whitespace(self, text: str) -> str:
         """Normalize whitespace"""
-        # Replace multiple spaces/newlines with single space
-        text = re.sub(r'\s+', ' ', text)
-        return text
+        return re.sub(r'\s+', ' ', text)
 
     def _clean_special_chars(self, text: str) -> str:
         """Clean or convert special characters"""
-        # Keep basic punctuation that helps with prosody
-        # Remove or replace problematic characters
-
-        # Convert some symbols to words
-        replacements = {
-            '&': ' and ',
-            '+': ' plus ',
-            '=': ' equals ',
-            '%': ' percent',
-            '#': ' number ',
-            '@': ' at ',
-        }
-
-        for char, replacement in replacements.items():
+        # Convert symbols to words
+        for char, replacement in text_patterns.SPECIAL_CHAR_REPLACEMENTS.items():
             text = text.replace(char, replacement)
 
         # Remove other problematic characters (keep letters, numbers, basic punctuation)
