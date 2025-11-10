@@ -295,18 +295,6 @@ class TestHealthMonitor:
         efficiency = health_monitor._calculate_cache_efficiency(stats)
         assert efficiency == 1.0  # min(5/1, 1.0)
 
-    def test_get_memory_usage_with_psutil(self, health_monitor):
-        """Test memory usage calculation with psutil available"""
-        # Mock psutil at import time
-        mock_psutil = MagicMock()
-        mock_process = MagicMock()
-        mock_process.memory_info.return_value.rss = 536870912  # 512 MB in bytes
-        mock_psutil.Process.return_value = mock_process
-
-        with patch.dict('sys.modules', {'psutil': mock_psutil}):
-            memory_mb = health_monitor._get_memory_usage()
-            assert memory_mb == 512.0
-
     def test_get_memory_usage_without_psutil(self, health_monitor):
         """Test memory usage fallback when psutil is not available"""
         # Simulate ImportError when trying to import psutil

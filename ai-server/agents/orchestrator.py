@@ -4,7 +4,7 @@ import base64
 from typing import Dict, Any
 from datetime import datetime, timezone
 from graphs.orchestration import NAILAOrchestrationGraph
-from memory.conversation_memory import memory_manager
+from memory.conversation import memory_manager
 from config.mqtt_topics import OUTPUT
 from utils import get_logger
 

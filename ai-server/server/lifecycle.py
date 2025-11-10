@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Optional
 from .health_monitor import HealthMonitor
 from utils.platform import get_platform_info
-from services.ai_model_manager import AIModelManager
+from managers.ai_model import AIModelManager
 from utils import get_logger
 
 

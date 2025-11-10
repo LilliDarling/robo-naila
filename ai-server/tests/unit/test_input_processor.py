@@ -150,7 +150,7 @@ class TestInputProcessor:
             raise Exception("Hardware detection failed")
         
         monkeypatch.setattr(
-            "config.hardware_config.hardware_optimizer.get_model_config",
+            "config.hardware.hardware_optimizer.get_model_config",
             mock_failed_hardware
         )
         

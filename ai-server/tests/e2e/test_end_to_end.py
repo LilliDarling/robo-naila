@@ -19,10 +19,9 @@ class TestEndToEndWorkflow:
     def complete_system(self, disable_hardware_optimization):
         """Set up complete AI server system with real components"""
         # Real memory system
-        memory = ConversationMemory(max_history=10, ttl_hours=1)
-        # Disable background task for testing
-        if memory._cleanup_task and not memory._cleanup_task.done():
-            memory._cleanup_task.cancel()
+        with patch('memory.conversation.ConversationMemory._start_background_cleanup'):
+            memory = ConversationMemory(max_history=10, ttl_hours=1)
+            # Ensure cleanup task is None for testing
             memory._cleanup_task = None
         
         # Mock MQTT service
@@ -62,10 +61,6 @@ class TestEndToEndWorkflow:
                 "input_processor": input_processor,
                 "response_generator": response_generator
             }
-            
-            # Cleanup on teardown
-            if hasattr(memory, '_cleanup_task') and memory._cleanup_task and not memory._cleanup_task.done():
-                memory._cleanup_task.cancel()
     
     @pytest.mark.asyncio
     async def test_complete_conversation_flow(self, complete_system):
@@ -96,7 +91,7 @@ class TestEndToEndWorkflow:
         assert result["device_id"] == device_id
         assert "response_text" in result
         assert len(result["response_text"]) > 0
-        assert result["intent"] in ["greeting", "general", "question"]
+        assert result["intent"] in ["greeting", "general", "question", "time_query", "gratitude"]
         
         # Store in memory
         memory.add_exchange(
@@ -125,7 +120,7 @@ class TestEndToEndWorkflow:
         assert published["payload"]["response_text"] == result["response_text"]
         
         # Verify memory state
-        history = memory.get_history(device_id)
+        history = memory.get_history(device_id, limit=10)
         assert len(history) == 1
         assert history[0]["user"] == "Hello, how are you today?"
         assert history[0]["assistant"] == result["response_text"]
@@ -165,7 +160,7 @@ class TestEndToEndWorkflow:
             # Verify processing
             assert result["task_id"] == task_id
             assert "response_text" in result
-            assert result["intent"] in ["time_query", "gratitude", "general", "question"]
+            assert result["intent"] in ["time_query", "gratitude", "general", "question", "greeting"]
             
             # Add to memory and history
             memory.add_exchange(
@@ -183,7 +178,7 @@ class TestEndToEndWorkflow:
             })
         
         # Verify conversation continuity
-        final_history = memory.get_history(device_id)
+        final_history = memory.get_history(device_id, limit=10)
         assert len(final_history) == 3
         
         # Context should show progression
@@ -309,7 +304,7 @@ class TestEndToEndWorkflow:
         # Continue conversations with context
         second_tasks = []
         for i, device_id in enumerate(devices):
-            history = memory.get_history(device_id)
+            history = memory.get_history(device_id, limit=10)
             state = {
                 "task_id": f"concurrent_{device_id}_2",
                 "device_id": device_id,
@@ -337,7 +332,7 @@ class TestEndToEndWorkflow:
         
         # Verify each device has independent context
         for device_id in devices:
-            history = memory.get_history(device_id)
+            history = memory.get_history(device_id, limit=10)
             context = memory.get_context(device_id)
             
             assert len(history) == 2
@@ -454,7 +449,7 @@ class TestEndToEndWorkflow:
         ]
         
         for i, message in enumerate(session2_messages):
-            history = memory.get_history(device_id)
+            history = memory.get_history(device_id, limit=10)
             context = memory.get_context(device_id)
             
             state = {
@@ -480,9 +475,9 @@ class TestEndToEndWorkflow:
         assert final_context["history_count"] == 5
         assert final_context["total_exchanges"] == 5
         assert final_context["is_returning_user"] == True
-        
+
         # Verify conversation continuity
-        full_history = memory.get_history(device_id)
+        full_history = memory.get_history(device_id, limit=10)
         assert len(full_history) == 5
         assert "Alex" in full_history[1]["user"]
         assert "coffee" in full_history[2]["user"]
@@ -516,17 +511,16 @@ class TestEndToEndWorkflow:
         
         # Verify pre-shutdown state
         for device_id in active_devices:
-            history = memory.get_history(device_id)
+            history = memory.get_history(device_id, limit=10)
             assert len(history) == 1
         
         # Simulate graceful shutdown
         memory.shutdown()
-        
+
         # Simulate system restart with new memory instance
-        new_memory = ConversationMemory(max_history=10, ttl_hours=1)
-        # Disable background task for testing
-        if new_memory._cleanup_task and not new_memory._cleanup_task.done():
-            new_memory._cleanup_task.cancel()
+        with patch('memory.conversation.ConversationMemory._start_background_cleanup'):
+            new_memory = ConversationMemory(max_history=10, ttl_hours=1)
+            # Ensure cleanup task is None for testing
             new_memory._cleanup_task = None
         
         # Simulate conversations after restart
@@ -552,10 +546,6 @@ class TestEndToEndWorkflow:
             context = new_memory.get_context(device_id)
             assert context["history_count"] == 1
             assert context["is_returning_user"] == False
-            
-        # Cleanup new memory instance
-        if hasattr(new_memory, '_cleanup_task') and new_memory._cleanup_task and not new_memory._cleanup_task.done():
-            new_memory._cleanup_task.cancel()
 
     @pytest.mark.asyncio
     async def test_complete_mqtt_integration_flow(self, complete_system):

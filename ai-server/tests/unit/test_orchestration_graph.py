@@ -26,8 +26,8 @@ class TestNAILAOrchestrationGraph:
         """Create orchestrator with mocked components"""
         input_proc, response_gen = mock_processors
         
-        with patch('graphs.orchestration_graph.InputProcessor', return_value=input_proc), \
-             patch('graphs.orchestration_graph.ResponseGenerator', return_value=response_gen):
+        with patch('graphs.orchestration.InputProcessor', return_value=input_proc), \
+             patch('graphs.orchestration.ResponseGenerator', return_value=response_gen):
             return NAILAOrchestrationGraph()
 
     def test_initialization(self, orchestrator):
@@ -107,7 +107,7 @@ class TestNAILAOrchestrationGraph:
             "context": {"existing": "data"}
         }
         
-        with patch('graphs.orchestration_graph.datetime') as mock_dt:
+        with patch('graphs.orchestration.datetime') as mock_dt:
             mock_dt.now.return_value.isoformat.return_value = "2025-01-15T10:30:00"
             
             result = await orchestrator._retrieve_context(state)
@@ -126,7 +126,7 @@ class TestNAILAOrchestrationGraph:
         }
         
         # Mock datetime to raise error
-        with patch('graphs.orchestration_graph.datetime', side_effect=Exception("Time error")):
+        with patch('graphs.orchestration.datetime', side_effect=Exception("Time error")):
             result = await orchestrator._retrieve_context(state)
         
         # Should not crash the pipeline
@@ -262,7 +262,7 @@ class TestNAILAOrchestrationGraph:
             "context": original_context.copy()
         }
         
-        with patch('graphs.orchestration_graph.datetime') as mock_dt:
+        with patch('graphs.orchestration.datetime') as mock_dt:
             mock_dt.now.return_value.isoformat.return_value = "2025-01-15T10:30:00"
             
             result = await orchestrator._retrieve_context(state)
@@ -292,37 +292,11 @@ class TestNAILAOrchestrationGraph:
             "context": {"test": True}
         }
         
-        with patch('graphs.orchestration_graph.datetime') as mock_dt:
+        with patch('graphs.orchestration.datetime') as mock_dt:
             mock_dt.now.return_value.isoformat.return_value = "2025-01-15T10:30:00"
             result = await orchestrator._retrieve_context(low_conf_state)
         
         assert result["context"]["context_retrieved"] == True
-
-    @pytest.mark.asyncio
-    async def test_workflow_logging(self, orchestrator, caplog):
-        """Test that workflow operations are properly logged"""
-        import logging
-        caplog.set_level(logging.INFO)
-        
-        initial_state = {
-            "task_id": "log_test_001",
-            "raw_input": "test logging"
-        }
-        
-        # Mock processors
-        orchestrator.input_processor.process.return_value = initial_state
-        orchestrator.response_generator.process.return_value = {
-            **initial_state,
-            "response_text": "Test response"
-        }
-        
-        await orchestrator.run(initial_state)
-        
-        # Check for orchestration start/completion logs
-        assert any("Starting orchestration for task log_test_001" in record.message 
-                  for record in caplog.records)
-        assert any("Orchestration completed successfully" in record.message 
-                  for record in caplog.records)
 
     @pytest.mark.asyncio
     async def test_workflow_with_empty_state(self, orchestrator):

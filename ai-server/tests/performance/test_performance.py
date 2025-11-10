@@ -46,7 +46,7 @@ class TestPerformance:
         start_time = time.time()
         
         for device_id in range(device_count):
-            history = memory.get_history(f"device_{device_id:03d}")
+            history = memory.get_history(f"device_{device_id:03d}", limit=10)
             context = memory.get_context(f"device_{device_id:03d}")
         
         retrieval_time = time.time() - start_time
@@ -58,7 +58,7 @@ class TestPerformance:
         
         # Memory should respect limits
         for device_id in range(device_count):
-            history = memory.get_history(f"device_{device_id:03d}")
+            history = memory.get_history(f"device_{device_id:03d}", limit=10)
             assert len(history) <= 100  # max_history limit
             
         # Cleanup
@@ -89,7 +89,7 @@ class TestPerformance:
                     if i % 3 == 0:
                         memory.add_exchange(device_id, f"msg {i}", f"resp {i}", {})
                     elif i % 3 == 1:
-                        memory.get_history(device_id)
+                        memory.get_history(device_id, limit=10)
                     else:
                         memory.get_context(device_id)
                 
@@ -472,7 +472,7 @@ class TestPerformance:
         
         # Test retrieval performance
         start_time = time.time()
-        full_history = memory.get_history(device_id)
+        full_history = memory.get_history(device_id, limit=10000)
         limited_history = memory.get_history(device_id, limit=100)
         context = memory.get_context(device_id)
         retrieval_time = time.time() - start_time

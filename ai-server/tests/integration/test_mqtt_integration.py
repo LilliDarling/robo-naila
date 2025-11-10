@@ -410,7 +410,7 @@ class TestMQTTIntegration:
             )
         
         # Verify memory state
-        history = memory.get_history(device_id)
+        history = memory.get_history(device_id, limit=10)
         assert len(history) == 3
         assert history[-1]["assistant"] == "You're welcome!"
         

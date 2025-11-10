@@ -14,16 +14,15 @@ class TestConversationMemory:
 
     def test_initialization(self):
         """Test memory initialization with custom parameters"""
-        memory = ConversationMemory(max_history=10, ttl_hours=2)
-        try:
+        from unittest.mock import patch
+        with patch('memory.conversation.ConversationMemory._start_background_cleanup'):
+            memory = ConversationMemory(max_history=10, ttl_hours=2)
+            memory._cleanup_task = None
+
             assert memory.max_history == 10
             assert memory.ttl == timedelta(hours=2)
             assert len(memory.conversations) == 0
             assert len(memory.device_metadata) == 0
-        finally:
-            # Cleanup background task
-            if hasattr(memory, '_cleanup_task') and memory._cleanup_task and not memory._cleanup_task.done():
-                memory._cleanup_task.cancel()
 
     def test_add_exchange(self, clean_memory):
         """Test adding conversation exchanges"""
@@ -34,7 +33,7 @@ class TestConversationMemory:
             {"intent": "greeting"}
         )
         
-        history = clean_memory.get_history("device_001")
+        history = clean_memory.get_history("device_001", limit=10)
         assert len(history) == 1
         assert history[0]["user"] == "Hello"
         assert history[0]["assistant"] == "Hi there!"
@@ -42,8 +41,11 @@ class TestConversationMemory:
 
     def test_max_history_limit(self):
         """Test that history respects max limit"""
-        memory = ConversationMemory(max_history=3, ttl_hours=1)
-        try:
+        from unittest.mock import patch
+        with patch('memory.conversation.ConversationMemory._start_background_cleanup'):
+            memory = ConversationMemory(max_history=3, ttl_hours=1)
+            memory._cleanup_task = None
+
             # Add more than max
             for i in range(5):
                 memory.add_exchange(
@@ -52,15 +54,11 @@ class TestConversationMemory:
                     f"Response {i}",
                     {}
                 )
-            
-            history = memory.get_history("device_001")
+
+            history = memory.get_history("device_001", limit=10)
             assert len(history) == 3
             assert history[0]["user"] == "Message 2"
             assert history[-1]["user"] == "Message 4"
-        finally:
-            # Cleanup background task
-            if hasattr(memory, '_cleanup_task') and memory._cleanup_task and not memory._cleanup_task.done():
-                memory._cleanup_task.cancel()
 
     def test_get_context(self, populated_memory):
         """Test context retrieval with metadata"""
@@ -121,13 +119,13 @@ class TestConversationMemory:
         """Test clearing device history"""
         populated_memory.clear_device("robot_001")
         
-        history = populated_memory.get_history("robot_001")
+        history = populated_memory.get_history("robot_001", limit=10)
         assert len(history) == 0
         assert "robot_001" not in populated_memory.conversations
         assert "robot_001" not in populated_memory.device_metadata
         
         # Other devices should remain
-        history = populated_memory.get_history("robot_002")
+        history = populated_memory.get_history("robot_002", limit=10)
         assert len(history) == 1
 
     def test_cleanup_old_conversations(self, clean_memory):
@@ -184,7 +182,7 @@ class TestConversationMemory:
         
         # Each device should have its exchanges (limited by max_history=5)
         for i in range(5):
-            history = clean_memory.get_history(f"device_{i}")
+            history = clean_memory.get_history(f"device_{i}", limit=10)
             assert len(history) == 5
 
     def test_memory_stats(self, populated_memory):
@@ -199,8 +197,11 @@ class TestConversationMemory:
 
     def test_deque_performance(self):
         """Test deque maintains O(1) append performance"""
-        memory = ConversationMemory(max_history=100, ttl_hours=1)
-        try:
+        from unittest.mock import patch
+        with patch('memory.conversation.ConversationMemory._start_background_cleanup'):
+            memory = ConversationMemory(max_history=100, ttl_hours=1)
+            memory._cleanup_task = None
+
             # Add many exchanges
             start_time = time.time()
             for i in range(200):
@@ -211,21 +212,17 @@ class TestConversationMemory:
                     {}
                 )
             elapsed = time.time() - start_time
-            
+
             # Should be fast even with many exchanges
             assert elapsed < 1.0
-            
+
             # Should only keep max_history
-            history = memory.get_history("perf_device")
+            history = memory.get_history("perf_device", limit=1000)
             assert len(history) == 100
-        finally:
-            # Cleanup background task
-            if hasattr(memory, '_cleanup_task') and memory._cleanup_task and not memory._cleanup_task.done():
-                memory._cleanup_task.cancel()
 
     def test_get_history_with_limit(self, memory_with_history):
         """Test getting limited history"""
-        full_history = memory_with_history.get_history("test_device")
+        full_history = memory_with_history.get_history("test_device", limit=10)
         limited_history = memory_with_history.get_history("test_device", limit=3)
         
         assert len(limited_history) == 3
@@ -280,7 +277,7 @@ class TestConversationMemory:
         """Test timestamp formats are consistent"""
         clean_memory.add_exchange("device", "msg", "resp", {})
         
-        exchange = clean_memory.get_history("device")[0]
+        exchange = clean_memory.get_history("device", limit=3)[0]
         
         # Should have both timestamp formats
         assert "timestamp" in exchange

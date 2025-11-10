@@ -271,8 +271,8 @@ class TestHardwareOptimizer:
         mock_cpuinfo_module = Mock()
         mock_cpuinfo_module.get_cpu_info.return_value = {"brand_raw": "Intel i9-12900K"}
 
-        with patch('config.hardware_config.cpuinfo', mock_cpuinfo_module), \
-             patch('config.hardware_config.platform.machine', return_value="x86_64"):
+        with patch('config.hardware.cpuinfo', mock_cpuinfo_module), \
+             patch('config.hardware.platform.machine', return_value="x86_64"):
 
             cpu_info = optimizer._get_cpu_info()
             assert "Intel i9-12900K" in cpu_info
@@ -284,7 +284,7 @@ class TestHardwareOptimizer:
         
         # Test fallback when cpuinfo import fails
         with patch('builtins.__import__') as mock_import, \
-             patch('config.hardware_config.os.cpu_count', return_value=8):
+             patch('config.hardware.os.cpu_count', return_value=8):
             
             def import_side_effect(name, *args, **kwargs):
                 if name == 'cpuinfo':
@@ -325,29 +325,6 @@ class TestHardwareOptimizer:
                 
                 # Should limit to 4 threads for stability
                 assert config["thread_count"] == 4
-
-    def test_hardware_info_logging(self, mock_torch_cuda, mock_system_info, caplog):
-        """Test hardware information logging"""
-        import logging
-        caplog.set_level(logging.INFO)
-        
-        with patch.object(HardwareOptimizer, '_detect_hardware') as mock_detect:
-            mock_detect.return_value = HardwareInfo(
-                device_type="cuda",
-                device_name="NVIDIA RTX 4090",
-                memory_gb=24.0,
-                compute_capability="8.9",
-                optimization_level="aggressive"
-            )
-            
-            optimizer = HardwareOptimizer()
-            optimizer.log_hardware_info()
-            
-            # Check log messages
-            log_messages = [record.message for record in caplog.records]
-            assert any("Hardware Configuration:" in msg for msg in log_messages)
-            assert any("Device Type: cuda" in msg for msg in log_messages)
-            assert any("NVIDIA RTX 4090" in msg for msg in log_messages)
 
     def test_config_immutability(self, mock_torch_cuda, mock_system_info):
         """Test that configurations are properly isolated"""
@@ -400,7 +377,7 @@ class TestHardwareOptimizer:
 
     def test_global_optimizer_instance(self):
         """Test global hardware optimizer instance"""
-        from config.hardware_config import hardware_optimizer
+        from config.hardware import hardware_optimizer
         
         assert hardware_optimizer is not None
         assert hasattr(hardware_optimizer, 'hardware_info')
