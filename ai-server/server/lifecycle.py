@@ -32,10 +32,10 @@ class ShutdownStage(Enum):
 class ServerLifecycleManager:
     """Manages server startup, shutdown, and lifecycle events"""
 
-    def __init__(self, mqtt_service, protocol_handlers, llm_service=None, stt_service=None, tts_service=None):
+    def __init__(self, mqtt_service, protocol_handlers, llm_service=None, stt_service=None, tts_service=None, vision_service=None):
         self.mqtt_service = mqtt_service
         self.protocol_handlers = protocol_handlers
-        self.ai_model_manager = AIModelManager(llm_service, stt_service, tts_service)
+        self.ai_model_manager = AIModelManager(llm_service, stt_service, tts_service, vision_service)
         self.health_monitor = HealthMonitor(mqtt_service, protocol_handlers, self.ai_model_manager)
 
         # Server state
@@ -76,6 +76,9 @@ class ServerLifecycleManager:
 
             if tts_service := self.ai_model_manager.get_tts_service():
                 self.protocol_handlers.set_tts_service(tts_service)
+
+            if vision_service := self.ai_model_manager.get_vision_service():
+                self.protocol_handlers.set_vision_service(vision_service)
 
             # Stage: Register protocol handlers
             logger.info("startup_stage", stage=StartupStage.REGISTER_HANDLERS.value)

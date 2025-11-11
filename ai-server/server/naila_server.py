@@ -4,6 +4,7 @@ from mqtt.handlers.coordinator import ProtocolHandler
 from services.llm import LLMService
 from services.stt import STTService
 from services.tts import TTSService
+from services.vision import VisionService
 from .lifecycle import ServerLifecycleManager
 from utils import get_logger
 
@@ -24,6 +25,7 @@ class NailaAIServer:
         self.llm_service = LLMService()
         self.stt_service = STTService()
         self.tts_service = TTSService()
+        self.vision_service = VisionService()
 
         # Initialize lifecycle manager
         self.lifecycle = ServerLifecycleManager(
@@ -31,7 +33,8 @@ class NailaAIServer:
             self.protocol_handlers,
             self.llm_service,
             self.stt_service,
-            self.tts_service
+            self.tts_service,
+            self.vision_service
         )
     
     async def start(self):
