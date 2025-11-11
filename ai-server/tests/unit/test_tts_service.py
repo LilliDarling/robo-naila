@@ -97,8 +97,10 @@ class TestTTSService:
 
         phrase = "Hello"
         audio_samples = np.random.randn(1000).astype('float32')
-        # Cache with the normalized form (lowercase with period)
-        tts_service._phrase_cache["hello."] = audio_samples
+        # Build cache key using the service's method
+        normalized = tts_service._preprocess_text(phrase)
+        cache_key = tts_service._build_cache_key(normalized)
+        tts_service._phrase_cache[cache_key] = audio_samples
 
         with patch.object(tts_service, '_synthesize_to_audio') as mock_synth:
             with patch.object(tts_service, '_encode_audio', return_value=b'audio'):

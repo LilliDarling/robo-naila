@@ -3,6 +3,7 @@
 import asyncio
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Optional
 from piper.config import SynthesisConfig
@@ -160,9 +161,12 @@ class TTSService(BaseAIService):
 
             for phrase in tts_config.COMMON_PHRASES:
                 try:
-                    # Synthesize and cache
-                    audio_samples = await self._synthesize_to_audio(phrase)
-                    self._phrase_cache[phrase.lower()] = audio_samples
+                    # Normalize and synthesize
+                    normalized = self._preprocess_text(phrase)
+                    audio_samples = await self._synthesize_to_audio(normalized)
+                    # Build cache key with default parameters
+                    cache_key = self._build_cache_key(normalized)
+                    self._phrase_cache[cache_key] = audio_samples
                 except Exception as e:
                     logger.warning("phrase_cache_failed", phrase=phrase, error=str(e), error_type=type(e).__name__)
 
@@ -248,7 +252,14 @@ class TTSService(BaseAIService):
                 logger.debug("tts_synthesizing", text=normalized_text)
 
             # Check cache for common phrases
-            cache_key = normalized_text.lower()
+            cache_key = self._build_cache_key(
+                normalized_text,
+                voice=voice,
+                emotion=emotion,
+                length_scale=length_scale,
+                noise_scale=noise_scale,
+                noise_w=noise_w
+            )
             if cache_key in self._phrase_cache:
                 logger.debug("tts_using_cached_audio", text=normalized_text)
                 audio_samples = self._phrase_cache[cache_key]
@@ -260,13 +271,15 @@ class TTSService(BaseAIService):
                     noise_scale=noise_scale,
                     noise_w=noise_w
                 )
+                # Cache the result
+                self._phrase_cache[cache_key] = audio_samples
 
             # Calculate duration
             duration_ms = int((len(audio_samples) / tts_config.SAMPLE_RATE) * 1000)
 
             # Encode to requested format
             output_format = output_format or tts_config.OUTPUT_FORMAT
-            audio_bytes = self._encode_audio(audio_samples, output_format)
+            audio_bytes = await self._encode_audio(audio_samples, output_format)
 
             # Calculate metrics
             synthesis_time_ms = int((time.time() - start_time) * 1000)
@@ -371,7 +384,7 @@ class TTSService(BaseAIService):
 
             # Encode to requested format
             output_format = output_format or tts_config.OUTPUT_FORMAT
-            audio_bytes = self._encode_audio(final_audio, output_format)
+            audio_bytes = await self._encode_audio(final_audio, output_format)
 
             # Calculate metrics
             synthesis_time_ms = int((time.time() - start_time) * 1000)
@@ -455,6 +468,56 @@ class TTSService(BaseAIService):
 
         return await loop.run_in_executor(None, _synthesize)
 
+    def _build_cache_key(
+        self,
+        text: str,
+        voice: Optional[str] = None,
+        emotion: Optional[str] = None,
+        length_scale: Optional[float] = None,
+        noise_scale: Optional[float] = None,
+        noise_w: Optional[float] = None
+    ) -> str:
+        """Build cache key from text and synthesis parameters
+
+        Args:
+            text: Normalized text
+            voice: Voice name
+            emotion: Emotion preset
+            length_scale: Speaking rate
+            noise_scale: Pitch variation
+            noise_w: Energy variation
+
+        Returns:
+            Cache key string
+        """
+        if tts_config.CACHE_INCLUDES_PARAMETERS:
+            # Include parameters for more precise caching
+            voice_key = voice or (
+                self.voice_manager.get_current_voice_name()
+                if self.multi_voice_enabled
+                else tts_config.VOICE
+            )
+            emotion_key = emotion or "neutral"
+            length_key = length_scale or tts_config.LENGTH_SCALE
+            noise_key = noise_scale or tts_config.NOISE_SCALE
+            noise_w_key = noise_w or tts_config.NOISE_W
+            return f"{text.lower()}:{voice_key}:{emotion_key}:{length_key}:{noise_key}:{noise_w_key}"
+        else:
+            # Simple text-only caching (legacy behavior)
+            return text.lower()
+
+    @lru_cache(maxsize=256)
+    def _normalize_text_cached(self, text: str) -> str:
+        """Cache normalized text to avoid redundant processing
+
+        Args:
+            text: Raw text to normalize
+
+        Returns:
+            Normalized text
+        """
+        return self.text_normalizer.normalize(text)
+
     def _preprocess_text(self, text: str) -> str:
         """Preprocess and normalize text for synthesis
 
@@ -469,7 +532,7 @@ class TTSService(BaseAIService):
 
         # Apply normalization if enabled
         if tts_config.NORMALIZE_NUMBERS or tts_config.NORMALIZE_DATES:
-            text = self.text_normalizer.normalize(text)
+            text = self._normalize_text_cached(text)
 
         # Ensure proper sentence ending for better prosody
         if text and text[-1] not in '.!?':
@@ -477,7 +540,7 @@ class TTSService(BaseAIService):
 
         return text
 
-    def _encode_audio(self, audio_samples: np.ndarray, format: str) -> bytes:
+    async def _encode_audio(self, audio_samples: np.ndarray, format: str) -> bytes:
         """Encode audio samples to specified format
 
         Args:
@@ -488,13 +551,27 @@ class TTSService(BaseAIService):
             Encoded audio bytes
         """
         try:
-            return self.audio_encoder.encode(
-                audio_samples,
-                tts_config.SAMPLE_RATE,
-                format,
-                bitrate=tts_config.MP3_BITRATE,
-                quality=tts_config.OGG_QUALITY
-            )
+            # MP3/OGG encoding uses ffmpeg (blocking I/O), run in executor
+            if format.lower() in ('mp3', 'ogg'):
+                loop = asyncio.get_event_loop()
+                return await loop.run_in_executor(
+                    None,
+                    self.audio_encoder.encode,
+                    audio_samples,
+                    tts_config.SAMPLE_RATE,
+                    format,
+                    tts_config.MP3_BITRATE,
+                    tts_config.OGG_QUALITY
+                )
+            else:
+                # WAV/RAW are fast, no executor needed
+                return self.audio_encoder.encode(
+                    audio_samples,
+                    tts_config.SAMPLE_RATE,
+                    format,
+                    bitrate=tts_config.MP3_BITRATE,
+                    quality=tts_config.OGG_QUALITY
+                )
         except Exception as e:
             logger.error("audio_encoding_failed", format=format, error=str(e), error_type=type(e).__name__)
             # Fallback to WAV if encoding fails
@@ -564,9 +641,10 @@ class TTSService(BaseAIService):
             return False
 
     def clear_cache(self):
-        """Clear the phrase cache"""
+        """Clear all caches (phrase and normalization)"""
         self._phrase_cache.clear()
-        logger.info("Phrase cache cleared")
+        self._normalize_text_cached.cache_clear()
+        logger.info("All caches cleared")
 
     async def _switch_voice(self, voice_name: str) -> bool:
         """Switch to a different voice
