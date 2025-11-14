@@ -33,6 +33,13 @@ static void on_error(naila_err_t error) {
   NAILA_LOGE(TAG, "Application error occurred: %s", naila_err_to_string(error));
 }
 
+static const app_callbacks_t app_callbacks = {
+  .on_state_change = on_state_change,
+  .on_wifi_connected = on_wifi_connected,
+  .on_wifi_disconnected = on_wifi_disconnected,
+  .on_error = on_error,
+};
+
 static naila_err_t initialize_system(void) {
   // Initialize logging system first
   naila_log_init();
@@ -66,14 +73,8 @@ extern "C" void app_main() {
     return;
   }
 
-  // Setup application manager callbacks
-  app_callbacks_t callbacks = {.on_state_change = on_state_change,
-      .on_wifi_connected = on_wifi_connected,
-      .on_wifi_disconnected = on_wifi_disconnected,
-      .on_error = on_error};
-
   // Initialize application manager
-  result = app_manager_init(&callbacks);
+  result = app_manager_init(&app_callbacks);
   if (result != NAILA_OK) {
     NAILA_LOGE(TAG, "Application manager initialization failed: %s",
         naila_err_to_string(result));
