@@ -1,4 +1,5 @@
 import asyncio
+import base64
 from datetime import datetime, timezone
 from mqtt.core.models import MQTTMessage
 from .base import BaseHandler
@@ -6,6 +7,7 @@ from agents.orchestrator import NAILAOrchestrator
 
 
 # Topic patterns for AI processing and orchestration
+TOPIC_DEVICE_AUDIO = "naila/device/+/audio"
 TOPIC_AI_STT_RESULT = "naila/ai/processing/stt/+"
 TOPIC_AI_VISION_ANALYSIS = "naila/ai/processing/vision/+"
 TOPIC_AI_MAIN_TASK = "naila/ai/orchestration/main/task"
@@ -18,23 +20,97 @@ class AIHandlers(BaseHandler):
     def __init__(self, mqtt_service):
         super().__init__(mqtt_service)
         self.orchestrator = NAILAOrchestrator(mqtt_service)
+        self.stt_service = None
 
     def set_llm_service(self, llm_service):
         """Set LLM service for the orchestrator"""
         self.orchestrator = NAILAOrchestrator(self.mqtt_service, llm_service=llm_service)
 
+    def set_stt_service(self, stt_service):
+        """Set STT service for audio transcription"""
+        self.stt_service = stt_service
+
     def register_handlers(self):
         """Register all AI-related handlers"""
         handlers = {
+            TOPIC_DEVICE_AUDIO: self.handle_audio_input,
             TOPIC_AI_STT_RESULT: self.handle_stt_result,
             TOPIC_AI_VISION_ANALYSIS: self.handle_vision_analysis,
             TOPIC_AI_MAIN_TASK: self.handle_main_task,
             TOPIC_AI_PERSONALITY_RESPONSE: self.handle_personality_response,
         }
-        
+
         for topic, handler in handlers.items():
             self.mqtt_service.register_handler([topic], handler)
-    
+
+    async def handle_audio_input(self, message: MQTTMessage):
+        """Handle audio input from devices and transcribe using STT service"""
+        if not message.device_id:
+            self.logger.warning("Audio message missing device_id")
+            return
+
+        # Check if STT service is available
+        if not self.stt_service or not self.stt_service.is_ready:
+            self.logger.warning(f"STT service not available, cannot process audio from {message.device_id}")
+            # Publish error message to MQTT topic for the device
+            error_topic = f"devices/{message.device_id}/audio/error"
+            error_payload = {
+                "error": "stt_unavailable",
+                "message": "Speech-to-text service is currently unavailable. Please try again later.",
+                "device_id": message.device_id
+            }
+            await self.mqtt_service.publish(error_topic, error_payload)
+            return
+
+        try:
+            # Extract audio data from message
+            audio_base64 = message.payload.get("audio_data")
+            audio_format = message.payload.get("format", "wav")
+            duration_ms = message.payload.get("duration_ms", 0)
+
+            if not audio_base64:
+                self.logger.error("Audio message missing audio_data field")
+                return
+
+            # Decode base64 audio data
+            audio_bytes = base64.b64decode(audio_base64)
+
+            self.logger.info(f"Received audio from {message.device_id}: {len(audio_bytes)} bytes, {audio_format} format, {duration_ms}ms")
+
+            # Transcribe audio using STT service
+            result = await self.stt_service.transcribe_audio(
+                audio_data=audio_bytes,
+                format=audio_format,
+                language=message.payload.get("metadata", {}).get("language")
+            )
+
+            if not result.text:
+                self.logger.warning(f"Empty transcription for audio from {message.device_id}")
+                return
+
+            self.logger.info(f"Transcribed: '{result.text}' (confidence: {result.confidence:.2f})")
+
+            # Publish STT result for orchestration
+            stt_result_data = {
+                "device_id": message.device_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "transcription": result.text,
+                "confidence": result.confidence,
+                "language": result.language,
+                "audio_duration_ms": result.duration_ms,
+                "transcription_time_ms": result.transcription_time_ms,
+            }
+
+            # Publish to STT result topic (which triggers orchestration)
+            self.mqtt_service.publish_ai_processing(
+                f"stt/{message.device_id}",
+                stt_result_data,
+                qos=1
+            )
+
+        except Exception as e:
+            self.logger.error(f"Error processing audio from {message.device_id}: {e}", exc_info=True)
+
     async def handle_stt_result(self, message: MQTTMessage):
         """Handle speech-to-text results - fast orchestration trigger"""
         if not message.device_id:

@@ -2,26 +2,22 @@
 
 import asyncio
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from config import llm as llm_config
-from config.hardware_config import HardwareOptimizer
+from services.base import BaseAIService
 
 
 logger = logging.getLogger(__name__)
 
 
-class LLMService:
+class LLMService(BaseAIService):
     """Service for loading and running LLM inference"""
 
     def __init__(self):
-        self.model = None
-        self.model_path = Path(llm_config.MODEL_PATH)
-        self.is_ready = False
-        self.hardware_info = None
+        super().__init__(llm_config.MODEL_PATH)
         self.system_prompt = self._load_system_prompt()
 
     def _load_system_prompt(self) -> str:
@@ -38,32 +34,19 @@ class LLMService:
         logger.info("Using fallback system prompt")
         return llm_config.FALLBACK_SYSTEM_PROMPT
 
-    async def load_model(self) -> bool:
-        """Load the LLM model with hardware optimization"""
-        if self.is_ready:
-            logger.warning("Model already loaded")
-            return True
+    def _get_model_type(self) -> str:
+        """Get the model type name for logging"""
+        return "LLM"
 
+    def _log_configuration(self):
+        """Log model-specific configuration after successful load"""
+        n_threads = self._get_thread_count(llm_config.THREADS)
+        n_gpu_layers = self._get_gpu_layers()
+        logger.info(f"Configuration: threads={n_threads}, gpu_layers={n_gpu_layers}")
+
+    async def _load_model_impl(self) -> bool:
+        """LLM-specific model loading logic"""
         try:
-            # Verify model file exists
-            if not self.model_path.exists():
-                logger.error(f"Model file not found: {self.model_path}")
-                return False
-
-            logger.info(f"Loading LLM model: {self.model_path}")
-            start_time = time.time()
-
-            # Detect hardware for optimization
-            hw_optimizer = HardwareOptimizer()
-            self.hardware_info = {
-                'device_type': hw_optimizer.hardware_info.device_type,
-                'device_name': hw_optimizer.hardware_info.device_name,
-                'acceleration': hw_optimizer.hardware_info.device_type,
-                'cpu_count': os.cpu_count() or 4,
-                'vram_gb': hw_optimizer.hardware_info.memory_gb  # GPU memory in GB
-            }
-            logger.info(f"Hardware detected: {self.hardware_info}")
-
             # Import llama-cpp-python
             try:
                 from llama_cpp import Llama
@@ -72,7 +55,7 @@ class LLMService:
                 return False
 
             # Determine optimal settings
-            n_threads = self._get_thread_count()
+            n_threads = self._get_thread_count(llm_config.THREADS)
             n_gpu_layers = self._get_gpu_layers()
 
             # Load model (this is blocking, so run in executor)
@@ -98,7 +81,6 @@ class LLMService:
                     f"or GPU_LAYERS (current: {n_gpu_layers}). "
                     f"Error: {e}"
                 )
-                self.is_ready = False
                 return False
             except ValueError as e:
                 error_msg = str(e).lower()
@@ -111,7 +93,6 @@ class LLMService:
                     )
                 else:
                     logger.error(f"Invalid model configuration: {e}")
-                self.is_ready = False
                 return False
             except RuntimeError as e:
                 error_msg = str(e).lower()
@@ -124,68 +105,47 @@ class LLMService:
                     )
                 else:
                     logger.error(f"Runtime error loading model: {e}")
-                self.is_ready = False
                 return False
-
-            load_time = time.time() - start_time
-            self.is_ready = True
-
-            logger.info(f"Model loaded successfully in {load_time:.2f}s")
-            logger.info(f"Configuration: threads={n_threads}, gpu_layers={n_gpu_layers}")
 
             return True
 
         except Exception as e:
-            logger.error(f"Failed to load model: {e}", exc_info=True)
-            self.is_ready = False
+            logger.error(f"Exception during model loading: {e}", exc_info=True)
             return False
 
-    def _get_thread_count(self) -> int:
-        """Determine optimal thread count based on hardware"""
-        if llm_config.THREADS > 0:
-            return llm_config.THREADS
-
-        # Auto-detect based on CPU cores
-        if self.hardware_info and 'cpu_count' in self.hardware_info:
-            cpu_count = self.hardware_info['cpu_count']
-            # Use 75% of available cores, minimum 2
-            return max(2, int(cpu_count * 0.75))
-
-        return 4  # Safe default
 
     def _get_gpu_layers(self) -> int:
         """Determine how many layers to offload to GPU, based on hardware capabilities"""
-        if llm_config.GPU_LAYERS == -1:
-            # Auto-detect: offload layers based on VRAM or device capabilities
-            if self.hardware_info and self.hardware_info.get('acceleration') in ['cuda', 'metal']:
-                vram_gb = self.hardware_info.get('vram_gb')
-                if vram_gb is not None:
-                    # Heuristic: offload more layers for higher VRAM
-                    # Model-specific: Llama 3.1 8B typically has 32 layers
-                    # For other models, this should be adjusted
-                    estimated_layers = 32  # Default for Llama 3.1 8B
+        if llm_config.GPU_LAYERS != -1:
+            return llm_config.GPU_LAYERS
+        # Auto-detect: offload layers based on VRAM or device capabilities
+        if self.hardware_info and self.hardware_info.get('acceleration') in ['cuda', 'metal']:
+            vram_gb = self.hardware_info.get('vram_gb')
+            if vram_gb is not None:
+                # Heuristic: offload more layers for higher VRAM
+                # Model-specific: Llama 3.1 8B typically has 32 layers
+                # For other models, this should be adjusted
+                estimated_layers = 32  # Default for Llama 3.1 8B
 
-                    if vram_gb >= 16:
-                        logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling full GPU acceleration")
-                        return -1  # All layers
-                    elif vram_gb >= 8:
-                        layers = int(estimated_layers * 0.75)
-                        logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling partial GPU acceleration ({layers} layers, ~75%)")
-                        return layers
-                    elif vram_gb >= 4:
-                        layers = int(estimated_layers * 0.5)
-                        logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling partial GPU acceleration ({layers} layers, ~50%)")
-                        return layers
-                    else:
-                        layers = int(estimated_layers * 0.25)
-                        logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling minimal GPU acceleration ({layers} layers, ~25%)")
-                        return layers
-                else:
-                    logger.info("GPU detected, VRAM unknown, enabling full GPU acceleration")
+                if vram_gb >= 16:
+                    logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling full GPU acceleration")
                     return -1  # All layers
-            return 0  # CPU only
-
-        return llm_config.GPU_LAYERS
+                elif vram_gb >= 8:
+                    layers = int(estimated_layers * 0.75)
+                    logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling partial GPU acceleration ({layers} layers, ~75%)")
+                    return layers
+                elif vram_gb >= 4:
+                    layers = int(estimated_layers * 0.5)
+                    logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling partial GPU acceleration ({layers} layers, ~50%)")
+                    return layers
+                else:
+                    layers = int(estimated_layers * 0.25)
+                    logger.info(f"GPU detected with {vram_gb:.1f}GB VRAM, enabling minimal GPU acceleration ({layers} layers, ~25%)")
+                    return layers
+            else:
+                logger.info("GPU detected, VRAM unknown, enabling full GPU acceleration")
+                return -1  # All layers
+        return 0  # CPU only
 
     async def generate_chat(
         self,
@@ -355,29 +315,9 @@ class LLMService:
 
     def get_status(self) -> Dict:
         """Get current service status"""
-        return {
-            "ready": self.is_ready,
-            "model_path": str(self.model_path),
-            "model_exists": self.model_path.exists(),
-            "hardware": self.hardware_info,
+        status = super().get_status()
+        status.update({
             "context_size": llm_config.CONTEXT_SIZE,
             "max_tokens": llm_config.MAX_TOKENS_PER_RESPONSE,
-        }
-
-    def unload_model(self):
-        """Unload the model and free resources"""
-        if self.model:
-            logger.info("Unloading LLM model")
-            try:
-                # Try to call close() method if available for explicit cleanup
-                if hasattr(self.model, 'close'):
-                    self.model.close()
-                    logger.debug("Model cleanup method called successfully")
-                else:
-                    logger.debug("Model does not have a close() method; relying on garbage collection")
-            except Exception as e:
-                logger.warning(f"Error during model cleanup: {e}")
-            finally:
-                del self.model
-                self.model = None
-                self.is_ready = False
+        })
+        return status

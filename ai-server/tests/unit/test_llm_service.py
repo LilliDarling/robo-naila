@@ -77,13 +77,37 @@ class TestLoadModel:
     async def test_load_model_success(self, service):
         """Test successful model loading with proper configuration"""
         mock_llama = MagicMock()
+        hardware_info = {
+            'device_type': 'cuda',
+            'device_name': 'Test GPU',
+            'acceleration': 'cuda',
+            'cpu_count': 8,
+            'vram_gb': 8.0
+        }
+
+        with patch('pathlib.Path.exists', return_value=True), \
+             patch('llama_cpp.Llama', return_value=mock_llama) as mock_llama_class:
+
+            result = await service.load_model(hardware_info=hardware_info)
+
+            assert result is True
+            assert service.is_ready is True
+            assert service.model == mock_llama
+            assert service.hardware_info is not None
+            assert service.hardware_info == hardware_info
+            mock_llama_class.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_load_model_success_without_hardware_info(self, service):
+        """Test successful model loading with automatic hardware detection"""
+        mock_llama = MagicMock()
         mock_hw_optimizer = MagicMock()
         mock_hw_optimizer.hardware_info.device_type = 'cuda'
         mock_hw_optimizer.hardware_info.device_name = 'Test GPU'
         mock_hw_optimizer.hardware_info.memory_gb = 8.0
 
         with patch('pathlib.Path.exists', return_value=True), \
-             patch('services.llm.HardwareOptimizer', return_value=mock_hw_optimizer), \
+             patch('services.base.HardwareOptimizer', return_value=mock_hw_optimizer), \
              patch('llama_cpp.Llama', return_value=mock_llama) as mock_llama_class:
 
             result = await service.load_model()
@@ -98,7 +122,7 @@ class TestLoadModel:
     async def test_load_model_import_error(self, service):
         """Test that load_model handles missing llama-cpp-python gracefully"""
         with patch('pathlib.Path.exists', return_value=True), \
-             patch('services.llm.HardwareOptimizer'), \
+             patch('services.base.HardwareOptimizer'), \
              patch('builtins.__import__', side_effect=ImportError("llama_cpp not found")):
 
             result = await service.load_model()
@@ -110,7 +134,7 @@ class TestLoadModel:
     async def test_load_model_exception(self, service):
         """Test that load_model handles unexpected exceptions"""
         with patch('pathlib.Path.exists', return_value=True), \
-             patch('services.llm.HardwareOptimizer', side_effect=Exception("Hardware error")):
+             patch('services.base.HardwareOptimizer', side_effect=Exception("Hardware error")):
 
             result = await service.load_model()
 
@@ -126,7 +150,7 @@ class TestLoadModel:
         mock_hw_optimizer.hardware_info.memory_gb = None
 
         with patch('pathlib.Path.exists', return_value=True), \
-             patch('services.llm.HardwareOptimizer', return_value=mock_hw_optimizer), \
+             patch('services.base.HardwareOptimizer', return_value=mock_hw_optimizer), \
              patch('llama_cpp.Llama', side_effect=ValueError("Invalid model format")):
 
             result = await service.load_model()
@@ -147,7 +171,7 @@ class TestLoadModel:
         mock_hw_optimizer.hardware_info.memory_gb = None
 
         with patch('pathlib.Path.exists', return_value=True), \
-             patch('services.llm.HardwareOptimizer', return_value=mock_hw_optimizer), \
+             patch('services.base.HardwareOptimizer', return_value=mock_hw_optimizer), \
              patch('llama_cpp.Llama', return_value=mock_llama):
 
             # Start multiple concurrent loads
@@ -172,41 +196,31 @@ class TestThreadCount:
 
     def test_get_thread_count_from_config(self, service):
         """Test that configured thread count is used when set"""
-        with patch.object(llm_config, 'THREADS', 8):
-            result = service._get_thread_count()
-
+        result = service._get_thread_count(config_threads=8)
         assert result == 8
 
     def test_get_thread_count_auto_detect(self, service):
         """Test thread count auto-detection from hardware info"""
         service.hardware_info = {'cpu_count': 16}
-
-        with patch.object(llm_config, 'THREADS', 0):
-            result = service._get_thread_count()
-
+        result = service._get_thread_count(config_threads=0)
         # Should use 75% of cores, minimum 2
         assert result == 12
 
     def test_get_thread_count_default(self, service):
         """Test default thread count when no hardware info available"""
         service.hardware_info = None
-
-        with patch.object(llm_config, 'THREADS', 0):
-            result = service._get_thread_count()
-
+        result = service._get_thread_count(config_threads=0)
         assert result == 4
 
     def test_get_thread_count_negative_config(self, service):
         """Test that negative THREADS config falls back to auto or default"""
         service.hardware_info = {'cpu_count': 8}
-        with patch.object(llm_config, 'THREADS', -5):
-            result = service._get_thread_count()
+        result = service._get_thread_count(config_threads=-5)
         # Should fall back to default (since THREADS check is > 0, not >= 0)
         assert result == 6  # 75% of 8
 
         service.hardware_info = None
-        with patch.object(llm_config, 'THREADS', -3):
-            result = service._get_thread_count()
+        result = service._get_thread_count(config_threads=-3)
         # Should fall back to default value
         assert result == 4
 

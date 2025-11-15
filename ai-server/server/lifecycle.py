@@ -32,10 +32,10 @@ class ShutdownStage(Enum):
 class ServerLifecycleManager:
     """Manages server startup, shutdown, and lifecycle events"""
 
-    def __init__(self, mqtt_service, protocol_handlers, llm_service=None):
+    def __init__(self, mqtt_service, protocol_handlers, llm_service=None, stt_service=None):
         self.mqtt_service = mqtt_service
         self.protocol_handlers = protocol_handlers
-        self.ai_model_manager = AIModelManager(llm_service)
+        self.ai_model_manager = AIModelManager(llm_service, stt_service)
         self.health_monitor = HealthMonitor(mqtt_service, protocol_handlers)
 
         # Server state
@@ -52,25 +52,27 @@ class ServerLifecycleManager:
         if self._running:
             logger.warning("Server already running")
             return
-        
+
         self._start_time = datetime.now(timezone.utc)
         platform_info = get_platform_info()
-        
+
         logger.info("=" * 60)
         logger.info("Starting NAILA AI Server")
         logger.info(f"Platform: {platform_info['system']} {platform_info['architecture']}")
         logger.info(f"Python: {platform_info['python_version']} ({platform_info['python_implementation']})")
         logger.info(f"MQTT Broker: {self.mqtt_service.config.broker_host}:{self.mqtt_service.config.broker_port}")
         logger.info("=" * 60)
-        
+
         try:
             # Stage: Load AI models
             logger.info(f"{StartupStage.LOAD_AI_MODELS.value}...")
             await self.ai_model_manager.load_models()
-            # Pass LLM service to protocol handlers if available
-            llm_service = self.ai_model_manager.get_llm_service()
-            if llm_service:
+
+            if llm_service := self.ai_model_manager.get_llm_service():
                 self.protocol_handlers.set_llm_service(llm_service)
+
+            if stt_service := self.ai_model_manager.get_stt_service():
+                self.protocol_handlers.set_stt_service(stt_service)
 
             # Stage: Register protocol handlers
             logger.info(f"{StartupStage.REGISTER_HANDLERS.value}...")
@@ -91,9 +93,9 @@ class ServerLifecycleManager:
             logger.info(f"{StartupStage.PUBLISH_STATUS.value}...")
             await self._publish_startup_status()
             logger.info("Initial status published")
-            
+
             self._running = True
-            
+
             # Success banner
             logger.info("=" * 60)
             logger.info("NAILA AI Server ONLINE")
@@ -101,10 +103,10 @@ class ServerLifecycleManager:
             logger.info(f"Handlers: {len(self.mqtt_service.event_handlers)} topics registered")
             logger.info("Ready for robot connections")
             logger.info("=" * 60)
-            
+
             # Main server loop
             await self._main_loop()
-            
+
         except Exception as e:
             logger.error(f"Server startup failed: {e}")
             await self._emergency_shutdown()
@@ -237,10 +239,15 @@ class ServerLifecycleManager:
         """Emergency shutdown for critical errors"""
         logger.critical("EMERGENCY SHUTDOWN INITIATED")
 
-        with contextlib.suppress(Exception):
+        try:
             if self.mqtt_service.is_connected():
                 emergency_data = {
                     "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "reason": "critical_error"
+                }
+                self.mqtt_service.publish_system_message("health", "emergency", emergency_data, qos=2)
+        except Exception as exc:
+            logger.error("Exception during emergency shutdown: %s", exc, exc_info=True)
                     "event": "emergency_shutdown",
                     "reason": "critical_error"
                 }

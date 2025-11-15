@@ -20,6 +20,10 @@ class ProtocolHandler:
         """Set LLM service for AI handlers"""
         self.ai_handlers.set_llm_service(llm_service)
 
+    def set_stt_service(self, stt_service):
+        """Set STT service for AI handlers"""
+        self.ai_handlers.set_stt_service(stt_service)
+
     def register_all_handlers(self):
         """Register all protocol handlers with the MQTT service"""
         self.device_handlers.register_handlers()
