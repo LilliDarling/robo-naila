@@ -1,15 +1,14 @@
 import json
-import logging
 from typing import Optional
-from .models import DeviceMessageType, SystemMessageType
+from utils import get_logger
 
 
 class MQTTPublisher:
     """Publishing interface for NAILA protocol messages"""
-    
+
     def __init__(self, connection_manager):
         self.connection = connection_manager
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # Publishing stats
         self._publish_count = 0
@@ -51,18 +50,18 @@ class MQTTPublisher:
     def _publish_fast(self, topic: str, data: dict, qos: Optional[int] = None) -> bool:
         """Optimized publish method with minimal overhead"""
         if not self.connection.is_connected():
-            self.logger.debug(f"Not connected, cannot publish to {topic}")
+            self.logger.debug("mqtt_not_connected_publish", topic=topic)
             return False
-        
+
         self._publish_count += 1
-        
+
         try:
             payload = json.dumps(data, separators=(',', ':'))  # Compact JSON
             return self.connection.publish(topic, payload, qos)
-            
+
         except Exception as e:
             self._publish_errors += 1
-            self.logger.error(f"Publish error for {topic}: {e}")
+            self.logger.error("publish_error", topic=topic, error=str(e), error_type=type(e).__name__)
             return False
     
     def get_publish_stats(self) -> dict:

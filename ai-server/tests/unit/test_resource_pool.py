@@ -3,7 +3,7 @@
 import asyncio
 import pytest
 
-from services.resource_pool import ResourcePool
+from utils.resource_pool import ResourcePool
 
 
 class TestResourcePool:

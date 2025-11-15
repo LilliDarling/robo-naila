@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from services.ai_model_manager import AIModelManager
+from managers.ai_model import AIModelManager
 from services.llm import LLMService
 from services.stt import STTService
 
@@ -45,7 +45,7 @@ class TestAIModelManager:
         mock_hw_optimizer.hardware_info.device_name = 'Test GPU'
         mock_hw_optimizer.hardware_info.memory_gb = 8.0
 
-        with patch('services.ai_model_manager.HardwareOptimizer', return_value=mock_hw_optimizer) as mock_hw_class:
+        with patch('managers.ai_model.HardwareOptimizer', return_value=mock_hw_optimizer) as mock_hw_class:
             await manager.load_models()
 
             # Hardware detection should be called only once
@@ -73,8 +73,8 @@ class TestAIModelManager:
         mock_hw_optimizer.hardware_info.device_name = 'CPU'
         mock_hw_optimizer.hardware_info.memory_gb = 16.0
 
-        with patch('services.ai_model_manager.HardwareOptimizer', return_value=mock_hw_optimizer), \
-             patch('services.ai_model_manager.asyncio.gather', new_callable=AsyncMock) as mock_gather:
+        with patch('managers.ai_model.HardwareOptimizer', return_value=mock_hw_optimizer), \
+             patch('managers.ai_model.asyncio.gather', new_callable=AsyncMock) as mock_gather:
 
             # Make gather return successful results
             mock_gather.return_value = [True, True]
@@ -99,7 +99,7 @@ class TestAIModelManager:
         mock_hw_optimizer.hardware_info.device_name = 'CPU'
         mock_hw_optimizer.hardware_info.memory_gb = 16.0
 
-        with patch('services.ai_model_manager.HardwareOptimizer', return_value=mock_hw_optimizer) as mock_hw_class:
+        with patch('managers.ai_model.HardwareOptimizer', return_value=mock_hw_optimizer) as mock_hw_class:
             # First detection
             hardware_info_1 = manager._detect_hardware()
 
@@ -117,7 +117,7 @@ class TestAIModelManager:
         """Test loading models with only LLM service"""
         manager = AIModelManager(llm_service=llm_service)
 
-        with patch('services.ai_model_manager.HardwareOptimizer'):
+        with patch('managers.ai_model.HardwareOptimizer'):
             result = await manager.load_models()
 
             assert result is True
@@ -128,7 +128,7 @@ class TestAIModelManager:
         """Test loading models with only STT service"""
         manager = AIModelManager(stt_service=stt_service)
 
-        with patch('services.ai_model_manager.HardwareOptimizer'):
+        with patch('managers.ai_model.HardwareOptimizer'):
             result = await manager.load_models()
 
             # STT is optional, so success depends on whether we consider it required
@@ -139,7 +139,7 @@ class TestAIModelManager:
         """Test that LLM failure affects overall success"""
         llm_service.load_model = AsyncMock(return_value=False)
 
-        with patch('services.ai_model_manager.HardwareOptimizer'):
+        with patch('managers.ai_model.HardwareOptimizer'):
             result = await manager.load_models()
 
             assert result is False  # LLM failure means overall failure
@@ -149,7 +149,7 @@ class TestAIModelManager:
         """Test that STT failure doesn't affect overall success"""
         stt_service.load_model = AsyncMock(return_value=False)
 
-        with patch('services.ai_model_manager.HardwareOptimizer'):
+        with patch('managers.ai_model.HardwareOptimizer'):
             result = await manager.load_models()
 
             # STT is optional, so overall should still succeed if LLM loaded
@@ -161,7 +161,7 @@ class TestAIModelManager:
         # Make STT raise an exception
         stt_service.load_model = AsyncMock(side_effect=RuntimeError("Model corrupted"))
 
-        with patch('services.ai_model_manager.HardwareOptimizer'):
+        with patch('managers.ai_model.HardwareOptimizer'):
             result = await manager.load_models()
 
             # Should handle exception and still succeed if LLM loaded
@@ -173,7 +173,7 @@ class TestAIModelManager:
         # Make LLM raise an exception
         llm_service.load_model = AsyncMock(side_effect=RuntimeError("LLM failed"))
 
-        with patch('services.ai_model_manager.HardwareOptimizer'):
+        with patch('managers.ai_model.HardwareOptimizer'):
             result = await manager.load_models()
 
             # Should fail overall if LLM throws exception

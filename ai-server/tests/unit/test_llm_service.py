@@ -86,7 +86,7 @@ class TestLoadModel:
         }
 
         with patch('pathlib.Path.exists', return_value=True), \
-             patch('llama_cpp.Llama', return_value=mock_llama) as mock_llama_class:
+             patch('services.llm.Llama', return_value=mock_llama) as mock_llama_class:
 
             result = await service.load_model(hardware_info=hardware_info)
 
@@ -108,7 +108,7 @@ class TestLoadModel:
 
         with patch('pathlib.Path.exists', return_value=True), \
              patch('services.base.HardwareOptimizer', return_value=mock_hw_optimizer), \
-             patch('llama_cpp.Llama', return_value=mock_llama) as mock_llama_class:
+             patch('services.llm.Llama', return_value=mock_llama) as mock_llama_class:
 
             result = await service.load_model()
 
@@ -123,7 +123,8 @@ class TestLoadModel:
         """Test that load_model handles missing llama-cpp-python gracefully"""
         with patch('pathlib.Path.exists', return_value=True), \
              patch('services.base.HardwareOptimizer'), \
-             patch('builtins.__import__', side_effect=ImportError("llama_cpp not found")):
+             patch('services.llm.HAS_LLAMA_CPP', False), \
+             patch('services.llm.Llama', None):
 
             result = await service.load_model()
 
@@ -151,7 +152,7 @@ class TestLoadModel:
 
         with patch('pathlib.Path.exists', return_value=True), \
              patch('services.base.HardwareOptimizer', return_value=mock_hw_optimizer), \
-             patch('llama_cpp.Llama', side_effect=ValueError("Invalid model format")):
+             patch('services.llm.Llama', side_effect=ValueError("Invalid model format")):
 
             result = await service.load_model()
 
@@ -172,7 +173,7 @@ class TestLoadModel:
 
         with patch('pathlib.Path.exists', return_value=True), \
              patch('services.base.HardwareOptimizer', return_value=mock_hw_optimizer), \
-             patch('llama_cpp.Llama', return_value=mock_llama):
+             patch('services.llm.Llama', return_value=mock_llama):
 
             # Start multiple concurrent loads
             results = await asyncio.gather(

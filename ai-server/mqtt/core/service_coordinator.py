@@ -1,20 +1,19 @@
 import asyncio
-import logging
-from typing import Dict, Any, List, Callable
-from datetime import datetime, timezone
-from config.mqtt_config import MQTTConfig
+from typing import Dict, List, Callable
+from config.mqtt import MQTTConfig
 from .connection import MQTTConnectionManager
 from .routing import MessageRouter
 from .publisher import MQTTPublisher
 from .models import MQTTEventHandler, DeviceMessageType, SystemMessageType
+from utils import get_logger
 
 
 class NailaMQTTService:
     """Modular MQTT service coordinator"""
-    
+
     def __init__(self, config: MQTTConfig):
         self.config = config
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # Core components
         self.connection = MQTTConnectionManager(config)
@@ -72,36 +71,36 @@ class NailaMQTTService:
                 if loop.is_running():
                     loop.create_task(self.router.route_message(message))
                 else:
-                    self.logger.debug(f"Event loop not running, skipping message routing: {topic}")
+                    self.logger.debug("event_loop_not_running", topic=topic, action="skipping_routing")
             except RuntimeError:
                 # No event loop available - this can happen during startup/shutdown
-                self.logger.debug(f"No event loop available for message routing: {topic}")
-                
+                self.logger.debug("no_event_loop", topic=topic, action="skipping_routing")
+
         except Exception as e:
-            self.logger.error(f"Message handling error for {topic}: {e}")
+            self.logger.error("message_handling_error", topic=topic, error=str(e), error_type=type(e).__name__)
     
-    def publish_ai_response(self, response_type: str, device_id: str, data: dict, qos: int = None):
+    def publish_ai_response(self, response_type: str, device_id: str, data: dict, qos: int):
         """Publish AI-generated response to device"""
         return self.publisher.publish_ai_response(response_type, device_id, data, qos)
     
     def publish_ai_processing_result(self, processing_type: str, device_id: str, 
-                                   data: dict, qos: int = None):
+                                   data: dict, qos: int):
         """Publish AI processing result"""
         return self.publisher.publish_ai_processing_result(processing_type, device_id, data, qos)
     
-    def publish_ai_orchestration(self, orchestration_type: str, data: dict, qos: int = None):
+    def publish_ai_orchestration(self, orchestration_type: str, data: dict, qos: int):
         """Publish AI orchestration message"""
         return self.publisher.publish_ai_orchestration(orchestration_type, data, qos)
     
-    def publish_system_message(self, system_type: str, subtype: str, data: dict, qos: int = None):
+    def publish_system_message(self, system_type: str, subtype: str, data: dict, qos: int):
         """Publish system message"""
         return self.publisher.publish_system_message(system_type, subtype, data, qos)
     
-    def publish_error(self, service_name: str, error: dict, qos: int = None):
+    def publish_error(self, service_name: str, error: dict, qos: int):
         """Publish error message"""
         return self.publisher.publish_error(service_name, error, qos)
     
-    def publish(self, topic: str, data: dict, qos: int = None):
+    def publish(self, topic: str, data: dict, qos: int):
         """Generic publish method"""
         return self.publisher.publish(topic, data, qos)
     
@@ -109,45 +108,51 @@ class NailaMQTTService:
         """Start the MQTT service with all components"""
         if self._running:
             return
-        
-        self.logger.info("Starting modular MQTT service...")
-        
+
+        self.logger.info("mqtt_service_starting")
+
         # Connect with retry logic
         await self.connection.connect()
-        
+
         # Wait for connection to stabilize
         await asyncio.sleep(0.5)
-        
+
         # Subscribe to all registered topics
         for topic in self.router.event_handlers.keys():
             self.connection.subscribe(topic, self.config.qos)
-        
+
         self._running = True
         connection_stats = self.connection.get_connection_stats()
-        self.logger.info(f"MQTT service started (connected to {connection_stats['broker_host']}:{connection_stats['broker_port']})")
+        self.logger.info(
+            "mqtt_service_started",
+            broker_host=connection_stats['broker_host'],
+            broker_port=connection_stats['broker_port']
+        )
     
     async def stop(self):
         """Graceful shutdown with resource cleanup"""
         if not self._running:
             return
-        
-        self.logger.info("Stopping modular MQTT service...")
-        
+
+        self.logger.info("mqtt_service_stopping")
+
         # Signal shutdown
         self._shutdown_event.set()
         self._running = False
-        
+
         # Disconnect
         await self.connection.disconnect()
-        
+
         # Clear router cache
         self.router._handler_cache.clear()
-        
+
         # Log final stats
         stats = self.get_stats()
         self.logger.info(
-            f"MQTT service stopped. Final stats: {stats['total_messages']} messages, "
-            f"{stats['total_errors']} errors, {stats['cache_hit_rate']:.1%} cache hit rate"
+            "mqtt_service_stopped",
+            total_messages=stats['total_messages'],
+            total_errors=stats['total_errors'],
+            cache_hit_rate=round(stats['cache_hit_rate'], 3)
         )
     
     def is_running(self) -> bool:

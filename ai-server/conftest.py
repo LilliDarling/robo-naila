@@ -7,7 +7,7 @@ import shutil
 from unittest.mock import Mock, AsyncMock, MagicMock
 from pathlib import Path
 from typing import Dict, Any, Generator
-from memory.conversation_memory import ConversationMemory
+from memory.conversation import ConversationMemory
 from datetime import datetime, timezone
 
 
@@ -49,7 +49,7 @@ def mock_sentence_transformer():
 def disable_hardware_optimization(monkeypatch):
     """Disable hardware optimization for consistent tests"""
     def mock_detect_hardware():
-        from config.hardware_config import HardwareInfo
+        from config.hardware import HardwareInfo
         return HardwareInfo(
             device_type="cpu",
             device_name="Test CPU",
@@ -57,7 +57,7 @@ def disable_hardware_optimization(monkeypatch):
         )
     
     monkeypatch.setattr(
-        "config.hardware_config.HardwareOptimizer._detect_hardware",
+        "config.hardware.HardwareOptimizer._detect_hardware",
         mock_detect_hardware
     )
 
@@ -105,25 +105,23 @@ def basic_state():
 @pytest.fixture
 def clean_memory():
     """Fresh conversation memory instance"""
-    memory = ConversationMemory(max_history=5, ttl_hours=1)
-    # Disable background cleanup for tests
-    if memory._cleanup_task and not memory._cleanup_task.done():
-        memory._cleanup_task.cancel()
+    from unittest.mock import patch
+    with patch('memory.conversation.ConversationMemory._start_background_cleanup'):
+        memory = ConversationMemory(max_history=5, ttl_hours=1)
+        # Ensure cleanup task is None for testing
         memory._cleanup_task = None
     yield memory
-    # Cleanup on teardown
-    if hasattr(memory, '_cleanup_task') and memory._cleanup_task and not memory._cleanup_task.done():
-        memory._cleanup_task.cancel()
 
 
 @pytest.fixture
 def populated_memory():
     """Memory instance with test data"""
-    memory = ConversationMemory(max_history=5, ttl_hours=1)
-    if memory._cleanup_task and not memory._cleanup_task.done():
-        memory._cleanup_task.cancel()
+    from unittest.mock import patch
+    with patch('memory.conversation.ConversationMemory._start_background_cleanup'):
+        memory = ConversationMemory(max_history=5, ttl_hours=1)
+        # Ensure cleanup task is None for testing
         memory._cleanup_task = None
-    
+
     # Add some test conversations
     memory.add_exchange(
         "robot_001",
@@ -132,7 +130,7 @@ def populated_memory():
         {"intent": "greeting"}
     )
     memory.add_exchange(
-        "robot_001", 
+        "robot_001",
         "What time is it?",
         "The current time is 10:30 AM",
         {"intent": "time_query"}
@@ -143,27 +141,25 @@ def populated_memory():
         "I don't have weather data yet",
         {"intent": "weather_query"}
     )
-    
+
     yield memory
-    # Cleanup on teardown
-    if hasattr(memory, '_cleanup_task') and memory._cleanup_task and not memory._cleanup_task.done():
-        memory._cleanup_task.cancel()
 
 
 @pytest.fixture
 def memory_with_history():
     """Memory with extensive conversation history"""
-    memory = ConversationMemory(max_history=10, ttl_hours=1)
-    if memory._cleanup_task and not memory._cleanup_task.done():
-        memory._cleanup_task.cancel()
+    from unittest.mock import patch
+    with patch('memory.conversation.ConversationMemory._start_background_cleanup'):
+        memory = ConversationMemory(max_history=10, ttl_hours=1)
+        # Ensure cleanup task is None for testing
         memory._cleanup_task = None
-    
+
     device_id = "test_device"
-    
+
     # Add a longer conversation
     exchanges = [
         ("Hi", "Hello! How can I help?", "greeting"),
-        ("What's your name?", "I'm NAILA, your AI assistant", "question"), 
+        ("What's your name?", "I'm NAILA, your AI assistant", "question"),
         ("What time is it?", "The current time is 2:30 PM", "time_query"),
         ("Thank you", "You're welcome!", "gratitude"),
         ("How's the weather?", "I don't have weather access yet", "weather_query"),
@@ -171,11 +167,8 @@ def memory_with_history():
         ("What can you do?", "I can answer questions and have conversations", "question"),
         ("That's great", "I'm glad you think so!", "general")
     ]
-    
+
     for user_msg, assistant_msg, intent in exchanges:
         memory.add_exchange(device_id, user_msg, assistant_msg, {"intent": intent})
-    
+
     yield memory
-    # Cleanup on teardown
-    if hasattr(memory, '_cleanup_task') and memory._cleanup_task and not memory._cleanup_task.done():
-        memory._cleanup_task.cancel()

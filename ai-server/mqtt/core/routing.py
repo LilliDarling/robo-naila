@@ -1,16 +1,16 @@
 import asyncio
 import json
-import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
 from .models import MQTTMessage, MQTTEventHandler, TopicCategory
+from utils import get_logger
 
 
 class MessageRouter:
     """High-performance message routing with caching and topic parsing"""
-    
+
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # Handler management
         self.event_handlers: Dict[str, List[MQTTEventHandler]] = {}
@@ -76,32 +76,32 @@ class MessageRouter:
         - naila/system/{system_type}/{subtype}
         """
         parts = topic.split('/')
-        
+
         # Initialize result dictionary
-        result = {
+        result: Dict[str, Any] = {
             "category": None,
             "device_id": None,
             "message_type": None,
             "subtype": None
         }
-        
+
         # Validate basic structure: must start with "naila" and have at least 3 parts
         if len(parts) < 3 or parts[0] != "naila":
             return result
-        
+
         # Topic structure indexes
         PROTOCOL_PREFIX = 0  # "naila"
         CATEGORY = 1         # "devices", "ai", "system"
-        
+
         # Parse category
         category_str = parts[CATEGORY]
         try:
             category = TopicCategory(category_str)
         except ValueError:
             return result
-        
+
         result["category"] = category
-        
+
         # Parse based on category type
         if category == TopicCategory.DEVICES:
             # Format: naila/devices/{device_id}/{message_type}/{subtype}
@@ -109,47 +109,42 @@ class MessageRouter:
                 result["device_id"] = parts[2]
                 result["message_type"] = parts[3]
                 result["subtype"] = parts[4]
-                
+
         elif category == TopicCategory.AI:
-            # AI topics have different structures based on message type
-            if len(parts) >= 3:
-                ai_type = parts[2]
-                result["message_type"] = ai_type
-                
-                if ai_type == "processing" and len(parts) >= 5:
-                    # Format: naila/ai/processing/{processing_type}/{device_id}
-                    result["subtype"] = parts[3]
-                    result["device_id"] = parts[4]
-                    
-                elif ai_type == "orchestration" and len(parts) >= 4:
-                    # Format: naila/ai/orchestration/{orchestration_type}
-                    result["subtype"] = parts[3]
-                    
-                elif ai_type == "responses" and len(parts) >= 5:
-                    # Format: naila/ai/responses/{response_type}/{device_id}
-                    result["subtype"] = parts[3]
-                    result["device_id"] = parts[4]
-                    
+            ai_type = parts[2]
+            result["message_type"] = ai_type
+
+            if ai_type == "processing" and len(parts) >= 5:
+                # Format: naila/ai/processing/{processing_type}/{device_id}
+                result["subtype"] = parts[3]
+                result["device_id"] = parts[4]
+
+            elif ai_type == "orchestration" and len(parts) >= 4:
+                # Format: naila/ai/orchestration/{orchestration_type}
+                result["subtype"] = parts[3]
+
+            elif ai_type == "responses" and len(parts) >= 5:
+                # Format: naila/ai/responses/{response_type}/{device_id}
+                result["subtype"] = parts[3]
+                result["device_id"] = parts[4]
+
         elif category == TopicCategory.SYSTEM:
-            # Format: naila/system/{system_type}/{subtype}
-            if len(parts) >= 3:
-                result["message_type"] = parts[2]
-                if len(parts) >= 4:
-                    result["subtype"] = parts[3]
-        
+            result["message_type"] = parts[2]
+            if len(parts) >= 4:
+                result["subtype"] = parts[3]
+
         return result
     
     async def route_message(self, message: MQTTMessage):
         """Route message to appropriate handlers with caching"""
         handlers_found = False
-        
+
         # Use cached handlers if available
         cached_handlers = self._handler_cache.get(message.topic)
         if cached_handlers is not None:
             self._cache_hits += 1
             handlers_found = len(cached_handlers) > 0
-            tasks = [handler.handle(message) for handler in cached_handlers]
-            if tasks:
+            if tasks := [handler.handle(message) for handler in cached_handlers]:
                 await asyncio.gather(*tasks, return_exceptions=True)
         else:
             self._cache_misses += 1
@@ -164,9 +159,9 @@ class MessageRouter:
             if matching_handlers:
                 tasks = [handler.handle(message) for handler in matching_handlers]
                 await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         if not handlers_found:
-            self.logger.debug(f"No handler found for topic: {message.topic}")
+            self.logger.debug("no_handler_for_topic", topic=message.topic)
     
     def _topic_matches(self, actual_topic: str, pattern: str) -> bool:
         """
@@ -212,22 +207,18 @@ class MessageRouter:
             True if the topic matches the pattern, False otherwise
         """
         i = j = 0
-        
+
         while i < len(topic_parts) and j < len(pattern_parts):
             if pattern_parts[j] == '#':
                 # Multi-level wildcard matches everything remaining
                 return True
-            elif pattern_parts[j] == '+':
+            elif pattern_parts[j] in ['+', topic_parts[i]]:
                 # Single-level wildcard matches exactly one level
-                i += 1
-                j += 1
-            elif pattern_parts[j] == topic_parts[i]:
-                # Exact string match required
                 i += 1
                 j += 1
             else:
                 return False
-        
+
         # Both lists must be fully consumed for a match
         return i == len(topic_parts) and j == len(pattern_parts)
     

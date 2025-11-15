@@ -1,11 +1,12 @@
 """Hardware detection and optimization configuration"""
 
-import logging
 import multiprocessing
 import os
 import platform
+import torch
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
+from utils import get_logger
 
 try:
     import cpuinfo
@@ -18,7 +19,7 @@ except ImportError:
     psutil = None
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -41,11 +42,8 @@ class HardwareOptimizer:
     def _detect_hardware(self) -> HardwareInfo:
         """Comprehensive hardware detection"""
         try:
-            import torch
-
             # CUDA detection
             if torch.cuda.is_available():
-                device_count = torch.cuda.device_count()
                 device_name = torch.cuda.get_device_name(0)
 
                 # Get GPU memory
@@ -53,9 +51,16 @@ class HardwareOptimizer:
 
                 # Get compute capability
                 compute_cap = torch.cuda.get_device_properties(0).major
-                compute_capability = f"{compute_cap}.{torch.cuda.get_device_properties(0).minor}"
+                compute_capability = (
+                    f"{compute_cap}.{torch.cuda.get_device_properties(0).minor}"
+                )
 
-                logger.info(f"CUDA GPU detected: {device_name} ({memory_gb:.1f}GB, compute {compute_capability})")
+                logger.info(
+                    "cuda_gpu_detected",
+                    device_name=device_name,
+                    memory_gb=round(memory_gb, 1),
+                    compute_capability=compute_capability
+                )
 
                 return HardwareInfo(
                     device_type="cuda",
@@ -66,7 +71,7 @@ class HardwareOptimizer:
                 )
 
             elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-                logger.info("Apple MPS (Metal Performance Shaders) detected")
+                logger.info("mps_detected", device="Apple Silicon GPU")
 
                 return HardwareInfo(
                     device_type="mps",
@@ -77,7 +82,7 @@ class HardwareOptimizer:
             else:
                 return self._detect_cpu_hardware()
         except Exception as e:
-            logger.warning(f"Hardware detection failed: {e}, using minimal CPU config")
+            logger.warning("hardware_detection_failed", error=str(e), error_type=type(e).__name__, fallback="minimal CPU config")
             return HardwareInfo(
                 device_type="cpu",
                 device_name="Unknown CPU",
@@ -89,13 +94,18 @@ class HardwareOptimizer:
         if psutil:
             memory_gb = psutil.virtual_memory().total / (1024**3)
         else:
-            logger.warning("psutil not available, memory detection unavailable")
+            logger.warning("psutil_unavailable", reason="memory detection unavailable")
             memory_gb = None
 
         # Detect CPU type
         cpu_info = self._get_cpu_info()
 
-        logger.info(f"CPU detected: {cpu_info} ({cpu_count} cores, {memory_gb:.1f}GB RAM)")
+        logger.info(
+            "cpu_detected",
+            cpu_info=cpu_info,
+            cpu_count=cpu_count,
+            memory_gb=round(memory_gb, 1) if memory_gb else None
+        )
 
         return HardwareInfo(
             device_type="cpu",
@@ -123,8 +133,11 @@ class HardwareOptimizer:
         else:
             return "minimal"     # Low-end GPU
     
-    def _get_cpu_optimization_level(self, cpu_count: int, memory_gb: float) -> str:
+    def _get_cpu_optimization_level(self, cpu_count: int, memory_gb: Optional[float]) -> str:
         """Determine CPU optimization level"""
+        if memory_gb is None:
+            return "minimal"
+
         if cpu_count >= 8 and memory_gb >= 16:
             return "aggressive"  # High-end CPU setup
         elif cpu_count >= 4 and memory_gb >= 8:
@@ -195,12 +208,14 @@ class HardwareOptimizer:
     def log_hardware_info(self):
         """Log detailed hardware information"""
         info = self.hardware_info
-        logger.info("Hardware Configuration:")
-        logger.info(f"  Device Type: {info.device_type}")
-        logger.info(f"  Device Name: {info.device_name}")
-        logger.info(f"  Memory: {info.memory_gb:.1f}GB" if info.memory_gb else "  Memory: Unknown")
-        logger.info(f"  Optimization Level: {info.optimization_level}")
-        logger.info(f"  Configuration: {self.config}")
+        logger.info(
+            "hardware_configuration",
+            device_type=info.device_type,
+            device_name=info.device_name,
+            memory_gb=round(info.memory_gb, 1) if info.memory_gb else None,
+            optimization_level=info.optimization_level,
+            config=self.config
+        )
 
 
 # Global hardware optimizer instance

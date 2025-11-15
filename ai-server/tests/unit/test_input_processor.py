@@ -150,7 +150,7 @@ class TestInputProcessor:
             raise Exception("Hardware detection failed")
         
         monkeypatch.setattr(
-            "config.hardware_config.hardware_optimizer.get_model_config",
+            "config.hardware.hardware_optimizer.get_model_config",
             mock_failed_hardware
         )
         
@@ -170,7 +170,13 @@ class TestInputProcessor:
 
     def test_model_setup_without_dependencies(self, monkeypatch):
         """Test model setup when dependencies are missing"""
-        # Mock SentenceTransformer to raise ImportError
-        with patch('agents.input_processor.SentenceTransformer', side_effect=ImportError("No module")):
+        # Set HAS_TRANSFORMERS to False to simulate missing dependency
+        monkeypatch.setattr('agents.input_processor.HAS_TRANSFORMERS', False)
+
+        # Mock the _load_transformer to raise ImportError
+        def mock_load_transformer(self):
+            raise ImportError("No module named 'sentence_transformers'")
+
+        with patch.object(InputProcessor, '_load_transformer', mock_load_transformer):
             processor = InputProcessor()
             assert not processor.has_model

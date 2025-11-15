@@ -1,17 +1,16 @@
 """Base class for AI model services with shared patterns"""
 
-import asyncio
-import logging
 import os
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, Optional
 
-from config.hardware_config import HardwareOptimizer
+from config.hardware import HardwareOptimizer
+from utils import get_logger
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class BaseAIService(ABC):
@@ -46,26 +45,32 @@ class BaseAIService(ABC):
             True if successful, False otherwise
         """
         if self.is_ready:
-            logger.warning(f"{self.__class__.__name__}: Model already loaded")
+            logger.warning("model_already_loaded", service=self.__class__.__name__)
             return True
 
         try:
             # Verify model file exists
             if not self.model_path.exists():
-                logger.error(f"Model file not found: {self.model_path}")
+                logger.error("model_file_not_found", model_path=str(self.model_path))
                 return False
 
-            logger.info(f"Loading {self._get_model_type()} model: {self.model_path}")
+            logger.info("loading_model", model_type=self._get_model_type(), model_path=str(self.model_path))
             start_time = time.time()
 
             # Use provided hardware info or detect if not provided
             if hardware_info is not None:
                 self.hardware_info = hardware_info
-                logger.debug("Using shared hardware detection")
+                logger.debug("using_shared_hardware_detection")
             else:
                 # Fallback to individual detection (for backward compatibility)
                 self.hardware_info = self._detect_hardware()
-                logger.info(f"Hardware detected: {self.hardware_info}")
+                logger.info(
+                    "hardware_detected",
+                    device_type=self.hardware_info['device_type'],
+                    device_name=self.hardware_info['device_name'],
+                    cpu_count=self.hardware_info['cpu_count'],
+                    vram_gb=self.hardware_info['vram_gb']
+                )
 
             # Call subclass-specific loading logic
             success = await self._load_model_impl()
@@ -73,7 +78,7 @@ class BaseAIService(ABC):
             if success:
                 load_time = time.time() - start_time
                 self.is_ready = True
-                logger.info(f"{self._get_model_type()} model loaded successfully in {load_time:.2f}s")
+                logger.info("model_loaded_successfully", model_type=self._get_model_type(), load_time_seconds=round(load_time, 2))
                 self._log_configuration()
                 return True
             else:
@@ -81,7 +86,7 @@ class BaseAIService(ABC):
                 return False
 
         except Exception as e:
-            logger.error(f"Failed to load {self._get_model_type()} model: {e}", exc_info=True)
+            logger.error("model_load_failed", model_type=self._get_model_type(), error=str(e), error_type=type(e).__name__)
             self.is_ready = False
             return False
 
@@ -159,16 +164,16 @@ class BaseAIService(ABC):
     def unload_model(self):
         """Unload the model and free resources"""
         if self.model:
-            logger.info(f"Unloading {self._get_model_type()} model")
+            logger.info("unloading_model", model_type=self._get_model_type())
             try:
                 # Try to call close() method if available for explicit cleanup
                 if hasattr(self.model, 'close'):
                     self.model.close()
-                    logger.debug("Model cleanup method called successfully")
+                    logger.debug("model_cleanup_called")
                 else:
-                    logger.debug("Model does not have a close() method; relying on garbage collection")
+                    logger.debug("no_cleanup_method", fallback="garbage_collection")
             except Exception as e:
-                logger.warning(f"Error during model cleanup: {e}")
+                logger.warning("model_cleanup_error", error=str(e), error_type=type(e).__name__)
             finally:
                 del self.model
                 self.model = None

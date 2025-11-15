@@ -62,7 +62,7 @@ class TestLoadModel:
         }
 
         with patch('pathlib.Path.exists', return_value=True), \
-             patch('faster_whisper.WhisperModel', return_value=mock_whisper_model) as mock_whisper_class:
+             patch('services.stt.WhisperModel', return_value=mock_whisper_model) as mock_whisper_class:
 
             result = await service.load_model(hardware_info=hardware_info)
 
@@ -84,7 +84,7 @@ class TestLoadModel:
 
         with patch('pathlib.Path.exists', return_value=True), \
              patch('services.base.HardwareOptimizer', return_value=mock_hw_optimizer), \
-             patch('faster_whisper.WhisperModel', return_value=mock_whisper_model) as mock_whisper_class:
+             patch('services.stt.WhisperModel', return_value=mock_whisper_model) as mock_whisper_class:
 
             result = await service.load_model()
 
@@ -98,15 +98,14 @@ class TestLoadModel:
     async def test_load_model_import_error(self, service):
         """Test that load_model handles missing faster-whisper gracefully"""
         with patch('pathlib.Path.exists', return_value=True), \
-             patch('services.base.HardwareOptimizer'):
+             patch('services.base.HardwareOptimizer'), \
+             patch('services.stt.HAS_FASTER_WHISPER', False), \
+             patch('services.stt.WhisperModel', None):
 
-            # Mock the import to raise ImportError
-            with patch.dict('sys.modules', {'faster_whisper': None}):
-                with patch('builtins.__import__', side_effect=ImportError("No module")):
-                    result = await service.load_model()
+            result = await service.load_model()
 
-                    assert result is False
-                    assert service.is_ready is False
+            assert result is False
+            assert service.is_ready is False
 
     @pytest.mark.asyncio
     async def test_load_model_memory_error(self, service):
@@ -118,7 +117,7 @@ class TestLoadModel:
 
         with patch('pathlib.Path.exists', return_value=True), \
              patch('services.base.HardwareOptimizer', return_value=mock_hw_optimizer), \
-             patch('faster_whisper.WhisperModel', side_effect=MemoryError("OOM")):
+             patch('services.stt.WhisperModel', side_effect=MemoryError("OOM")):
 
             result = await service.load_model()
 
@@ -133,7 +132,7 @@ class TestLoadModel:
 
         with patch('pathlib.Path.exists', return_value=True), \
              patch('services.base.HardwareOptimizer', return_value=mock_hw_optimizer), \
-             patch('faster_whisper.WhisperModel', side_effect=ValueError("CUDA error")):
+             patch('services.stt.WhisperModel', side_effect=ValueError("CUDA error")):
 
             result = await service.load_model()
 
@@ -147,7 +146,7 @@ class TestLoadModel:
         hardware_info = {'device_type': 'cpu', 'cpu_count': 4}
 
         with patch('pathlib.Path.exists', return_value=True), \
-             patch('faster_whisper.WhisperModel', return_value=mock_whisper_model), \
+             patch('services.stt.WhisperModel', return_value=mock_whisper_model), \
              patch.object(stt_config, 'ENABLE_WARMUP', True), \
              patch.object(service, '_warmup_model', new_callable=AsyncMock) as mock_warmup:
 
@@ -163,7 +162,7 @@ class TestLoadModel:
         hardware_info = {'device_type': 'cpu', 'cpu_count': 4}
 
         with patch('pathlib.Path.exists', return_value=True), \
-             patch('faster_whisper.WhisperModel', return_value=mock_whisper_model), \
+             patch('services.stt.WhisperModel', return_value=mock_whisper_model), \
              patch.object(stt_config, 'ENABLE_WARMUP', False), \
              patch.object(service, '_warmup_model', new_callable=AsyncMock) as mock_warmup:
 
@@ -348,11 +347,7 @@ class TestAudioPreprocessing:
         mock_audio_array = np.random.randn(16000).astype('float32')  # 1 second at 16kHz
         mock_sample_rate = 16000
 
-        # Mock soundfile module
-        mock_sf = MagicMock()
-        mock_sf.read.return_value = (mock_audio_array, mock_sample_rate)
-
-        with patch.dict('sys.modules', {'soundfile': mock_sf}):
+        with patch('services.stt.sf.read', return_value=(mock_audio_array, mock_sample_rate)):
             audio_array, sample_rate, duration_ms = await service._preprocess_audio(b'fake_wav_data', 'wav')
 
             assert isinstance(audio_array, np.ndarray)
@@ -366,13 +361,8 @@ class TestAudioPreprocessing:
         mock_audio_array = np.random.randn(16000).astype('float32')  # Mono, 16kHz
         mock_sample_rate = 16000
 
-        mock_sf = MagicMock()
-        mock_sf.read.return_value = (mock_audio_array, mock_sample_rate)
-
-        # Mock resampy to verify it's NOT called
-        mock_resampy = MagicMock()
-
-        with patch.dict('sys.modules', {'soundfile': mock_sf, 'resampy': mock_resampy}):
+        with patch('services.stt.sf.read', return_value=(mock_audio_array, mock_sample_rate)), \
+             patch('services.stt.resampy') as mock_resampy:
             audio_array, sample_rate, duration_ms = await service._preprocess_audio(b'fake_wav_data', 'wav')
 
             # Verify resampling was NOT called (audio already correct)
@@ -387,10 +377,7 @@ class TestAudioPreprocessing:
         mock_stereo_audio = np.random.randn(16000, 2).astype('float32')
         mock_sample_rate = 16000
 
-        mock_sf = MagicMock()
-        mock_sf.read.return_value = (mock_stereo_audio, mock_sample_rate)
-
-        with patch.dict('sys.modules', {'soundfile': mock_sf}):
+        with patch('services.stt.sf.read', return_value=(mock_stereo_audio, mock_sample_rate)):
             audio_array, sample_rate, duration_ms = await service._preprocess_audio(b'fake_wav_data', 'wav')
 
             assert len(audio_array.shape) == 1  # Should be mono now
@@ -401,17 +388,14 @@ class TestAudioPreprocessing:
         # Create mock audio at 44.1kHz
         mock_audio_array = np.random.randn(44100).astype('float32')
         mock_sample_rate = 44100
+        resampled_audio = np.random.randn(16000).astype('float32')
 
-        mock_sf = MagicMock()
-        mock_sf.read.return_value = (mock_audio_array, mock_sample_rate)
-        mock_resampy = MagicMock()
-        mock_resampy.resample = MagicMock(return_value=np.random.randn(16000).astype('float32'))
-
-        with patch.dict('sys.modules', {'soundfile': mock_sf, 'resampy': mock_resampy}):
+        with patch('services.stt.sf.read', return_value=(mock_audio_array, mock_sample_rate)), \
+             patch('services.stt.resampy.resample', return_value=resampled_audio) as mock_resample:
 
             audio_array, sample_rate, duration_ms = await service._preprocess_audio(b'fake_wav_data', 'wav')
 
-            mock_resampy.resample.assert_called_once()
+            mock_resample.assert_called_once()
             assert sample_rate == 16000
 
     @pytest.mark.asyncio
@@ -422,10 +406,7 @@ class TestAudioPreprocessing:
         mock_audio_array = np.random.randn(long_duration_samples).astype('float32')
         mock_sample_rate = 16000
 
-        mock_sf = MagicMock()
-        mock_sf.read.return_value = (mock_audio_array, mock_sample_rate)
-
-        with patch.dict('sys.modules', {'soundfile': mock_sf}):
+        with patch('services.stt.sf.read', return_value=(mock_audio_array, mock_sample_rate)):
             audio_array, sample_rate, duration_ms = await service._preprocess_audio(b'fake_wav_data', 'wav')
 
             assert duration_ms == stt_config.MAX_DURATION_MS
@@ -965,7 +946,7 @@ class TestResourcePooling:
     @pytest.mark.asyncio
     async def test_pool_initialized_on_load(self, service):
         """Test that resource pool is initialized when model loads"""
-        from services.resource_pool import ResourcePool
+        from utils.resource_pool import ResourcePool
 
         with patch.object(service, '_pool', None):
             service._pool = ResourcePool(
@@ -980,7 +961,7 @@ class TestResourcePooling:
     @pytest.mark.asyncio
     async def test_transcribe_uses_pool(self, service):
         """Test that transcription uses resource pool"""
-        from services.resource_pool import ResourcePool
+        from utils.resource_pool import ResourcePool
 
         service._pool = ResourcePool(max_concurrent=2, timeout=5.0)
 
@@ -1007,7 +988,7 @@ class TestResourcePooling:
     @pytest.mark.asyncio
     async def test_concurrent_transcriptions_limited(self, service):
         """Test that concurrent transcriptions are limited by pool"""
-        from services.resource_pool import ResourcePool
+        from utils.resource_pool import ResourcePool
 
         service._pool = ResourcePool(max_concurrent=2, timeout=5.0)
 
@@ -1047,7 +1028,7 @@ class TestResourcePooling:
     @pytest.mark.asyncio
     async def test_get_status_includes_pool_stats(self, service):
         """Test that get_status includes pool statistics"""
-        from services.resource_pool import ResourcePool
+        from utils.resource_pool import ResourcePool
 
         service._pool = ResourcePool(max_concurrent=4, timeout=30.0)
 
