@@ -3,6 +3,7 @@
 #include "mqtt_client.h"
 #include <stdio.h>
 #include <string.h>
+#include <freertos/semphr.h>
 
 // MQTT Configuration - TODO: Move to Kconfig
 #define CONFIG_MQTT_BROKER_IP "10.0.0.117"
@@ -14,19 +15,27 @@ static esp_mqtt_client_handle_t client = NULL;
 static naila_mqtt_message_handler_t message_handler = NULL;
 static bool connected = false;
 
+static SemaphoreHandle_t mqtt_mutex = NULL;
+static const TickType_t MQTT_MUTEX_TIMEOUT = pdMS_TO_TICKS(100);
+
 static void mqtt_event_handler(void* handler_args, esp_event_base_t base, int32_t event_id, void* event_data) {
     esp_mqtt_event_handle_t event = event_data;
 
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "✓ Successfully connected to MQTT broker at %s:%d", CONFIG_MQTT_BROKER_IP, CONFIG_MQTT_BROKER_PORT);
-            ESP_LOGI(TAG, "✓ Client ID: %s", CONFIG_ROBOT_ID);
-            connected = true;
+            if (xSemaphoreTake(mqtt_mutex, MQTT_MUTEX_TIMEOUT) == pdTRUE) {
+                connected = true;
+                xSemaphoreGive(mqtt_mutex);
+            }
             break;
 
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGW(TAG, "✗ Disconnected from MQTT broker");
-            connected = false;
+            if (xSemaphoreTake(mqtt_mutex, MQTT_MUTEX_TIMEOUT) == pdTRUE) {
+                connected = false;
+                xSemaphoreGive(mqtt_mutex);
+            }
             break;
 
         case MQTT_EVENT_SUBSCRIBED:
@@ -43,11 +52,14 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base, int32_
 
         case MQTT_EVENT_DATA:
             ESP_LOGI(TAG, "✓ Received message on topic: %.*s", event->topic_len, event->topic);
-            if (message_handler) {
-                char topic[128] = {0};
-                int topic_len = event->topic_len < sizeof(topic) - 1 ? event->topic_len : sizeof(topic) - 1;
-                strncpy(topic, event->topic, topic_len);
-                message_handler(topic, event->data, event->data_len);
+            if (message_handler && event->topic_len > 0) {
+                char* topic = malloc(event->topic_len + 1);
+                if (topic) {
+                    memcpy(topic, event->topic, event->topic_len);
+                    topic[event->topic_len] = '\0';
+                    message_handler(topic, event->data, event->data_len);
+                    free(topic);
+                }
             }
             break;
 
@@ -78,14 +90,16 @@ esp_err_t naila_mqtt_init(void) {
         return ESP_OK;
     }
 
-    ESP_LOGI(TAG, "🚀 Initializing MQTT client...");
+    mqtt_mutex = xSemaphoreCreateMutex();
+    if (!mqtt_mutex) {
+        ESP_LOGE(TAG, "Failed to create MQTT mutex");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Initializing MQTT client...");
 
     char mqtt_uri[64];
     snprintf(mqtt_uri, sizeof(mqtt_uri), "mqtt://%s:%d", CONFIG_MQTT_BROKER_IP, CONFIG_MQTT_BROKER_PORT);
-
-    ESP_LOGI(TAG, "📡 Broker URI: %s", mqtt_uri);
-    ESP_LOGI(TAG, "🆔 Client ID: %s", CONFIG_ROBOT_ID);
-    ESP_LOGI(TAG, "⏱️  Timeouts: reconnect=%dms, network=%dms", 10000, 10000);
 
     esp_mqtt_client_config_t mqtt_cfg = {
         .broker = {
@@ -110,7 +124,7 @@ esp_err_t naila_mqtt_init(void) {
         },
     };
 
-    ESP_LOGI(TAG, "⚙️  Creating MQTT client instance...");
+    ESP_LOGI(TAG, "Creating MQTT client instance...");
     client = esp_mqtt_client_init(&mqtt_cfg);
     if (client == NULL) {
         ESP_LOGE(TAG, "✗ Failed to initialize MQTT client");
@@ -118,7 +132,7 @@ esp_err_t naila_mqtt_init(void) {
     }
     ESP_LOGI(TAG, "✓ MQTT client instance created");
 
-    ESP_LOGI(TAG, "📋 Registering event handler...");
+    ESP_LOGI(TAG, "Registering event handler...");
     esp_err_t ret = esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "✗ Failed to register MQTT event handler: %s", esp_err_to_name(ret));
@@ -126,49 +140,49 @@ esp_err_t naila_mqtt_init(void) {
     }
     ESP_LOGI(TAG, "✓ Event handler registered");
 
-    ESP_LOGI(TAG, "🔌 Starting MQTT client...");
+    ESP_LOGI(TAG, "Starting MQTT client...");
     ret = esp_mqtt_client_start(client);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "✗ Failed to start MQTT client: %s", esp_err_to_name(ret));
         return ret;
     }
 
-    ESP_LOGI(TAG, "✅ MQTT client initialized and started successfully");
+    ESP_LOGI(TAG, "MQTT client initialized and started successfully");
     ESP_LOGI(TAG, "🔄 Client will attempt to connect to broker...");
     return ESP_OK;
 }
 
 esp_err_t naila_mqtt_publish(const char* topic, const char* data, int len, int qos) {
-    if (!connected || !client) {
-        ESP_LOGW(TAG, "✗ Cannot publish: MQTT client not connected");
+    if (!naila_mqtt_is_connected() || !client) {
+        ESP_LOGW(TAG, "Cannot publish: MQTT client not connected");
         return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_LOGI(TAG, "📤 Publishing to topic '%s' (QoS %d, len %d)", topic, qos, len);
+    ESP_LOGI(TAG, "Publishing to topic '%s' (QoS %d, len %d)", topic, qos, len);
     int msg_id = esp_mqtt_client_publish(client, topic, data, len, qos, 0);
     if (msg_id < 0) {
-        ESP_LOGE(TAG, "✗ Failed to publish message to topic '%s'", topic);
+        ESP_LOGE(TAG, "Failed to publish message to topic '%s'", topic);
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "✓ Message queued for publish (msg_id: %d)", msg_id);
+    ESP_LOGI(TAG, "Message queued for publish (msg_id: %d)", msg_id);
     return ESP_OK;
 }
 
 esp_err_t naila_mqtt_subscribe(const char* topic, int qos) {
-    if (!connected || !client) {
-        ESP_LOGW(TAG, "✗ Cannot subscribe: MQTT client not connected");
+    if (!naila_mqtt_is_connected() || !client) {
+        ESP_LOGW(TAG, "Cannot subscribe: MQTT client not connected");
         return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_LOGI(TAG, "📥 Subscribing to topic '%s' (QoS %d)", topic, qos);
+    ESP_LOGI(TAG, "Subscribing to topic '%s' (QoS %d)", topic, qos);
     int msg_id = esp_mqtt_client_subscribe(client, topic, qos);
     if (msg_id < 0) {
-        ESP_LOGE(TAG, "✗ Failed to subscribe to topic '%s'", topic);
+        ESP_LOGE(TAG, "Failed to subscribe to topic '%s'", topic);
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "✓ Subscription request sent (msg_id: %d)", msg_id);
+    ESP_LOGI(TAG, "Subscription request sent (msg_id: %d)", msg_id);
     return ESP_OK;
 }
 
@@ -177,5 +191,12 @@ void naila_mqtt_register_handler(naila_mqtt_message_handler_t handler) {
 }
 
 bool naila_mqtt_is_connected(void) {
-    return connected;
+    if (!mqtt_mutex) return connected;
+    
+    if (xSemaphoreTake(mqtt_mutex, MQTT_MUTEX_TIMEOUT) != pdTRUE) {
+        return false;
+    }
+    bool status = connected;
+    xSemaphoreGive(mqtt_mutex);
+    return status;
 }
