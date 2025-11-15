@@ -24,6 +24,9 @@ static component_state_t g_component_state = COMPONENT_STATE_UNINITIALIZED;
 static app_state_t g_app_state = APP_STATE_INITIALIZING;
 static app_stats_t g_stats = {0};
 
+static const TickType_t MUTEX_TIMEOUT = pdMS_TO_TICKS(100);
+
+
 static const char *app_state_to_string(app_state_t state) {
   switch (state) {
   case APP_STATE_INITIALIZING:
@@ -45,7 +48,7 @@ static const char *app_state_to_string(app_state_t state) {
 
 naila_err_t app_manager_set_state(app_state_t new_state) {
   // Take mutex with timeout
-  if (xSemaphoreTake(state_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+  if (xSemaphoreTake(state_mutex, MUTEX_TIMEOUT) != pdTRUE) {
     NAILA_LOGE(TAG, "Failed to acquire state mutex");
     return NAILA_ERR_TIMEOUT;
   }
@@ -129,7 +132,7 @@ static void on_wifi_connected(void) {
 }
 
 static void on_wifi_disconnected(void) {
-  if (xSemaphoreTake(stats_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+  if (xSemaphoreTake(stats_mutex, MUTEX_TIMEOUT) == pdTRUE) {
     g_stats.wifi_reconnect_count++;
     xSemaphoreGive(stats_mutex);
   }
@@ -142,7 +145,7 @@ static void on_wifi_disconnected(void) {
 }
 
 static void on_wifi_error(naila_err_t error) {
-  if (xSemaphoreTake(stats_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+  if (xSemaphoreTake(stats_mutex, MUTEX_TIMEOUT) == pdTRUE) {
     g_stats.error_count++;
     xSemaphoreGive(stats_mutex);
   }
@@ -230,7 +233,7 @@ naila_err_t app_manager_stop(void) {
 app_state_t app_manager_get_state(void) {
   app_state_t state;
   
-  if (xSemaphoreTake(state_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+  if (xSemaphoreTake(state_mutex, MUTEX_TIMEOUT) != pdTRUE) {
     NAILA_LOGE(TAG, "Failed to acquire state mutex for read");
     return APP_STATE_ERROR;  // Safe fallback
   }
@@ -250,7 +253,7 @@ naila_err_t app_manager_get_stats(app_stats_t *stats) {
   NAILA_CHECK_NULL(stats, TAG, "Stats pointer is null");
   NAILA_CHECK_INIT(g_component_state, TAG, "app_manager");
 
-  if (xSemaphoreTake(stats_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+  if (xSemaphoreTake(stats_mutex, MUTEX_TIMEOUT) != pdTRUE) {
     return NAILA_ERR_TIMEOUT;
   }
 
