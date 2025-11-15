@@ -4,6 +4,8 @@
 #include <esp_netif.h>
 #include <esp_system.h>
 #include <esp_timer.h>
+#include <esp_task_wdt.h>
+
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <nvs_flash.h>
@@ -14,7 +16,16 @@
 #include "error_handling.h"
 #include "naila_log.h"
 
+
 static const char *TAG = "main_app";
+
+static const TickType_t SHUTDOWN_DELAY_MS = pdMS_TO_TICKS(1000);
+
+static void restart_with_delay(const char* reason) {
+  NAILA_LOGE(TAG, "Restarting due to: %s", reason);
+  vTaskDelay(SHUTDOWN_DELAY_MS);  // Give time for logs to flush
+  esp_restart();
+}
 
 // Application callback functions
 static void on_state_change(app_state_t old_state, app_state_t new_state) {
@@ -44,10 +55,14 @@ static naila_err_t initialize_system(void) {
   // Initialize logging system first
   naila_log_init();
 
+  // Log system info
+  ESP_LOGI(TAG, "CPU freq: %d MHz", ets_get_cpu_frequency());
+  ESP_LOGI(TAG, "Free heap: %d bytes", esp_get_free_heap_size());
+  
+
   // Initialize NVS flash for system configuration
   esp_err_t ret = nvs_flash_init();
-  if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
-      ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+  if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
     NAILA_ESP_CHECK(nvs_flash_erase(), TAG, "NVS flash erase");
     ret = nvs_flash_init();
   }
@@ -68,25 +83,20 @@ extern "C" void app_main() {
   // Initialize basic system components
   naila_err_t result = initialize_system();
   if (result != NAILA_OK) {
-    NAILA_LOGE(
-        TAG, "System initialization failed: %s", naila_err_to_string(result));
-    return;
+    restart_with_delay("System initialization failed");
   }
+
 
   // Initialize application manager
   result = app_manager_init(&app_callbacks);
   if (result != NAILA_OK) {
-    NAILA_LOGE(TAG, "Application manager initialization failed: %s",
-        naila_err_to_string(result));
-    return;
+    restart_with_delay("Application manager initialization failed");
   }
 
   // Start application services
   result = app_manager_start();
   if (result != NAILA_OK) {
-    NAILA_LOGE(
-        TAG, "Application start failed: %s", naila_err_to_string(result));
-    return;
+    restart_with_delay("Application start failed");
   }
 
   NAILA_TIME_END(TAG, total_init);
