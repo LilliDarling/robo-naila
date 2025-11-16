@@ -1,6 +1,7 @@
 #include "app.h"
 #include "config.h"
 #include "error_handling.h"
+#include "mutex_utils.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include <esp_task_wdt.h>
@@ -24,8 +25,6 @@ static component_state_t g_component_state = COMPONENT_STATE_UNINITIALIZED;
 static app_state_t g_app_state = APP_STATE_INITIALIZING;
 static app_stats_t g_stats = {0};
 
-static const TickType_t MUTEX_TIMEOUT = pdMS_TO_TICKS(100);
-
 
 static const char *app_state_to_string(app_state_t state) {
   switch (state) {
@@ -47,23 +46,13 @@ static const char *app_state_to_string(app_state_t state) {
 }
 
 naila_err_t app_manager_set_state(app_state_t new_state) {
-  // Take mutex with timeout
-  if (xSemaphoreTake(state_mutex, MUTEX_TIMEOUT) != pdTRUE) {
-    NAILA_LOGE(TAG, "Failed to acquire state mutex");
-    return NAILA_ERR_TIMEOUT;
-  }
-  if (new_state == g_app_state) {
-    xSemaphoreGive(state_mutex);
+  app_state_t old_state;
+
+  NAILA_PROPAGATE_ERROR(mutex_execute(state_mutex, ^(void* ctx) {
+    old_state = g_app_state;
+    g_app_state = new_state;
     return NAILA_OK;
-  }
-
-  app_state_t old_state = g_app_state;
-  g_app_state = new_state;
-
-  xSemaphoreGive(state_mutex);
-
-  NAILA_LOGI(TAG, "State transition: %s -> %s", app_state_to_string(old_state),
-      app_state_to_string(new_state));
+  }, NULL), TAG, "set state");
 
   if (g_callbacks && g_callbacks->on_state_change) {
     g_callbacks->on_state_change(old_state, new_state);
@@ -112,8 +101,7 @@ naila_err_t app_manager_init(const app_callbacks_t *callbacks) {
 
 // WiFi event callbacks for the app_manager
 static void on_wifi_connected(void) {
-
-  NAILA_LOGI(TAG, "🎉 WiFi connected callback triggered");
+  NAILA_LOGI(TAG, "WiFi connected callback triggered");
   app_manager_set_state(APP_STATE_SERVICES_STARTING);
 
   // Initialize MQTT after WiFi connection
@@ -133,23 +121,23 @@ static void on_wifi_connected(void) {
 }
 
 static void on_wifi_disconnected(void) {
-  if (xSemaphoreTake(stats_mutex, MUTEX_TIMEOUT) == pdTRUE) {
+  mutex_execute(stats_mutex, ^(void* ctx) {
     g_stats.wifi_reconnect_count++;
-    xSemaphoreGive(stats_mutex);
-  }
+    return NAILA_OK;
+  }, NULL);
 
   app_manager_set_state(APP_STATE_WIFI_CONNECTING);
-  
+
   if (g_callbacks && g_callbacks->on_wifi_disconnected) {
     g_callbacks->on_wifi_disconnected();
   }
 }
 
 static void on_wifi_error(naila_err_t error) {
-  if (xSemaphoreTake(stats_mutex, MUTEX_TIMEOUT) == pdTRUE) {
+  mutex_execute(stats_mutex, ^(void* ctx) {
     g_stats.error_count++;
-    xSemaphoreGive(stats_mutex);
-  }
+    return NAILA_OK;
+  }, NULL);
 
   app_manager_set_state(APP_STATE_ERROR);
 
@@ -233,15 +221,17 @@ naila_err_t app_manager_stop(void) {
 
 app_state_t app_manager_get_state(void) {
   app_state_t state;
-  
-  if (xSemaphoreTake(state_mutex, MUTEX_TIMEOUT) != pdTRUE) {
+
+  naila_err_t result = mutex_execute(state_mutex, ^(void* ctx) {
+    state = g_app_state;
+    return NAILA_OK;
+  }, NULL);
+
+  if (result != NAILA_OK) {
     NAILA_LOGE(TAG, "Failed to acquire state mutex for read");
-    return APP_STATE_ERROR;  // Safe fallback
+    return APP_STATE_ERROR;
   }
-  
-  state = g_app_state;
-  xSemaphoreGive(state_mutex);
-  
+
   return state;
 }
 
@@ -254,17 +244,14 @@ naila_err_t app_manager_get_stats(app_stats_t *stats) {
   NAILA_CHECK_NULL(stats, TAG, "Stats pointer is null");
   NAILA_CHECK_INIT(g_component_state, TAG, "app_manager");
 
-  if (xSemaphoreTake(stats_mutex, MUTEX_TIMEOUT) != pdTRUE) {
-    return NAILA_ERR_TIMEOUT;
-  }
+  NAILA_PROPAGATE_ERROR(mutex_execute(stats_mutex, ^(void* ctx) {
+    memcpy(stats, &g_stats, sizeof(app_stats_t));
+    return NAILA_OK;
+  }, NULL), TAG, "get stats");
 
-  // Copy existing stats
-  memcpy(stats, &g_stats, sizeof(app_stats_t));
-  xSemaphoreGive(stats_mutex);
-  
   // Add runtime info
   stats->free_heap = esp_get_free_heap_size();
   stats->min_free_heap = esp_get_minimum_free_heap_size();
-  
+
   return NAILA_OK;
 }
