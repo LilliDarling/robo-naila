@@ -117,7 +117,8 @@ static void on_wifi_connected(void) {
   app_manager_set_state(APP_STATE_SERVICES_STARTING);
 
   // Initialize MQTT after WiFi connection
-  naila_err_t result = naila_mqtt_init();
+  const naila_config_t *config = config_manager_get();
+  naila_err_t result = naila_mqtt_init(&config->mqtt);
   if (result == NAILA_OK) {
     NAILA_LOGI(TAG, "MQTT initialized after WiFi connection");
     app_manager_set_state(APP_STATE_RUNNING);

@@ -19,21 +19,11 @@ naila_err_t config_manager_init(void) {
 
   g_state = COMPONENT_STATE_INITIALIZING;
 
-  // Load default configuration
   NAILA_PROPAGATE_ERROR(
       config_manager_load_defaults(&g_config), TAG, "load defaults");
 
-  // Try to load from NVS, fall back to defaults if not found
-  // Temporarily mark as initialized to allow NVS loading
-  g_state = COMPONENT_STATE_INITIALIZED;
-  naila_err_t nvs_result = config_manager_load_from_nvs(&g_config);
-  g_state = COMPONENT_STATE_INITIALIZING; // Reset back to initializing
-  if (nvs_result != NAILA_OK) {
-    NAILA_LOGW(TAG, "Could not load config from NVS, using defaults");
-  }
-
   g_config.info.name = "config_manager";
-  g_config.info.version = "1.0.0";
+  g_config.info.version = "0.1.0";
   g_config.info.state = COMPONENT_STATE_INITIALIZED;
   g_state = COMPONENT_STATE_INITIALIZED;
 
@@ -54,7 +44,7 @@ naila_err_t config_manager_load_defaults(naila_config_t *config) {
   config->wifi.timeout_ms = 30000;
 
   // MQTT defaults
-  strncpy(config->mqtt.broker_ip, "192.168.1.100",
+  strncpy(config->mqtt.broker_ip, "10.0.0.117",
       sizeof(config->mqtt.broker_ip) - 1);
   config->mqtt.broker_port = 1883;
   strncpy(config->mqtt.robot_id, "naila_robot_001",

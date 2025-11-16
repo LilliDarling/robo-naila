@@ -5,11 +5,6 @@
 #include <string.h>
 #include <freertos/semphr.h>
 
-// MQTT Configuration - TODO: Move to Kconfig
-#define CONFIG_MQTT_BROKER_IP "10.0.0.117"
-#define CONFIG_MQTT_BROKER_PORT 1883
-#define CONFIG_ROBOT_ID "naila_robot_001"
-
 static const char* TAG = "NAILA_MQTT";
 static esp_mqtt_client_handle_t client = NULL;
 static naila_mqtt_message_handler_t message_handler = NULL;
@@ -23,7 +18,7 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base, int32_
 
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED:
-            ESP_LOGI(TAG, "✓ Successfully connected to MQTT broker at %s:%d", CONFIG_MQTT_BROKER_IP, CONFIG_MQTT_BROKER_PORT);
+            ESP_LOGI(TAG, "✓ Successfully connected to MQTT broker");
             if (xSemaphoreTake(mqtt_mutex, MQTT_MUTEX_TIMEOUT) == pdTRUE) {
                 connected = true;
                 xSemaphoreGive(mqtt_mutex);
@@ -84,10 +79,15 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base, int32_
     }
 }
 
-esp_err_t naila_mqtt_init(void) {
+esp_err_t naila_mqtt_init(const mqtt_config_t* config) {
     if (client != NULL) {
         ESP_LOGI(TAG, "MQTT client already initialized, skipping...");
         return ESP_OK;
+    }
+
+    if (!config) {
+        ESP_LOGE(TAG, "Invalid config parameter");
+        return ESP_ERR_INVALID_ARG;
     }
 
     mqtt_mutex = xSemaphoreCreateMutex();
@@ -99,23 +99,19 @@ esp_err_t naila_mqtt_init(void) {
     ESP_LOGI(TAG, "Initializing MQTT client...");
 
     char mqtt_uri[64];
-    snprintf(mqtt_uri, sizeof(mqtt_uri), "mqtt://%s:%d", CONFIG_MQTT_BROKER_IP, CONFIG_MQTT_BROKER_PORT);
+    snprintf(mqtt_uri, sizeof(mqtt_uri), "mqtt://%s:%d", config->broker_ip, config->broker_port);
 
     esp_mqtt_client_config_t mqtt_cfg = {
         .broker = {
             .address = {
-                .uri = mqtt_uri,  // Use dynamically configured URI from environment
-                // OR alternatively use hostname and port:
-                // .hostname = CONFIG_MQTT_BROKER_IP,
-                // .port = CONFIG_MQTT_BROKER_PORT,
-                // .transport = MQTT_TRANSPORT_OVER_TCP,
+                .uri = mqtt_uri,
             },
         },
         .credentials = {
-            .client_id = CONFIG_ROBOT_ID,
+            .client_id = config->robot_id,
         },
         .session = {
-            .keepalive = 60,
+            .keepalive = config->keepalive_sec,
             .protocol_ver = MQTT_PROTOCOL_V_3_1_1,
         },
         .network = {
