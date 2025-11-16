@@ -18,7 +18,7 @@ static TaskHandle_t stats_task_handle = NULL;
 static SemaphoreHandle_t state_mutex = NULL;
 static SemaphoreHandle_t stats_mutex = NULL;
 
-static const char *TAG = "app_manager";
+static const char *TAG = "APP_MANAGER";
 static const app_callbacks_t *g_callbacks = NULL;
 
 static component_state_t g_component_state = COMPONENT_STATE_UNINITIALIZED;

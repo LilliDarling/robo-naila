@@ -5,7 +5,7 @@
 #include "nvs_flash.h"
 #include <string.h>
 
-static const char *TAG = "config_manager";
+static const char *TAG = "CONFIG_MANAGER";
 static const char *NVS_NAMESPACE = "naila_config";
 static naila_config_t g_config;
 static component_state_t g_state = COMPONENT_STATE_UNINITIALIZED;
