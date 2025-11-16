@@ -19,19 +19,6 @@ naila_err_t config_manager_init(void) {
 
   g_state = COMPONENT_STATE_INITIALIZING;
 
-  // Initialize NVS (ignore if already initialized)
-  esp_err_t ret = nvs_flash_init();
-  if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
-      ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    NAILA_ESP_CHECK(nvs_flash_erase(), TAG, "NVS flash erase");
-    ret = nvs_flash_init();
-  }
-  // NVS init can succeed or already be initialized - both are fine
-  if (ret != ESP_OK) {
-    NAILA_LOGW(TAG, "NVS flash init returned: %s (may already be initialized)",
-        esp_err_to_name(ret));
-  }
-
   // Load default configuration
   NAILA_PROPAGATE_ERROR(
       config_manager_load_defaults(&g_config), TAG, "load defaults");
