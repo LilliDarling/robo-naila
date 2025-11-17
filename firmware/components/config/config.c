@@ -19,12 +19,18 @@ naila_err_t config_manager_init(void) {
 
   g_state = COMPONENT_STATE_INITIALIZING;
 
+  // Load defaults first
   NAILA_PROPAGATE_ERROR(
       config_manager_load_defaults(&g_config), TAG, "load defaults");
 
-  g_config.info.name = "config_manager";
-  g_config.info.version = "0.1.0";
-  g_config.info.state = COMPONENT_STATE_INITIALIZED;
+  // Try to load from NVS (optional - falls back to defaults if not found)
+  naila_err_t nvs_result = config_manager_load_from_nvs(&g_config);
+  if (nvs_result == NAILA_OK) {
+    NAILA_LOGI(TAG, "Loaded configuration from NVS");
+  } else {
+    NAILA_LOGI(TAG, "Using default configuration");
+  }
+
   g_state = COMPONENT_STATE_INITIALIZED;
 
   NAILA_LOGI(TAG, "Configuration manager initialized successfully");
@@ -58,12 +64,6 @@ naila_err_t config_manager_load_defaults(naila_config_t *config) {
   config->ai.tensor_arena_size = 64 * 1024;
   config->ai.inference_timeout_ms = 5000;
   config->ai.enable_debug = false;
-
-  // Audio defaults
-  config->audio.sample_rate = 16000;
-  config->audio.bit_depth = 16;
-  config->audio.channels = 1;
-  config->audio.buffer_size = 1024;
 
   return NAILA_OK;
 }
@@ -126,7 +126,7 @@ naila_err_t config_manager_validate(const naila_config_t *config) {
       "WiFi SSID is empty");
   NAILA_CHECK(strlen(config->wifi.ssid) < 32, TAG, NAILA_ERR_INVALID_ARG,
       "WiFi SSID too long");
-  NAILA_CHECK(config->wifi.max_retry > 0 && config->wifi.max_retry <= 10, TAG,
+  NAILA_CHECK(config->wifi.max_retry > 0 && config->wifi.max_retry <= 100, TAG,
       NAILA_ERR_INVALID_ARG, "WiFi max_retry out of range");
 
   // Validate MQTT config
@@ -142,12 +142,6 @@ naila_err_t config_manager_validate(const naila_config_t *config) {
       "Tensor arena size too small");
   NAILA_CHECK(config->ai.inference_timeout_ms > 0, TAG, NAILA_ERR_INVALID_ARG,
       "Invalid inference timeout");
-
-  // Validate audio config
-  NAILA_CHECK(config->audio.sample_rate > 0, TAG, NAILA_ERR_INVALID_ARG,
-      "Invalid sample rate");
-  NAILA_CHECK(config->audio.channels > 0 && config->audio.channels <= 2, TAG,
-      NAILA_ERR_INVALID_ARG, "Invalid channel count");
 
   return NAILA_OK;
 }

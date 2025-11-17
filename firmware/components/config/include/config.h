@@ -32,21 +32,11 @@ typedef struct {
   bool enable_debug;
 } ai_config_t;
 
-// Audio Configuration
-typedef struct {
-  int sample_rate;
-  int bit_depth;
-  int channels;
-  int buffer_size;
-} audio_config_t;
-
 // Main system configuration
 typedef struct {
   naila_wifi_config_t wifi;
   mqtt_config_t mqtt;
   ai_config_t ai;
-  audio_config_t audio;
-  component_info_t info;
 } naila_config_t;
 
 // Configuration manager API
