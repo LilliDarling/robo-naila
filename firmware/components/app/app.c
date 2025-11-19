@@ -7,12 +7,10 @@
 #include <esp_task_wdt.h>
 #include <freertos/semphr.h>
 
-#include "naila_mqtt.h"
+#include "network_manager.h"
 #include "naila_log.h"
-#include "wifi.h"
 #include <string.h>
 
-static TaskHandle_t wifi_task_handle = NULL;
 static TaskHandle_t stats_task_handle = NULL;
 
 static SemaphoreHandle_t state_mutex = NULL;
@@ -24,6 +22,9 @@ static const app_callbacks_t *g_callbacks = NULL;
 static component_state_t g_component_state = COMPONENT_STATE_UNINITIALIZED;
 static app_state_t g_app_state = APP_STATE_INITIALIZING;
 static app_stats_t g_stats = {0};
+
+// Forward declaration
+static void on_network_event(network_event_t event);
 
 
 static const char *app_state_to_string(app_state_t state) {
@@ -77,6 +78,8 @@ naila_err_t app_manager_init(const app_callbacks_t *callbacks) {
   stats_mutex = xSemaphoreCreateMutex();
   if (!stats_mutex) {
     NAILA_LOGE(TAG, "Failed to create stats mutex");
+    vSemaphoreDelete(state_mutex);
+    state_mutex = NULL;
     return NAILA_ERR_NO_MEMORY;
   }
 
@@ -85,10 +88,29 @@ naila_err_t app_manager_init(const app_callbacks_t *callbacks) {
   g_callbacks = callbacks;
 
   // Initialize configuration manager
-  NAILA_PROPAGATE_ERROR(config_manager_init(), TAG, "config manager init");
+  naila_err_t result = config_manager_init();
+  if (result != NAILA_OK) {
+    vSemaphoreDelete(state_mutex);
+    vSemaphoreDelete(stats_mutex);
+    state_mutex = NULL;
+    stats_mutex = NULL;
+    NAILA_LOG_ERROR(TAG, result, "Error in config manager init: config_manager_init()");
+    return result;
+  }
 
-  // Initialize WiFi manager
-  NAILA_PROPAGATE_ERROR(wifi_init(), TAG, "wifi init");
+  // Initialize network manager (WiFi + MQTT)
+  network_config_t network_config = {
+    .callback = on_network_event
+  };
+  result = network_manager_init(&network_config);
+  if (result != NAILA_OK) {
+    vSemaphoreDelete(state_mutex);
+    vSemaphoreDelete(stats_mutex);
+    state_mutex = NULL;
+    stats_mutex = NULL;
+    NAILA_LOG_ERROR(TAG, result, "Error in network manager init: network_manager_init()");
+    return result;
+  }
 
   // Initialize statistics
   memset(&g_stats, 0, sizeof(app_stats_t));
@@ -99,65 +121,59 @@ naila_err_t app_manager_init(const app_callbacks_t *callbacks) {
   return NAILA_OK;
 }
 
-// WiFi event callbacks for the app_manager
-static void on_wifi_connected(void) {
-  NAILA_LOGI(TAG, "WiFi connected callback triggered");
-  app_manager_set_state(APP_STATE_SERVICES_STARTING);
+// Network event callback for the app_manager
+static void on_network_event(network_event_t event) {
+  switch (event) {
+    case NETWORK_EVENT_WIFI_CONNECTED:
+      NAILA_LOGI(TAG, "Network event: WiFi connected");
+      app_manager_set_state(APP_STATE_SERVICES_STARTING);
+      if (g_callbacks && g_callbacks->on_wifi_connected) {
+        g_callbacks->on_wifi_connected();
+      }
+      break;
 
-  // Initialize MQTT after WiFi connection
-  const naila_config_t *config = config_manager_get();
-  naila_err_t result = naila_mqtt_init(&config->mqtt);
-  if (result == NAILA_OK) {
-    NAILA_LOGI(TAG, "MQTT initialized after WiFi connection");
-    app_manager_set_state(APP_STATE_RUNNING);
-  } else {
-    NAILA_LOGE(TAG, "MQTT initialization failed");
-    app_manager_set_state(APP_STATE_ERROR);
-  }
+    case NETWORK_EVENT_MQTT_CONNECTED:
+      NAILA_LOGI(TAG, "Network event: MQTT connected");
+      break;
 
-  if (g_callbacks && g_callbacks->on_wifi_connected) {
-    g_callbacks->on_wifi_connected();
+    case NETWORK_EVENT_CONTROL_PLANE_READY:
+      NAILA_LOGI(TAG, "Network event: Control plane ready (WiFi + MQTT)");
+      app_manager_set_state(APP_STATE_RUNNING);
+      break;
+
+    case NETWORK_EVENT_WIFI_DISCONNECTED:
+      NAILA_LOGI(TAG, "Network event: WiFi disconnected");
+      mutex_execute(stats_mutex, ^(void* ctx) {
+        g_stats.wifi_reconnect_count++;
+        return NAILA_OK;
+      }, NULL);
+      app_manager_set_state(APP_STATE_WIFI_CONNECTING);
+      if (g_callbacks && g_callbacks->on_wifi_disconnected) {
+        g_callbacks->on_wifi_disconnected();
+      }
+      break;
+
+    case NETWORK_EVENT_MQTT_DISCONNECTED:
+      NAILA_LOGI(TAG, "Network event: MQTT disconnected");
+      break;
+
+    case NETWORK_EVENT_ERROR:
+      NAILA_LOGE(TAG, "Network event: Error");
+      mutex_execute(stats_mutex, ^(void* ctx) {
+        g_stats.error_count++;
+        return NAILA_OK;
+      }, NULL);
+      app_manager_set_state(APP_STATE_ERROR);
+      if (g_callbacks && g_callbacks->on_error) {
+        g_callbacks->on_error(NAILA_FAIL);
+      }
+      break;
+
+    default:
+      NAILA_LOGW(TAG, "Unknown network event: %d", event);
+      break;
   }
 }
-
-static void on_wifi_disconnected(void) {
-  mutex_execute(stats_mutex, ^(void* ctx) {
-    g_stats.wifi_reconnect_count++;
-    return NAILA_OK;
-  }, NULL);
-
-  app_manager_set_state(APP_STATE_WIFI_CONNECTING);
-
-  if (g_callbacks && g_callbacks->on_wifi_disconnected) {
-    g_callbacks->on_wifi_disconnected();
-  }
-}
-
-static void on_wifi_error(naila_err_t error) {
-  mutex_execute(stats_mutex, ^(void* ctx) {
-    g_stats.error_count++;
-    return NAILA_OK;
-  }, NULL);
-
-  app_manager_set_state(APP_STATE_ERROR);
-
-  if (g_callbacks && g_callbacks->on_error) {
-    g_callbacks->on_error(error);
-  }
-}
-
-static void on_wifi_state_change(int new_state) {
-  if (new_state == 0) { // Disconnected
-    app_manager_set_state(APP_STATE_WIFI_CONNECTING);
-  }
-}
-
-static const wifi_event_callbacks_t wifi_callbacks = {
-  .on_connected = on_wifi_connected,
-  .on_disconnected = on_wifi_disconnected,
-  .on_error = on_wifi_error,
-  .on_state_change = on_wifi_state_change,
-};
 
 naila_err_t app_manager_start(void) {
   NAILA_LOG_FUNC_ENTER(TAG);
@@ -174,13 +190,8 @@ naila_err_t app_manager_start(void) {
   // TODO: add watchdog task handle to the naila_stats_start_task function
   NAILA_PROPAGATE_ERROR(naila_stats_start_task(&stats_task_handle), TAG, "start stats task");
 
-  NAILA_PROPAGATE_ERROR(
-    // TODO: add watchdog task handle to the wifi_start_task function
-      wifi_start_task(&wifi_callbacks, &wifi_task_handle), TAG, "start wifi task");
-
-  if (wifi_task_handle) {
-    esp_task_wdt_add(wifi_task_handle);
-  }
+  // Start network manager (WiFi + MQTT initialization)
+  NAILA_PROPAGATE_ERROR(network_manager_start(), TAG, "start network manager");
 
   NAILA_LOGI(TAG, "Application started with modular task architecture");
   NAILA_LOG_FUNC_EXIT(TAG);
@@ -195,11 +206,8 @@ naila_err_t app_manager_stop(void) {
       app_manager_set_state(APP_STATE_SHUTDOWN), TAG, "set shutdown state");
 
   // Stop modular tasks
-  wifi_stop_task();
+  network_manager_stop();
   naila_stats_stop_task();
-
-  // Clean shutdown of subsystems
-  wifi_cleanup();
 
   if (state_mutex) {
     vSemaphoreDelete(state_mutex);

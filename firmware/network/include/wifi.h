@@ -19,12 +19,6 @@ naila_err_t wifi_init(void);
 naila_err_t wifi_connect(const wifi_config_simple_t *config);
 bool wifi_is_connected(void);
 naila_err_t wifi_disconnect(void);
-// ADDED: Functions for graceful WiFi cleanup and state reset - can be removed
-// if causing issues
-naila_err_t wifi_cleanup(void);
-naila_err_t wifi_reset_connection_state(void);
-// END ADDED
-naila_err_t wifi_get_info(component_info_t *info);
 
 // Task management functions
 typedef struct {
