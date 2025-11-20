@@ -35,15 +35,12 @@ else()
     message(WARNING "CONFIG_ROBOT_ID not set - using default: naila_robot_001")
 endif()
 
-idf_component_register(SRCS "main.cpp"
+idf_component_register(SRCS "app.c" "main.cpp"
                        INCLUDE_DIRS "."
-                       REQUIRES "common" "app" "config"
-                       PRIV_REQUIRES "esp_wifi"
-                                     "nvs_flash"
+                       REQUIRES "common" "config" "network"
+                       PRIV_REQUIRES "nvs_flash"
                                      "esp_netif"
-                                     "esp_event"
                                      "esp_timer"
-                                     "wifi"
                       )
 
 # Generate WiFi credentials header file

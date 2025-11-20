@@ -27,8 +27,8 @@ static void restart_with_delay(const char* reason) {
 }
 
 // Application callback functions
-static void on_state_change(app_state_t old_state, app_state_t new_state) {
-  NAILA_LOGI(TAG, "Application state changed: %d -> %d", old_state, new_state);
+static void on_state_change(app_state_t new_state) {
+  NAILA_LOGI(TAG, "Application state changed to: %d", new_state);
 }
 
 static void on_wifi_connected(void) {

@@ -26,7 +26,6 @@ typedef struct {
   uint32_t uptime_sec;
   size_t free_heap_bytes;
   size_t min_free_heap_bytes;
-  uint32_t log_messages_sent;
 } system_stats_t;
 
 // Stats monitoring task management
