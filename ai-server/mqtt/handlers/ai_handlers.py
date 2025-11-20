@@ -25,7 +25,7 @@ class AIHandlers(BaseHandler):
 
     def set_llm_service(self, llm_service):
         """Set LLM service for the orchestrator"""
-        self.orchestrator = NAILAOrchestrator(self.mqtt_service, llm_service=llm_service)
+        self.orchestrator = NAILAOrchestrator(self.mqtt_service, llm_service=llm_service, tts_service=self.tts_service, vision_service=self.vision_service)
 
     def set_stt_service(self, stt_service):
         """Set STT service for audio transcription"""
@@ -34,13 +34,14 @@ class AIHandlers(BaseHandler):
     def set_tts_service(self, tts_service):
         """Set TTS service for audio synthesis"""
         self.tts_service = tts_service
-        # Update orchestrator with TTS service
         if hasattr(self.orchestrator, 'set_tts_service'):
             self.orchestrator.set_tts_service(tts_service)
 
     def set_vision_service(self, vision_service):
         """Set Vision service for image analysis"""
         self.vision_service = vision_service
+        if hasattr(self.orchestrator, 'set_vision_service'):
+            self.orchestrator.set_vision_service(vision_service)
 
     def register_handlers(self):
         """Register all AI-related handlers"""
@@ -153,15 +154,13 @@ class AIHandlers(BaseHandler):
         self.mqtt_service.publish_ai_orchestration("main/task", task_data, qos=1)
     
     async def handle_vision_analysis(self, message: MQTTMessage):
-        """Handle computer vision analysis requests from devices"""
+        """Handle computer vision analysis requests from devices - routes through orchestration"""
         if not message.device_id:
             self.logger.warning("Vision message missing device_id")
             return
 
-        # Check if Vision service is available
         if not self.vision_service or not self.vision_service.is_ready:
             self.logger.warning(f"Vision service not available, cannot process image from {message.device_id}")
-            # Publish error message
             error_topic = f"naila/device/{message.device_id}/vision/error"
             error_payload = {
                 "error": "vision_unavailable",
@@ -173,67 +172,28 @@ class AIHandlers(BaseHandler):
             return
 
         try:
-            # Extract image data from message
             image_base64 = message.payload.get("image_data")
-            image_format = message.payload.get("format", "jpeg")
-            query = message.payload.get("query")  # Optional query about the image
+            query = message.payload.get("query", "What do you see?")
 
             if not image_base64:
                 self.logger.error("Vision message missing image_data field")
                 return
 
-            # Decode base64 image data
             image_bytes = base64.b64decode(image_base64)
+            self.logger.info(f"Received image from {message.device_id}: {len(image_bytes)} bytes")
 
-            self.logger.info(f"Received image from {message.device_id}: {len(image_bytes)} bytes, {image_format} format")
-
-            # Analyze the image
-            if query:
-                # Answer specific query about the image
-                answer = await self.vision_service.answer_visual_query(
-                    image=image_bytes,
-                    question=query
-                )
-                scene_analysis = await self.vision_service.analyze_scene(image_bytes)
-
-                self.logger.info(f"Visual query answered: '{query}' -> '{answer}'")
-
-                # Publish vision result
-                vision_result_data = {
-                    "device_id": message.device_id,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "query": query,
-                    "answer": answer,
-                    "description": scene_analysis.description,
-                    "detections": [d.to_dict() for d in scene_analysis.detections],
-                    "object_counts": scene_analysis.object_counts,
-                    "confidence": scene_analysis.confidence,
-                    "inference_time_ms": scene_analysis.inference_time_ms
-                }
-            else:
-                # General scene analysis
-                scene_analysis = await self.vision_service.analyze_scene(image_bytes)
-
-                self.logger.info(f"Scene analyzed: '{scene_analysis.description}'")
-
-                # Publish vision result
-                vision_result_data = {
-                    "device_id": message.device_id,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "description": scene_analysis.description,
-                    "detections": [d.to_dict() for d in scene_analysis.detections],
-                    "object_counts": scene_analysis.object_counts,
-                    "main_objects": scene_analysis.main_objects,
-                    "confidence": scene_analysis.confidence,
-                    "inference_time_ms": scene_analysis.inference_time_ms
-                }
-
-            # Publish to vision result topic
-            self.mqtt_service.publish_ai_processing(
-                f"vision/{message.device_id}",
-                vision_result_data,
-                qos=1
-            )
+            # Route all vision requests through orchestration for consistent handling
+            task_data = {
+                "task_id": f"vision_task_{int(datetime.now(timezone.utc).timestamp() * 1000)}",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "device_id": message.device_id,
+                "input_type": "vision",
+                "query": query,
+                "image_data": image_bytes,
+                "confidence": 1.0,
+                "priority": "normal"
+            }
+            self.mqtt_service.publish_ai_orchestration("main/task", task_data, qos=1)
 
         except Exception as e:
             self.logger.error(f"Error processing image from {message.device_id}: {e}", exc_info=True)

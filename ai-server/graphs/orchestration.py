@@ -15,9 +15,10 @@ logger = get_logger(__name__)
 class NAILAOrchestrationGraph:
     """Main orchestration workflow for NAILA"""
 
-    def __init__(self, llm_service=None, tts_service=None):
+    def __init__(self, llm_service=None, tts_service=None, vision_service=None):
         self.llm_service = llm_service
         self.tts_service = tts_service
+        self.vision_service = vision_service
         self.input_processor = InputProcessor()
         self.response_generator = ResponseGenerator(llm_service=llm_service, tts_service=tts_service)
         self.workflow = self._build_graph()
@@ -26,23 +27,62 @@ class NAILAOrchestrationGraph:
     def _build_graph(self) -> StateGraph:
         """Build the orchestration graph with safe parallel processing"""
         workflow = StateGraph(NAILAState)
-        
+
         # Add nodes
         workflow.add_node("process_input", self._process_input)
         workflow.add_node("retrieve_context", self._retrieve_context)
+        if self.vision_service:
+            workflow.add_node("process_vision", self._process_vision)
         workflow.add_node("generate_response", self._generate_response)
         workflow.add_node("execute_actions", self._execute_actions)
-        
+
         # Define sequential flow (safer than parallel state mutation)
         workflow.set_entry_point("process_input")
-        workflow.add_edge("process_input", "retrieve_context")
-        workflow.add_edge("retrieve_context", "generate_response")  
+        if self.vision_service:
+            workflow.add_edge("process_input", "process_vision")
+            workflow.add_edge("process_vision", "retrieve_context")
+        else:
+            workflow.add_edge("process_input", "retrieve_context")
+        workflow.add_edge("retrieve_context", "generate_response")
         workflow.add_edge("generate_response", "execute_actions")
         workflow.add_edge("execute_actions", END)
-        
+
         return workflow
     
     
+    async def _process_vision(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Process vision input if image data is provided"""
+        if not state.get("image_data"):
+            return state
+        try:
+            image_data = state["image_data"]
+            query = state.get("processed_text")
+            if query:
+                answer = await self.vision_service.answer_visual_query(image_data, query)
+                scene = await self.vision_service.analyze_scene(image_data)
+                state["visual_context"] = {
+                    "answer": answer,
+                    "description": scene.description,
+                    "detections": [d.to_dict() for d in scene.detections],
+                    "object_counts": scene.object_counts,
+                    "main_objects": scene.main_objects,
+                    "confidence": scene.confidence
+                }
+            else:
+                scene = await self.vision_service.analyze_scene(image_data)
+                state["visual_context"] = {
+                    "description": scene.description,
+                    "detections": [d.to_dict() for d in scene.detections],
+                    "object_counts": scene.object_counts,
+                    "main_objects": scene.main_objects,
+                    "confidence": scene.confidence
+                }
+            logger.info("vision_processed", num_detections=len(scene.detections))
+        except Exception as e:
+            logger.error("vision_processing_error", error=str(e), error_type=type(e).__name__)
+            state.setdefault("errors", []).append(f"Vision processing failed: {str(e)}")
+        return state
+
     async def _retrieve_context(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Retrieve additional context safely"""
         device_id = state.get("device_id", "")

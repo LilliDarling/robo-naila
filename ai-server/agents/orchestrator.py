@@ -15,14 +15,18 @@ logger = get_logger(__name__)
 class NAILAOrchestrator:
     """Main orchestrator for NAILA AI system"""
 
-    def __init__(self, mqtt_service=None, llm_service=None, tts_service=None):
-        self.graph = NAILAOrchestrationGraph(llm_service=llm_service, tts_service=tts_service)
+    def __init__(self, mqtt_service=None, llm_service=None, tts_service=None, vision_service=None):
+        self.graph = NAILAOrchestrationGraph(llm_service=llm_service, tts_service=tts_service, vision_service=vision_service)
         self.mqtt_service = mqtt_service
         self.memory = memory_manager
 
     def set_tts_service(self, tts_service):
         """Set TTS service for the orchestration graph"""
-        self.graph = NAILAOrchestrationGraph(llm_service=self.graph.llm_service, tts_service=tts_service)
+        self.graph = NAILAOrchestrationGraph(llm_service=self.graph.llm_service, tts_service=tts_service, vision_service=self.graph.vision_service)
+
+    def set_vision_service(self, vision_service):
+        """Set Vision service for the orchestration graph"""
+        self.graph = NAILAOrchestrationGraph(llm_service=self.graph.llm_service, tts_service=self.graph.tts_service, vision_service=vision_service)
     
     async def process_task(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
         """Process a task from MQTT"""
@@ -40,11 +44,13 @@ class NAILAOrchestrator:
         initial_state = {
             "device_id": device_id,
             "task_id": task_id,
-            "input_type": "text",
-            "raw_input": message_data.get("transcription", ""),
+            "input_type": message_data.get("input_type", "text"),
+            "raw_input": message_data.get("transcription", message_data.get("query", "")),
             "context": context,
             "conversation_history": context.get("recent_exchanges", []),
-            "confidence": message_data.get("confidence", 1.0)
+            "confidence": message_data.get("confidence", 1.0),
+            "image_data": message_data.get("image_data"),
+            "visual_context": None
         }
 
         # Run orchestration graph

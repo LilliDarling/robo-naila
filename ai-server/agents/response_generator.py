@@ -22,20 +22,21 @@ class ResponseGenerator(BaseAgent):
         """Generate context-aware response"""
         start_time = time.time()
         self.log_state(state, "generating")
-        
+
         intent = state.get("intent", "general")
         processed_text = state.get("processed_text", "")
         context = state.get("context", {})
         conversation_history = state.get("conversation_history", [])
         confidence = state.get("confidence", 1.0)
         device_id = state.get("device_id", "")
-        
+        visual_context = state.get("visual_context")
+
         # Check LLM readiness dynamically
         use_llm = self.llm_service is not None and self.llm_service.is_ready
 
         # Generate context-aware response
         response = await self._generate_response(
-            intent, processed_text, context, conversation_history, confidence, use_llm=use_llm
+            intent, processed_text, context, conversation_history, confidence, use_llm=use_llm, visual_context=visual_context
         )
         
         # Add response metadata
@@ -91,9 +92,17 @@ class ResponseGenerator(BaseAgent):
         context: Dict[str, Any],
         history: List[Dict],
         confidence: float,
-        use_llm: bool = False
+        use_llm: bool = False,
+        visual_context: Optional[Dict[str, Any]] = None
     ) -> str:
         """Generate context-aware response with conversation continuity"""
+
+        # Handle visual query responses
+        if visual_context:
+            if visual_context.get("answer"):
+                return visual_context["answer"]
+            elif visual_context.get("description"):
+                return visual_context["description"]
 
         # Handle low confidence inputs
         if confidence < 0.6:
@@ -102,7 +111,7 @@ class ResponseGenerator(BaseAgent):
         # Try LLM generation first if available
         if use_llm:
             try:
-                response = await self._generate_llm_response(text, history)
+                response = await self._generate_llm_response(text, history, visual_context=visual_context)
                 if response:
                     self.logger.info("llm_response_used")
                     return response
@@ -139,13 +148,22 @@ class ResponseGenerator(BaseAgent):
         history: List[Dict],
         timeout: float = 10.0,
         max_retries: int = 3,
+        visual_context: Optional[Dict[str, Any]] = None
     ) -> str:
         """Generate response using LLM with timeout and retry logic"""
         if not self.llm_service or not self.llm_service.is_ready:
             return ""
 
+        # Augment query with visual context if available
+        augmented_query = query
+        if visual_context:
+            visual_info = f"Visual context: {visual_context.get('description', '')}"
+            if visual_context.get("object_counts"):
+                visual_info += f" Objects detected: {visual_context['object_counts']}"
+            augmented_query = f"{visual_info}\n\nUser query: {query}"
+
         # Build chat messages with history
-        messages = self.llm_service.build_chat_messages(query, history)
+        messages = self.llm_service.build_chat_messages(augmented_query, history)
 
         last_exception = None
         for attempt in range(1, max_retries + 1):

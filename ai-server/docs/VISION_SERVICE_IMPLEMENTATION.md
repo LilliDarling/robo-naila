@@ -1015,12 +1015,12 @@ LOG_PERFORMANCE_METRICS = True
 - [x] Topic subscription
 - [x] Handler implementation in `ai_handlers.py`
 
-### Phase 5: Orchestration Integration ⚠️ PARTIAL
+### Phase 5: Orchestration Integration ✅ COMPLETED
 - [x] Vision service integrated into handlers
 - [x] Context available to orchestration
 - [x] End-to-end message flow
-- [ ] Visual context node in LangGraph (future enhancement)
-- [ ] Multimodal LLM queries (future enhancement)
+- [x] Visual context node in LangGraph
+- [x] Multimodal LLM queries (visual context augmented)
 
 ### Phase 6: Server Lifecycle ✅ COMPLETED
 - [x] Add vision loading phase
@@ -1045,11 +1045,12 @@ LOG_PERFORMANCE_METRICS = True
 - [ ] Multi-camera support
 
 ### Phase 9: Testing & Validation ✅ COMPLETED
-- [x] Unit tests written and passing (36/36)
-- [x] Integration tests passing (15/16)
+- [x] Unit tests written and passing (52/52 including orchestration)
+- [x] Integration tests passing (22/22 including vision orchestration)
 - [x] Proper test separation (unit/integration)
 - [x] Mock-based unit tests
 - [x] Real model integration tests
+- [x] Orchestration integration tested end-to-end
 - [x] Manual testing complete
 - [x] Quality meets expectations
 
@@ -1094,10 +1095,58 @@ The vision service has been successfully implemented with the following componen
 - **Hardware Detection**: Automatic CUDA/MPS/CPU selection
 - **Optimization**: Half-precision on GPU, optimized threads on CPU
 
+### Orchestration Integration (Phase 5 - Completed 2025-11-20)
+
+The vision service is now fully integrated into the LangGraph orchestration pipeline:
+
+**Architecture Flow:**
+```
+Device → MQTT → AIHandlers → Orchestrator → LangGraph
+                                              ↓
+                                    [process_input]
+                                              ↓
+                                    [process_vision] ← Vision Service
+                                              ↓
+                                    [retrieve_context]
+                                              ↓
+                                    [generate_response] ← LLM (with visual context)
+                                              ↓
+                                    [execute_actions]
+                                              ↓
+                                           MQTT Response
+```
+
+**Implementation Details:**
+- Vision node conditionally added to LangGraph workflow when vision service available
+- Visual context (detections, descriptions, object counts) flows through state
+- Response generator augments LLM queries with visual information
+- MQTT handlers route all vision requests through orchestration
+- Supports conversational visual queries with memory
+
+**Usage:**
+```python
+# Vision message format
+{
+    "device_id": "naila_001",
+    "image_data": "<base64>",
+    "query": "What do you see?",  # Optional, defaults to "What do you see?"
+}
+
+# Response includes visual context
+{
+    "response_text": "I see 2 people and a dog...",
+    "visual_context": {
+        "description": "I see 2 people and 1 dog in this image.",
+        "detections": [...],
+        "object_counts": {"person": 2, "dog": 1},
+        "confidence": 0.89
+    }
+}
+```
+
 ### Future Enhancements
 
 The following features are documented for future implementation:
-- LLM integration for advanced visual understanding
 - Object tracking across video frames
 - Color detection and analysis
 - Advanced spatial reasoning
@@ -1105,6 +1154,6 @@ The following features are documented for future implementation:
 
 ---
 
-**Last Updated**: 2025-11-11
-**Status**: Production Ready
+**Last Updated**: 2025-11-20
+**Status**: Production Ready - Orchestration Integrated
 **Next Steps**: Monitor performance in production, gather user feedback
