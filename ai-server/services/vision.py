@@ -5,7 +5,6 @@ import base64
 import time
 from dataclasses import dataclass
 from io import BytesIO
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -20,7 +19,7 @@ except ImportError:
 
 from config import vision as vision_config
 from services.base import BaseAIService
-from utils import get_logger
+from utils import ContentHashCache, get_logger
 
 
 logger = get_logger(__name__)
@@ -120,10 +119,15 @@ class SceneAnalysis:
 class VisionService(BaseAIService):
     """Service for object detection and scene understanding"""
 
-    def __init__(self):
+    def __init__(self, cache_size: int = 32, cache_ttl: float = 60.0):
         super().__init__(str(vision_config.MODEL_PATH))
         self.model_name = f"yolov8{vision_config.MODEL_SIZE}"
         self.device_name = None
+        self._scene_cache: ContentHashCache[SceneAnalysis] = ContentHashCache(
+            max_size=cache_size,
+            ttl_seconds=cache_ttl,
+            name="vision_scene_cache"
+        )
 
     def _get_model_type(self) -> str:
         """Get the model type name for logging"""
@@ -439,6 +443,15 @@ class VisionService(BaseAIService):
         Returns:
             SceneAnalysis with description and detected objects
         """
+        # Check cache for bytes input (most common from MQTT)
+        image_bytes: Optional[bytes] = None
+        if isinstance(image, bytes):
+            image_bytes = image
+            cached = self._scene_cache.get_by_content(image_bytes)
+            if cached is not None:
+                logger.debug("scene_cache_hit", cache_stats=self._scene_cache.get_stats())
+                return cached
+
         start_time = time.time()
 
         # Detect objects
@@ -462,7 +475,7 @@ class VisionService(BaseAIService):
 
         inference_time_ms = int((time.time() - start_time) * 1000)
 
-        return SceneAnalysis(
+        scene = SceneAnalysis(
             description=description,
             detections=detection_result.detections,
             object_counts=detection_result.get_object_counts(),
@@ -470,6 +483,13 @@ class VisionService(BaseAIService):
             confidence=avg_confidence,
             inference_time_ms=inference_time_ms
         )
+
+        # Cache result for bytes input
+        if image_bytes is not None:
+            self._scene_cache.put_by_content(image_bytes, scene)
+            logger.debug("scene_cached", cache_stats=self._scene_cache.get_stats())
+
+        return scene
 
     def _generate_description(
         self,
@@ -605,5 +625,6 @@ class VisionService(BaseAIService):
             "device": self.device_name,
             "image_size": vision_config.IMAGE_SIZE,
             "confidence_threshold": vision_config.CONFIDENCE_THRESHOLD,
+            "scene_cache": self._scene_cache.get_stats(),
         })
         return status

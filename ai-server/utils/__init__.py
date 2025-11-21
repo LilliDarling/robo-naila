@@ -1,5 +1,6 @@
 """Utilities package for AI Server"""
 
+from utils.cache import ContentHashCache, LRUCache
 from utils.logging import (
     get_logger,
     setup_logging,
@@ -26,4 +27,6 @@ __all__ = [
     "log_error_with_context",
     "log_model_load",
     "log_config",
+    "LRUCache",
+    "ContentHashCache",
 ]
