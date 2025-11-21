@@ -52,11 +52,31 @@ class TestVisionOrchestration:
 
     @pytest.mark.asyncio
     async def test_orchestration_without_vision_service(self):
-        """Test that orchestration works without vision service"""
+        """Test that orchestration works without vision service
+
+        Vision node is always present in the graph (static topology), but gracefully
+        skips processing when vision service is unavailable.
+        """
         graph = NAILAOrchestrationGraph(vision_service=None)
         assert graph.vision_service is None
-        # Vision node should not be in workflow
-        assert "process_vision" not in [node for node in graph.workflow.nodes]
+        # Vision node is always present (static topology)
+        assert "process_vision" in [node for node in graph.workflow.nodes]
+
+        # But it should gracefully skip processing without errors
+        test_state = {
+            "device_id": "test_device",
+            "task_id": "test_task",
+            "raw_input": "Hello",
+            "processed_text": "Hello",
+            "intent": "greeting",
+            "confidence": 1.0,
+            "context": {},
+            "conversation_history": [],
+            "image_data": None
+        }
+        result = await graph.run(test_state)
+        # Should complete without vision processing
+        assert "visual_context" not in result or result.get("visual_context") is None
 
     @pytest.mark.asyncio
     async def test_vision_processing_with_image_data(self, vision_service, sample_image_bytes):

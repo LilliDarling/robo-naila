@@ -25,24 +25,24 @@ class NAILAOrchestrationGraph:
         self.app = self.workflow.compile()
     
     def _build_graph(self) -> StateGraph:
-        """Build the orchestration graph with safe parallel processing"""
+        """Build the orchestration graph with safe parallel processing
+
+        Graph topology is static - vision node is always included but gracefully
+        handles cases where vision service is unavailable or not needed.
+        """
         workflow = StateGraph(NAILAState)
 
-        # Add nodes
+        # Add all nodes (static topology)
         workflow.add_node("process_input", self._process_input)
+        workflow.add_node("process_vision", self._process_vision)
         workflow.add_node("retrieve_context", self._retrieve_context)
-        if self.vision_service:
-            workflow.add_node("process_vision", self._process_vision)
         workflow.add_node("generate_response", self._generate_response)
         workflow.add_node("execute_actions", self._execute_actions)
 
-        # Define sequential flow (safer than parallel state mutation)
+        # Define sequential flow (static topology)
         workflow.set_entry_point("process_input")
-        if self.vision_service:
-            workflow.add_edge("process_input", "process_vision")
-            workflow.add_edge("process_vision", "retrieve_context")
-        else:
-            workflow.add_edge("process_input", "retrieve_context")
+        workflow.add_edge("process_input", "process_vision")
+        workflow.add_edge("process_vision", "retrieve_context")
         workflow.add_edge("retrieve_context", "generate_response")
         workflow.add_edge("generate_response", "execute_actions")
         workflow.add_edge("execute_actions", END)
@@ -51,15 +51,21 @@ class NAILAOrchestrationGraph:
     
     
     async def _process_vision(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Process vision input if image data is provided"""
-        if not state.get("image_data"):
+        """Process vision input if image data is provided and vision service is available"""
+        # Skip if no vision service or no image data
+        if not self.vision_service or not state.get("image_data"):
             return state
+
         try:
-            image_data = state["image_data"]
+            # Extract and immediately remove image data from state to free memory
+            image_data = state.pop("image_data")
             query = state.get("processed_text")
 
             # Analyze scene once (this performs the expensive YOLOv8 inference)
             scene = await self.vision_service.analyze_scene(image_data, query=query)
+
+            # Release image bytes immediately after processing
+            del image_data
 
             # Serialize scene to visual context
             state["visual_context"] = scene.to_dict()
@@ -73,6 +79,8 @@ class NAILAOrchestrationGraph:
         except Exception as e:
             logger.error("vision_processing_error", error=str(e), error_type=type(e).__name__)
             state.setdefault("errors", []).append(f"Vision processing failed: {str(e)}")
+            # Ensure image data is removed even on error
+            state.pop("image_data", None)
         return state
 
     async def _retrieve_context(self, state: Dict[str, Any]) -> Dict[str, Any]:

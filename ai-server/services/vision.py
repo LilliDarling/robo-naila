@@ -303,7 +303,7 @@ class VisionService(BaseAIService):
         self,
         image: Union[bytes, np.ndarray, str, Image.Image]
     ) -> Tuple[np.ndarray, Tuple[int, int]]:
-        """Preprocess image for inference
+        """Preprocess image for inference with memory-efficient handling
 
         Args:
             image: Input image in various formats
@@ -311,22 +311,32 @@ class VisionService(BaseAIService):
         Returns:
             Tuple of (processed_image, original_size)
         """
+        pil_image = None
+        buffer = None
+
         try:
-            # Convert to PIL Image
+            # Convert to PIL Image with explicit resource management
             if isinstance(image, bytes):
                 # Try to open as raw bytes first, if that fails try base64 decode
                 try:
-                    pil_image = Image.open(BytesIO(image))
+                    buffer = BytesIO(image)
+                    pil_image = Image.open(buffer)
+                    pil_image.load()  # Force load to allow buffer reuse
                 except Exception:
                     # Might be base64-encoded, try decoding
+                    if buffer:
+                        buffer.close()
                     try:
                         image_data = base64.b64decode(image)
-                        pil_image = Image.open(BytesIO(image_data))
+                        buffer = BytesIO(image_data)
+                        pil_image = Image.open(buffer)
+                        pil_image.load()
+                        del image_data  # Free decoded bytes
                     except Exception:
-                        # Re-raise the original PIL error
                         raise
             elif isinstance(image, str):
                 pil_image = Image.open(image)
+                pil_image.load()
             elif isinstance(image, np.ndarray):
                 pil_image = Image.fromarray(image)
             elif isinstance(image, Image.Image):
@@ -334,9 +344,12 @@ class VisionService(BaseAIService):
             else:
                 raise ValueError(f"Unsupported image type: {type(image)}")
 
-            # Convert to RGB if needed
+            # Convert to RGB if needed (creates new image, close old one)
             if pil_image.mode != 'RGB':
-                pil_image = pil_image.convert('RGB')
+                rgb_image = pil_image.convert('RGB')
+                if pil_image is not image:  # Don't close if it was passed in
+                    pil_image.close()
+                pil_image = rgb_image
 
             original_size = pil_image.size  # (width, height)
 
@@ -352,6 +365,16 @@ class VisionService(BaseAIService):
                 error_type=type(e).__name__
             )
             raise
+
+        finally:
+            # Clean up resources
+            if buffer:
+                buffer.close()
+            if pil_image is not None and pil_image is not image:
+                try:
+                    pil_image.close()
+                except Exception:
+                    pass
 
     def _parse_detections(
         self,

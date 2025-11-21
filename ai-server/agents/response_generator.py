@@ -3,8 +3,8 @@
 import asyncio
 import time
 from typing import Any, Dict, List, Optional
-from functools import lru_cache
 from datetime import datetime
+from collections import OrderedDict
 from agents.base import BaseAgent
 
 
@@ -13,8 +13,10 @@ class ResponseGenerator(BaseAgent):
 
     def __init__(self, llm_service=None, tts_service=None):
         super().__init__("response_generator")
-        self._response_cache = {}
+        # Use OrderedDict for LRU cache with O(1) operations
+        self._response_cache = OrderedDict()
         self._cache_ttl = 600  # 10 minutes
+        self._max_cache_size = 200
         self.llm_service = llm_service
         self.tts_service = tts_service
     
@@ -201,26 +203,51 @@ class ResponseGenerator(BaseAgent):
         else:
             return f"Following up on our previous topic, {text.lower()}. Let me help with that."
     
-    @lru_cache(maxsize=128)
     def _get_cached_response(self, cache_key: str) -> Optional[str]:
-        """Get cached response with TTL"""
-        if cache_key in self._response_cache:
-            cached_time, response = self._response_cache[cache_key]
-            if time.time() - cached_time < self._cache_ttl:
-                return response
-            else:
-                del self._response_cache[cache_key]
-        return None
-    
+        """Get cached response with TTL using LRU eviction
+
+        Uses OrderedDict for O(1) get/set/delete operations.
+        """
+        if cache_key not in self._response_cache:
+            return None
+
+        cached_time, response = self._response_cache[cache_key]
+        current_time = time.time()
+
+        # Check if expired
+        if current_time - cached_time >= self._cache_ttl:
+            del self._response_cache[cache_key]
+            return None
+
+        # Move to end (mark as recently used)
+        self._response_cache.move_to_end(cache_key)
+        return response
+
     def _cache_response(self, cache_key: str, response: str):
-        """Cache response with TTL"""
-        # Limit cache size
-        if len(self._response_cache) > 200:
-            oldest_items = sorted(self._response_cache.items(), key=lambda x: x[1][0])[:50]
-            for key, _ in oldest_items:
-                del self._response_cache[key]
-        
-        self._response_cache[cache_key] = (time.time(), response)
+        """Cache response with TTL and LRU eviction
+
+        Uses OrderedDict for efficient LRU cache:
+        - O(1) insertion
+        - O(1) eviction of oldest item
+        - No sorting required
+        """
+        current_time = time.time()
+
+        # If key exists, update and move to end
+        if cache_key in self._response_cache:
+            self._response_cache[cache_key] = (current_time, response)
+            self._response_cache.move_to_end(cache_key)
+            return
+
+        # Evict oldest items if cache is full (LRU eviction)
+        if len(self._response_cache) >= self._max_cache_size:
+            # Remove oldest 25% of items (50 items) in O(1) per item
+            for _ in range(50):
+                if self._response_cache:
+                    self._response_cache.popitem(last=False)  # O(1) operation
+
+        # Add new entry
+        self._response_cache[cache_key] = (current_time, response)
     
     def _personalize_response(self, base_response: str, context: Dict[str, Any]) -> str:
         """Add personalization based on context"""
