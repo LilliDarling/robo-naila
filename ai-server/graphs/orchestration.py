@@ -57,26 +57,18 @@ class NAILAOrchestrationGraph:
         try:
             image_data = state["image_data"]
             query = state.get("processed_text")
+
+            # Analyze scene once (this performs the expensive YOLOv8 inference)
+            scene = await self.vision_service.analyze_scene(image_data, query=query)
+
+            # Serialize scene to visual context
+            state["visual_context"] = scene.to_dict()
+
+            # If there's a query, generate a specific answer using the pre-computed scene
             if query:
-                answer = await self.vision_service.answer_visual_query(image_data, query)
-                scene = await self.vision_service.analyze_scene(image_data)
-                state["visual_context"] = {
-                    "answer": answer,
-                    "description": scene.description,
-                    "detections": [d.to_dict() for d in scene.detections],
-                    "object_counts": scene.object_counts,
-                    "main_objects": scene.main_objects,
-                    "confidence": scene.confidence
-                }
-            else:
-                scene = await self.vision_service.analyze_scene(image_data)
-                state["visual_context"] = {
-                    "description": scene.description,
-                    "detections": [d.to_dict() for d in scene.detections],
-                    "object_counts": scene.object_counts,
-                    "main_objects": scene.main_objects,
-                    "confidence": scene.confidence
-                }
+                answer = await self.vision_service.answer_visual_query(query, scene)
+                state["visual_context"]["answer"] = answer
+
             logger.info("vision_processed", num_detections=len(scene.detections))
         except Exception as e:
             logger.error("vision_processing_error", error=str(e), error_type=type(e).__name__)

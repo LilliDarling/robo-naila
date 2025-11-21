@@ -253,9 +253,12 @@ class TestVisualQueryIntegration:
         try:
             await vision_service.load_model()
 
+            # Analyze scene first
+            scene = await vision_service.analyze_scene(sample_image_bytes)
+
             answer = await vision_service.answer_visual_query(
-                sample_image_bytes,
-                "What do you see?"
+                "What do you see?",
+                scene
             )
 
             # Verify answer
@@ -276,9 +279,12 @@ class TestVisualQueryIntegration:
         try:
             await vision_service.load_model()
 
+            # Analyze scene first
+            scene = await vision_service.analyze_scene(sample_image_bytes)
+
             answer = await vision_service.answer_visual_query(
-                sample_image_bytes,
-                "How many objects are there?"
+                "How many objects are there?",
+                scene
             )
 
             # Verify answer
@@ -297,9 +303,12 @@ class TestVisualQueryIntegration:
         try:
             await vision_service.load_model()
 
+            # Analyze scene first
+            scene = await vision_service.analyze_scene(sample_image_bytes)
+
             answer = await vision_service.answer_visual_query(
-                sample_image_bytes,
-                "Is there a person in the image?"
+                "Is there a person in the image?",
+                scene
             )
 
             # Verify answer

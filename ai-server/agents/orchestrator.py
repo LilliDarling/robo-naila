@@ -22,11 +22,12 @@ class NAILAOrchestrator:
 
     def set_tts_service(self, tts_service):
         """Set TTS service for the orchestration graph"""
-        self.graph = NAILAOrchestrationGraph(llm_service=self.graph.llm_service, tts_service=tts_service, vision_service=self.graph.vision_service)
+        self.graph.tts_service = tts_service
+        self.graph.response_generator.tts_service = tts_service
 
     def set_vision_service(self, vision_service):
         """Set Vision service for the orchestration graph"""
-        self.graph = NAILAOrchestrationGraph(llm_service=self.graph.llm_service, tts_service=self.graph.tts_service, vision_service=vision_service)
+        self.graph.vision_service = vision_service
     
     async def process_task(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
         """Process a task from MQTT"""

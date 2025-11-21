@@ -314,12 +314,17 @@ class VisionService(BaseAIService):
         try:
             # Convert to PIL Image
             if isinstance(image, bytes):
-                # Decode base64 if needed
+                # Try to open as raw bytes first, if that fails try base64 decode
                 try:
-                    image_data = base64.b64decode(image)
-                except:
-                    image_data = image
-                pil_image = Image.open(BytesIO(image_data))
+                    pil_image = Image.open(BytesIO(image))
+                except Exception:
+                    # Might be base64-encoded, try decoding
+                    try:
+                        image_data = base64.b64decode(image)
+                        pil_image = Image.open(BytesIO(image_data))
+                    except Exception:
+                        # Re-raise the original PIL error
+                        raise
             elif isinstance(image, str):
                 pil_image = Image.open(image)
             elif isinstance(image, np.ndarray):
@@ -480,7 +485,7 @@ class VisionService(BaseAIService):
             if count == 1:
                 parts.append(f"1 {obj_name}")
             else:
-                parts.append(f"{count} {obj_name}s" if not obj_name.endswith('s') else f"{count} {obj_name}")
+                parts.append(f"{count} {obj_name}" if obj_name.endswith('s') else f"{count} {obj_name}s")
 
         if len(parts) == 1:
             description = f"I see {parts[0]}"
@@ -510,13 +515,10 @@ class VisionService(BaseAIService):
         if not detections:
             return []
 
-        # Sort by a combination of confidence and size
-        scored_detections = []
-        for det in detections:
-            # Score = confidence * normalized_area
-            score = det.confidence * (det.bbox.area ** 0.5)
-            scored_detections.append((score, det.class_name))
-
+        scored_detections = [
+            (det.confidence * (det.bbox.area**0.5), det.class_name)
+            for det in detections
+        ]
         scored_detections.sort(reverse=True)
 
         # Get unique class names
@@ -533,20 +535,18 @@ class VisionService(BaseAIService):
 
     async def answer_visual_query(
         self,
-        image: Union[bytes, np.ndarray, str, Image.Image],
-        question: str
+        question: str,
+        scene: 'SceneAnalysis'
     ) -> str:
-        """Answer a question about an image
+        """Answer a question about an image using pre-computed scene analysis
 
         Args:
-            image: Input image
             question: Question about the image
+            scene: Pre-computed scene analysis from analyze_scene()
 
         Returns:
             Natural language answer
         """
-        # Analyze the scene
-        scene = await self.analyze_scene(image, query=question)
 
         # For now, use rule-based answering
         # In the future, this can integrate with LLM for more sophisticated answers
@@ -567,17 +567,11 @@ class VisionService(BaseAIService):
         if "is there" in question_lower or "do you see" in question_lower:
             for obj_name in vision_config.COCO_CLASSES:
                 if obj_name in question_lower:
-                    if obj_name in scene.object_counts:
-                        count = scene.object_counts[obj_name]
-                        return f"Yes, I see {count} {obj_name}{'s' if count != 1 else ''}."
-                    else:
+                    if obj_name not in scene.object_counts:
                         return f"No, I don't see any {obj_name}s in the image."
 
-        # What questions
-        if "what do you see" in question_lower or "what's in" in question_lower:
-            return scene.description
-
-        # Default: return description
+                    count = scene.object_counts[obj_name]
+                    return f"Yes, I see {count} {obj_name}{'s' if count != 1 else ''}."
         return scene.description
 
     def get_status(self) -> Dict:

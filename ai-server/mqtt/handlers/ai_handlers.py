@@ -25,7 +25,8 @@ class AIHandlers(BaseHandler):
 
     def set_llm_service(self, llm_service):
         """Set LLM service for the orchestrator"""
-        self.orchestrator = NAILAOrchestrator(self.mqtt_service, llm_service=llm_service, tts_service=self.tts_service, vision_service=self.vision_service)
+        self.orchestrator.graph.llm_service = llm_service
+        self.orchestrator.graph.response_generator.llm_service = llm_service
 
     def set_stt_service(self, stt_service):
         """Set STT service for audio transcription"""
@@ -34,14 +35,12 @@ class AIHandlers(BaseHandler):
     def set_tts_service(self, tts_service):
         """Set TTS service for audio synthesis"""
         self.tts_service = tts_service
-        if hasattr(self.orchestrator, 'set_tts_service'):
-            self.orchestrator.set_tts_service(tts_service)
+        self.orchestrator.set_tts_service(tts_service)
 
     def set_vision_service(self, vision_service):
         """Set Vision service for image analysis"""
         self.vision_service = vision_service
-        if hasattr(self.orchestrator, 'set_vision_service'):
-            self.orchestrator.set_vision_service(vision_service)
+        self.orchestrator.set_vision_service(vision_service)
 
     def register_handlers(self):
         """Register all AI-related handlers"""
@@ -179,6 +178,7 @@ class AIHandlers(BaseHandler):
                 self.logger.error("Vision message missing image_data field")
                 return
 
+            # Decode base64 to raw image bytes
             image_bytes = base64.b64decode(image_base64)
             self.logger.info(f"Received image from {message.device_id}: {len(image_bytes)} bytes")
 

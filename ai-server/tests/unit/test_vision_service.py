@@ -516,10 +516,13 @@ class TestVisualQueryAnsweringWithMocks:
         vision_service.is_ready = True
         vision_service.device_name = 'cpu'
 
+        # Analyze scene first
+        scene = await vision_service.analyze_scene(sample_image_bytes)
+
         # Ask question
         answer = await vision_service.answer_visual_query(
-            sample_image_bytes,
-            "How many people are there?"
+            "How many people are there?",
+            scene
         )
 
         # Verify - the answer should mention 2 objects/people
@@ -546,10 +549,13 @@ class TestVisualQueryAnsweringWithMocks:
         vision_service.is_ready = True
         vision_service.device_name = 'cpu'
 
+        # Analyze scene first
+        scene = await vision_service.analyze_scene(sample_image_bytes)
+
         # Ask question
         answer = await vision_service.answer_visual_query(
-            sample_image_bytes,
-            "Is there a dog?"
+            "Is there a dog?",
+            scene
         )
 
         # Verify
