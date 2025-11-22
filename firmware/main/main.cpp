@@ -11,8 +11,6 @@
 
 #include "app.h"
 #include "common_types.h"
-#include "config.h"
-#include "error_handling.h"
 #include "naila_log.h"
 
 
@@ -40,7 +38,7 @@ static void on_wifi_disconnected(void) {
 }
 
 static void on_error(naila_err_t error) {
-  NAILA_LOGE(TAG, "Application error occurred: %s", naila_err_to_string(error));
+  NAILA_LOGE(TAG, "Application error occurred: 0x%x", error);
 }
 
 static const app_callbacks_t app_callbacks = {

@@ -41,9 +41,9 @@ static void config_manager_load_defaults(naila_config_t *config) {
   config->wifi.timeout_ms = 30000;
 
   // MQTT defaults
-  strncpy(config->mqtt.broker_ip, "10.0.0.117", sizeof(config->mqtt.broker_ip) - 1);
-  config->mqtt.broker_port = 1883;
-  strncpy(config->mqtt.robot_id, "naila_robot_001", sizeof(config->mqtt.robot_id) - 1);
+  strncpy(config->mqtt.broker_ip, CONFIG_MQTT_BROKER_IP, sizeof(config->mqtt.broker_ip) - 1);
+  config->mqtt.broker_port = CONFIG_MQTT_BROKER_PORT;
+  strncpy(config->mqtt.robot_id, CONFIG_ROBOT_ID, sizeof(config->mqtt.robot_id) - 1);
   config->mqtt.keepalive_sec = 60;
   config->mqtt.qos_level = 1;
 
