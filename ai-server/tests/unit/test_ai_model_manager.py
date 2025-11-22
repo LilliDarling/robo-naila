@@ -35,8 +35,7 @@ class TestAIModelManager:
 
     @pytest.fixture
     def manager(self, llm_service, stt_service):
-        manager = AIModelManager(llm_service, stt_service)
-        yield manager
+        yield AIModelManager(llm_service, stt_service)
         # Cleanup any pending async mocks
         if hasattr(llm_service.load_model, 'reset_mock'):
             llm_service.load_model.reset_mock()
