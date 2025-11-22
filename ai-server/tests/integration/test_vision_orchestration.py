@@ -48,7 +48,7 @@ class TestVisionOrchestration:
         """Test that vision node is added when vision service provided"""
         graph = NAILAOrchestrationGraph(vision_service=vision_service)
         # Vision node should be in the workflow
-        assert "process_vision" in [node for node in graph.workflow.nodes]
+        assert "process_vision" in list(graph.workflow.nodes)
 
     @pytest.mark.asyncio
     async def test_orchestration_without_vision_service(self):
