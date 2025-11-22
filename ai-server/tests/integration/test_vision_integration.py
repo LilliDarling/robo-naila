@@ -22,9 +22,7 @@ def vision_service():
 @pytest.fixture
 def sample_image():
     """Create a simple test image"""
-    # Create a simple RGB image (100x100 red square)
-    img = Image.new('RGB', (100, 100), color='red')
-    return img
+    return Image.new('RGB', (100, 100), color='red')
 
 
 @pytest.fixture
