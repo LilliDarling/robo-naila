@@ -17,7 +17,11 @@ class NAILAState(TypedDict):
     intent: Optional[str]
     confidence: float
     context: Dict[str, Any]
-    
+
+    # Vision processing
+    image_data: Optional[bytes]  # Raw image data if provided
+    visual_context: Optional[Dict[str, Any]]  # Vision analysis results
+
     # Response
     response_text: Optional[str]
     

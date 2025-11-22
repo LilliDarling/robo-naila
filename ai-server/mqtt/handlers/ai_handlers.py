@@ -21,10 +21,12 @@ class AIHandlers(BaseHandler):
         self.orchestrator = NAILAOrchestrator(mqtt_service)
         self.stt_service = None
         self.tts_service = None
+        self.vision_service = None
 
     def set_llm_service(self, llm_service):
         """Set LLM service for the orchestrator"""
-        self.orchestrator = NAILAOrchestrator(self.mqtt_service, llm_service=llm_service)
+        self.orchestrator.graph.llm_service = llm_service
+        self.orchestrator.graph.response_generator.llm_service = llm_service
 
     def set_stt_service(self, stt_service):
         """Set STT service for audio transcription"""
@@ -33,9 +35,12 @@ class AIHandlers(BaseHandler):
     def set_tts_service(self, tts_service):
         """Set TTS service for audio synthesis"""
         self.tts_service = tts_service
-        # Update orchestrator with TTS service
-        if hasattr(self.orchestrator, 'set_tts_service'):
-            self.orchestrator.set_tts_service(tts_service)
+        self.orchestrator.set_tts_service(tts_service)
+
+    def set_vision_service(self, vision_service):
+        """Set Vision service for image analysis"""
+        self.vision_service = vision_service
+        self.orchestrator.set_vision_service(vision_service)
 
     def register_handlers(self):
         """Register all AI-related handlers"""
@@ -148,16 +153,50 @@ class AIHandlers(BaseHandler):
         self.mqtt_service.publish_ai_orchestration("main/task", task_data, qos=1)
     
     async def handle_vision_analysis(self, message: MQTTMessage):
-        """Handle computer vision analysis results"""
+        """Handle computer vision analysis requests from devices - routes through orchestration"""
         if not message.device_id:
+            self.logger.warning("Vision message missing device_id")
             return
-        
-        context = await self._get_or_create_conversation_context(message.device_id)
-        context.visual_context = {
-            "objects": message.payload.get("objects_detected", []),
-            "scene": message.payload.get("scene_description", ""),
-            "analyzed_at": message.timestamp
-        }
+
+        if not self.vision_service or not self.vision_service.is_ready:
+            self.logger.warning(f"Vision service not available, cannot process image from {message.device_id}")
+            error_topic = f"naila/device/{message.device_id}/vision/error"
+            error_payload = {
+                "error": "vision_unavailable",
+                "message": "Vision service is currently unavailable. Please try again later.",
+                "device_id": message.device_id,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            await self.mqtt_service.publish(error_topic, error_payload)
+            return
+
+        try:
+            image_base64 = message.payload.get("image_data")
+            query = message.payload.get("query", "What do you see?")
+
+            if not image_base64:
+                self.logger.error("Vision message missing image_data field")
+                return
+
+            # Decode base64 to raw image bytes
+            image_bytes = base64.b64decode(image_base64)
+            self.logger.info(f"Received image from {message.device_id}: {len(image_bytes)} bytes")
+
+            # Route all vision requests through orchestration for consistent handling
+            task_data = {
+                "task_id": f"vision_task_{int(datetime.now(timezone.utc).timestamp() * 1000)}",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "device_id": message.device_id,
+                "input_type": "vision",
+                "query": query,
+                "image_data": image_bytes,
+                "confidence": 1.0,
+                "priority": "normal"
+            }
+            self.mqtt_service.publish_ai_orchestration("main/task", task_data, qos=1)
+
+        except Exception as e:
+            self.logger.error(f"Error processing image from {message.device_id}: {e}", exc_info=True)
     
     async def handle_main_task(self, message: MQTTMessage):
         """Handle main orchestration tasks with LangGraph integration"""

@@ -28,6 +28,10 @@ class ProtocolHandler:
         """Set TTS service for AI handlers"""
         self.ai_handlers.set_tts_service(tts_service)
 
+    def set_vision_service(self, vision_service):
+        """Set Vision service for AI handlers"""
+        self.ai_handlers.set_vision_service(vision_service)
+
     def register_all_handlers(self):
         """Register all protocol handlers with the MQTT service"""
         self.device_handlers.register_handlers()

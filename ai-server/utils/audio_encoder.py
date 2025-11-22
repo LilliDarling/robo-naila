@@ -30,6 +30,20 @@ class AudioEncoder:
     """
 
     @staticmethod
+    def _to_int16(audio_samples: np.ndarray) -> np.ndarray:
+        """Convert float32 audio to int16
+
+        Args:
+            audio_samples: Audio data as numpy array (float32, -1.0 to 1.0)
+
+        Returns:
+            Audio as int16 array
+        """
+        if audio_samples.dtype == np.int16:
+            return audio_samples
+        return (audio_samples * 32767).astype(np.int16)
+
+    @staticmethod
     def encode_wav(audio_samples: np.ndarray, sample_rate: int) -> bytes:
         """Encode audio as WAV format
 
@@ -40,8 +54,8 @@ class AudioEncoder:
         Returns:
             WAV file bytes
         """
-        # Convert float32 to int16
-        audio_int16 = (audio_samples * 32767).astype(np.int16)
+        # Convert to int16
+        audio_int16 = AudioEncoder._to_int16(audio_samples)
 
         # Create WAV file in memory
         wav_buffer = io.BytesIO()
@@ -73,8 +87,8 @@ class AudioEncoder:
             logger.error("pydub_not_installed", format="mp3", suggestion="Run: uv add pydub")
             raise ImportError("pydub is required for MP3 encoding")
 
-        # Convert float32 to int16
-        audio_int16 = (audio_samples * 32767).astype(np.int16)
+        # Convert to int16
+        audio_int16 = AudioEncoder._to_int16(audio_samples)
 
         # Create AudioSegment from raw data
         audio_segment = AudioSegment(
@@ -114,8 +128,8 @@ class AudioEncoder:
             logger.error("pydub_not_installed", format="ogg", suggestion="Run: uv add pydub")
             raise ImportError("pydub is required for OGG encoding")
 
-        # Convert float32 to int16
-        audio_int16 = (audio_samples * 32767).astype(np.int16)
+        # Convert to int16
+        audio_int16 = AudioEncoder._to_int16(audio_samples)
 
         # Create AudioSegment from raw data
         audio_segment = AudioSegment(
@@ -146,8 +160,8 @@ class AudioEncoder:
         Returns:
             Raw PCM bytes (int16)
         """
-        # Convert float32 to int16
-        audio_int16 = (audio_samples * 32767).astype(np.int16)
+        # Convert to int16
+        audio_int16 = AudioEncoder._to_int16(audio_samples)
         return audio_int16.tobytes()
 
     @staticmethod

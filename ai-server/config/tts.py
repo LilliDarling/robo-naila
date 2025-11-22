@@ -53,6 +53,8 @@ OGG_QUALITY = int(os.getenv("TTS_OGG_QUALITY", "6"))  # 0-10
 ENABLE_GPU = os.getenv("TTS_ENABLE_GPU", "false").lower() == "true"
 THREADS = int(os.getenv("TTS_THREADS", "2"))
 CACHE_COMMON_PHRASES = os.getenv("TTS_CACHE_COMMON_PHRASES", "true").lower() == "true"
+CACHE_INCLUDES_PARAMETERS = os.getenv("TTS_CACHE_INCLUDES_PARAMETERS", "true").lower() == "true"
+MAX_CACHED_PHRASES = int(os.getenv("TTS_MAX_CACHED_PHRASES", "256"))
 
 # Text Processing
 NORMALIZE_NUMBERS = os.getenv("TTS_NORMALIZE_NUMBERS", "true").lower() == "true"
