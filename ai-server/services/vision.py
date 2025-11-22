@@ -249,9 +249,21 @@ class VisionService(BaseAIService):
         start_time = time.time()
 
         # Set parameters
-        conf_threshold = confidence or vision_config.CONFIDENCE_THRESHOLD
-        iou_thresh = iou_threshold or vision_config.IOU_THRESHOLD
-        max_det = max_detections or vision_config.MAX_DETECTIONS
+        conf_threshold = (
+            confidence
+            if confidence is not None
+            else vision_config.CONFIDENCE_THRESHOLD
+        )
+        iou_thresh = (
+            iou_threshold
+            if iou_threshold is not None
+            else vision_config.IOU_THRESHOLD
+        )
+        max_det = (
+            max_detections
+            if max_detections is not None
+            else vision_config.MAX_DETECTIONS
+        )
 
         try:
             # Preprocess image
