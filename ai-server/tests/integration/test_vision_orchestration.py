@@ -60,7 +60,7 @@ class TestVisionOrchestration:
         graph = NAILAOrchestrationGraph(vision_service=None)
         assert graph.vision_service is None
         # Vision node is always present (static topology)
-        assert "process_vision" in [node for node in graph.workflow.nodes]
+        assert "process_vision" in list(graph.workflow.nodes)
 
         # But it should gracefully skip processing without errors
         test_state = {
