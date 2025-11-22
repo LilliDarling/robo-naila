@@ -40,9 +40,7 @@ def real_test_image():
     """Path to a real test image if available"""
     # You can place a test image in tests/fixtures/
     test_image_path = Path(__file__).parent.parent / "fixtures" / "test_image.jpg"
-    if test_image_path.exists():
-        return str(test_image_path)
-    return None
+    return str(test_image_path) if test_image_path.exists() else None
 
 
 class TestVisionServiceModelLoading:
