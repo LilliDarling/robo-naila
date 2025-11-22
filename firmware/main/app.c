@@ -1,6 +1,5 @@
 #include "app.h"
 #include "config.h"
-#include "error_handling.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include <esp_task_wdt.h>
@@ -29,10 +28,6 @@ static SemaphoreHandle_t g_app_mutex = NULL;
 static void on_network_event(network_event_t event);
 
 naila_err_t app_manager_init(const app_callbacks_t *callbacks) {
-  NAILA_LOG_FUNC_ENTER(TAG);
-
-  NAILA_CHECK_NULL(callbacks, TAG, "Callbacks pointer is null");
-
   // Create mutex on first init (never delete it)
   if (!g_app_mutex) {
     g_app_mutex = xSemaphoreCreateMutex();
@@ -89,7 +84,6 @@ naila_err_t app_manager_init(const app_callbacks_t *callbacks) {
   }
 
   NAILA_LOGI(TAG, "Application manager initialized");
-  NAILA_LOG_FUNC_EXIT(TAG);
   return NAILA_OK;
 }
 
@@ -173,8 +167,6 @@ static void on_network_event(network_event_t event) {
 }
 
 naila_err_t app_manager_start(void) {
-  NAILA_LOG_FUNC_ENTER(TAG);
-
   bool is_initialized = false;
   if (!g_app_mutex || xSemaphoreTake(g_app_mutex, portMAX_DELAY) != pdTRUE) {
     NAILA_LOGE(TAG, "Failed to acquire mutex in start");
@@ -196,23 +188,18 @@ naila_err_t app_manager_start(void) {
     return (naila_err_t)wdt_result;
   }
 
-  // Start system stats monitoring task (heap watermark tracking - non-critical)
-  naila_err_t stats_result = naila_stats_start_task();
-  if (stats_result != NAILA_OK) {
-    NAILA_LOGW(TAG, "Stats monitoring task failed to start (non-critical): 0x%x", stats_result);
+  // Start network manager (WiFi + MQTT initialization)
+  naila_err_t err = network_manager_start();
+  if (err != NAILA_OK) {
+    NAILA_LOGE(TAG, "Failed to start network manager: 0x%x", err);
+    return err;
   }
 
-  // Start network manager (WiFi + MQTT initialization)
-  NAILA_PROPAGATE_ERROR(network_manager_start(), TAG, "start network manager");
-
-  NAILA_LOGI(TAG, "Application started with modular task architecture");
-  NAILA_LOG_FUNC_EXIT(TAG);
+  NAILA_LOGI(TAG, "Application started");
   return NAILA_OK;
 }
 
 naila_err_t app_manager_stop(void) {
-  NAILA_LOG_FUNC_ENTER(TAG);
-
   if (!g_app_mutex) {
     return NAILA_OK;
   }
@@ -232,12 +219,10 @@ naila_err_t app_manager_stop(void) {
   g_app.state = APP_STATE_SHUTDOWN;
   xSemaphoreGive(g_app_mutex);
 
-  // Stop modular tasks
+  // Stop network manager
   network_manager_stop();
-  naila_stats_stop_task();
 
-  NAILA_LOGI(TAG, "Application stopped cleanly");
-  NAILA_LOG_FUNC_EXIT(TAG);
+  NAILA_LOGI(TAG, "Application stopped");
   return NAILA_OK;
 }
 

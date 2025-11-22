@@ -2,7 +2,6 @@
 #include "wifi.h"
 #include "mqtt_client.h"
 #include "config.h"
-#include "error_handling.h"
 #include "naila_log.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -26,10 +25,6 @@ static void on_wifi_lost(void);
 static void on_wifi_error(naila_err_t error);
 
 naila_err_t network_manager_init(network_config_t* config) {
-    NAILA_LOG_FUNC_ENTER(TAG);
-
-    NAILA_CHECK_NULL(config, TAG, "Config pointer is null");
-
     // Create mutex on first init
     if (!g_state_mutex) {
         g_state_mutex = xSemaphoreCreateMutex();
@@ -61,13 +56,10 @@ naila_err_t network_manager_init(network_config_t* config) {
     }
 
     NAILA_LOGI(TAG, "Network manager initialized");
-    NAILA_LOG_FUNC_EXIT(TAG);
     return NAILA_OK;
 }
 
 naila_err_t network_manager_start(void) {
-    NAILA_LOG_FUNC_ENTER(TAG);
-
     bool is_initialized = false;
     if (xSemaphoreTake(g_state_mutex, portMAX_DELAY)) {
         is_initialized = g_network.initialized;
@@ -91,16 +83,17 @@ naila_err_t network_manager_start(void) {
         .on_state_change = NULL
     };
 
-    NAILA_PROPAGATE_ERROR(wifi_start_task(&wifi_cb), TAG, "wifi start task");
+    naila_err_t err = wifi_start_task(&wifi_cb);
+    if (err != NAILA_OK) {
+        NAILA_LOGE(TAG, "Failed to start WiFi task: 0x%x", err);
+        return err;
+    }
 
     NAILA_LOGI(TAG, "Network manager started");
-    NAILA_LOG_FUNC_EXIT(TAG);
     return NAILA_OK;
 }
 
 naila_err_t network_manager_stop(void) {
-    NAILA_LOG_FUNC_ENTER(TAG);
-
     if (!g_state_mutex) {
         return NAILA_OK;
     }
@@ -122,7 +115,6 @@ naila_err_t network_manager_stop(void) {
     wifi_stop_task();
 
     NAILA_LOGI(TAG, "Network manager stopped");
-    NAILA_LOG_FUNC_EXIT(TAG);
     return NAILA_OK;
 }
 

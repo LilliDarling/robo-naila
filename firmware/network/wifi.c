@@ -1,6 +1,5 @@
 #include "wifi.h"
 #include "config.h"
-#include "error_handling.h"
 #include "naila_log.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -113,8 +112,6 @@ static void event_handler(void *arg __attribute__((unused)),
 }
 
 naila_err_t wifi_init(void) {
-  NAILA_LOG_FUNC_ENTER(TAG);
-
   if (!wifi_mutex) {
     wifi_mutex = xSemaphoreCreateMutex();
     if (!wifi_mutex) {
@@ -175,13 +172,10 @@ naila_err_t wifi_init(void) {
   }
 
   NAILA_LOGI(TAG, "WiFi initialized");
-  NAILA_LOG_FUNC_EXIT(TAG);
   return NAILA_OK;
 }
 
 naila_err_t wifi_connect(const wifi_config_simple_t *config) {
-  NAILA_CHECK_NULL(config, TAG, "Config pointer is null");
-
   if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
     if (!g_wifi.initialized) {
       xSemaphoreGive(wifi_mutex);
@@ -368,8 +362,6 @@ static void wifi_reconnection_task(void *pvParameters __attribute__((unused))) {
 }
 
 naila_err_t wifi_start_task(const wifi_event_callbacks_t *callbacks) {
-  NAILA_LOG_FUNC_ENTER(TAG);
-
   if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
     if (!g_wifi.initialized) {
       xSemaphoreGive(wifi_mutex);
@@ -393,19 +385,15 @@ naila_err_t wifi_start_task(const wifi_event_callbacks_t *callbacks) {
     naila_err_t result = wifi_connect(&wifi_cfg);
     if (result != NAILA_OK && !wifi_is_connected()) {
       NAILA_LOGI(TAG, "WiFi task started (reconnection mode)");
-      NAILA_LOG_FUNC_EXIT(TAG);
       return start_reconnection_task();
     }
   }
 
   NAILA_LOGI(TAG, "WiFi task started");
-  NAILA_LOG_FUNC_EXIT(TAG);
   return NAILA_OK;
 }
 
 naila_err_t wifi_stop_task(void) {
-  NAILA_LOG_FUNC_ENTER(TAG);
-
   TaskHandle_t task_to_stop = NULL;
 
   if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
@@ -438,7 +426,6 @@ naila_err_t wifi_stop_task(void) {
     }
   }
 
-  NAILA_LOG_FUNC_EXIT(TAG);
   return NAILA_OK;
 }
 

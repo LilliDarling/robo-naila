@@ -1,5 +1,4 @@
 #include "mqtt_client.h"
-#include "error_handling.h"
 #include "naila_log.h"
 #include <stdio.h>
 #include <string.h>
@@ -107,10 +106,6 @@ static void mqtt_event_handler(void* handler_args __attribute__((unused)),
 }
 
 naila_err_t mqtt_client_init(const mqtt_config_t* config) {
-    NAILA_LOG_FUNC_ENTER(TAG);
-
-    NAILA_CHECK_NULL(config, TAG, "Config pointer is null");
-
     // Create mutex on first init
     if (!mqtt_mutex) {
         mqtt_mutex = xSemaphoreCreateMutex();
@@ -176,14 +171,10 @@ naila_err_t mqtt_client_init(const mqtt_config_t* config) {
     }
 
     NAILA_LOGI(TAG, "MQTT client initialized");
-    NAILA_LOG_FUNC_EXIT(TAG);
     return NAILA_OK;
 }
 
 naila_err_t mqtt_client_publish(const char* topic, const char* data, int len, int qos) {
-    NAILA_CHECK_NULL(topic, TAG, "Topic is null");
-    NAILA_CHECK_NULL(data, TAG, "Data is null");
-
     if (!mqtt_client_is_connected()) {
         NAILA_LOGW(TAG, "MQTT client not connected");
         return NAILA_ERR_INVALID_ARG;
@@ -204,8 +195,6 @@ naila_err_t mqtt_client_publish(const char* topic, const char* data, int len, in
 }
 
 naila_err_t mqtt_client_subscribe(const char* topic, int qos) {
-    NAILA_CHECK_NULL(topic, TAG, "Topic is null");
-
     if (!mqtt_client_is_connected()) {
         NAILA_LOGW(TAG, "MQTT client not connected");
         return NAILA_ERR_INVALID_ARG;
@@ -242,8 +231,6 @@ bool mqtt_client_is_connected(void) {
 }
 
 naila_err_t mqtt_client_stop(void) {
-    NAILA_LOG_FUNC_ENTER(TAG);
-
     if (!mqtt_mutex) {
         return NAILA_OK;
     }
@@ -275,6 +262,5 @@ naila_err_t mqtt_client_stop(void) {
     }
 
     NAILA_LOGI(TAG, "MQTT client stopped");
-    NAILA_LOG_FUNC_EXIT(TAG);
     return NAILA_OK;
 }

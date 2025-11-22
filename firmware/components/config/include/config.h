@@ -40,14 +40,9 @@ typedef struct {
 } naila_config_t;
 
 // Configuration manager API
+// NOTE: Config is immutable after init. To change config, save to NVS then esp_restart().
 naila_err_t config_manager_init(void);
-naila_err_t config_manager_load_defaults(naila_config_t *config);
-naila_err_t config_manager_load_from_nvs(naila_config_t *config);
-naila_err_t config_manager_save_to_nvs(const naila_config_t *config);
-naila_err_t config_manager_validate(const naila_config_t *config);
-const naila_config_t *config_manager_get(void);
-naila_err_t config_manager_update_wifi(const naila_wifi_config_t *wifi_config);
-naila_err_t config_manager_update_mqtt(const mqtt_config_t *mqtt_config);
+const naila_config_t *config_manager_get(void);  // Returns pointer to immutable config
 
 #ifdef __cplusplus
 }
