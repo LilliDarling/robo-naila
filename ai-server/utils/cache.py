@@ -53,10 +53,15 @@ class LRUCache(Generic[T]):
     def put(self, key: str, value: T) -> None:
         """Cache a value."""
         with self._lock:
-            # Remove oldest if at capacity
-            while len(self._cache) >= self._max_size:
-                self._cache.popitem(last=False)
-            self._cache[key] = (value, time.time())
+            if key in self._cache:
+                # Update existing key and mark as most recently used
+                self._cache[key] = (value, time.time())
+                self._cache.move_to_end(key)
+            else:
+                # Remove oldest if at capacity before inserting new key
+                while len(self._cache) >= self._max_size:
+                    self._cache.popitem(last=False)
+                self._cache[key] = (value, time.time())
 
     def get_or_compute(self, key: str, compute_fn: Callable[[], T]) -> T:
         """Get cached value or compute and cache it.
