@@ -241,10 +241,14 @@ class ResponseGenerator(BaseAgent):
 
         # Evict oldest items if cache is full (LRU eviction)
         if len(self._response_cache) >= self._max_cache_size:
-            # Remove oldest 25% of items (50 items) in O(1) per item
-            for _ in range(50):
-                if self._response_cache:
-                    self._response_cache.popitem(last=False)  # O(1) operation
+            # Remove oldest 25% of items (scaled with max cache size) in O(1) per item
+            eviction_count = max(1, self._max_cache_size // 4)
+            # Ensure we don't try to evict more items than currently in the cache
+            eviction_count = min(eviction_count, len(self._response_cache))
+
+            for _ in range(eviction_count):
+                # popitem(last=False) removes the least recently used (oldest) item in O(1)
+                self._response_cache.popitem(last=False)
 
         # Add new entry
         self._response_cache[cache_key] = (current_time, response)
