@@ -7,17 +7,14 @@
 static const char *TAG = "CONFIG_MANAGER";
 static const char *NVS_NAMESPACE = "naila_config";
 static naila_config_t g_config;
-static bool g_initialized = false;
+
+// Forward declarations
+static void config_manager_load_defaults(naila_config_t *config);
+static naila_err_t config_manager_load_from_nvs(naila_config_t *config);
 
 naila_err_t config_manager_init(void) {
-  if (g_initialized) {
-    return NAILA_ERR_ALREADY_INITIALIZED;
-  }
-
-  // Load defaults first
   config_manager_load_defaults(&g_config);
 
-  // Try to load from NVS (optional - falls back to defaults if not found)
   naila_err_t nvs_result = config_manager_load_from_nvs(&g_config);
   if (nvs_result == NAILA_OK) {
     NAILA_LOGI(TAG, "Loaded configuration from NVS");
@@ -25,7 +22,6 @@ naila_err_t config_manager_init(void) {
     NAILA_LOGI(TAG, "Using default configuration");
   }
 
-  g_initialized = true;
   NAILA_LOGI(TAG, "Config manager initialized");
   return NAILA_OK;
 }
@@ -84,9 +80,5 @@ static naila_err_t config_manager_load_from_nvs(naila_config_t *config) {
 }
 
 const naila_config_t *config_manager_get(void) {
-  if (!g_initialized) {
-    NAILA_LOGE(TAG, "Config manager not initialized");
-    return NULL;
-  }
   return &g_config;
 }
