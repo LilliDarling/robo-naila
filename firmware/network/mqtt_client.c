@@ -1,5 +1,6 @@
 #include "mqtt_client.h"
 #include "naila_log.h"
+#include "mutex_helpers.h"
 #include <stdio.h>
 #include <string.h>
 #include <freertos/semphr.h>
@@ -31,18 +32,16 @@ static void mqtt_event_handler(void* handler_args __attribute__((unused)),
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED:
             NAILA_LOGI(TAG, "Successfully connected to MQTT broker");
-            if (xSemaphoreTake(mqtt_mutex, portMAX_DELAY)) {
+            MUTEX_LOCK_VOID(mqtt_mutex, TAG) {
                 connected = true;
-                xSemaphoreGive(mqtt_mutex);
-            }
+            } MUTEX_UNLOCK_VOID();
             break;
 
         case MQTT_EVENT_DISCONNECTED:
             NAILA_LOGW(TAG, "Disconnected from MQTT broker");
-            if (xSemaphoreTake(mqtt_mutex, portMAX_DELAY)) {
+            MUTEX_LOCK_VOID(mqtt_mutex, TAG) {
                 connected = false;
-                xSemaphoreGive(mqtt_mutex);
-            }
+            } MUTEX_UNLOCK_VOID();
             break;
 
         case MQTT_EVENT_SUBSCRIBED:
@@ -61,10 +60,9 @@ static void mqtt_event_handler(void* handler_args __attribute__((unused)),
             NAILA_LOGI(TAG, "Received message on topic: %.*s", event->topic_len, event->topic);
             if (event->topic_len > 0) {
                 mqtt_message_handler_t handler = NULL;
-                if (xSemaphoreTake(mqtt_mutex, portMAX_DELAY)) {
+                MUTEX_LOCK_VOID(mqtt_mutex, TAG) {
                     handler = message_handler;
-                    xSemaphoreGive(mqtt_mutex);
-                }
+                } MUTEX_UNLOCK_VOID();
 
                 if (handler) {
                     char* topic = malloc(event->topic_len + 1);
@@ -115,15 +113,14 @@ naila_err_t mqtt_client_init(const mqtt_config_t* config) {
         }
     }
 
-    if (xSemaphoreTake(mqtt_mutex, portMAX_DELAY)) {
+    MUTEX_LOCK(mqtt_mutex, TAG) {
         if (initialized) {
             xSemaphoreGive(mqtt_mutex);
             NAILA_LOGW(TAG, "MQTT client already initialized");
             return NAILA_OK;
         }
         initialized = true;
-        xSemaphoreGive(mqtt_mutex);
-    }
+    } MUTEX_UNLOCK();
 
     snprintf(mqtt_uri_buffer, sizeof(mqtt_uri_buffer), "mqtt://%s:%d", config->broker_ip, config->broker_port);
 
@@ -139,10 +136,9 @@ naila_err_t mqtt_client_init(const mqtt_config_t* config) {
     client = esp_mqtt_client_init(&mqtt_cfg);
     if (!client) {
         NAILA_LOGE(TAG, "Failed to initialize MQTT client");
-        if (xSemaphoreTake(mqtt_mutex, portMAX_DELAY)) {
+        MUTEX_LOCK(mqtt_mutex, TAG) {
             initialized = false;
-            xSemaphoreGive(mqtt_mutex);
-        }
+        } MUTEX_UNLOCK();
         return NAILA_FAIL;
     }
 
@@ -151,10 +147,9 @@ naila_err_t mqtt_client_init(const mqtt_config_t* config) {
         NAILA_LOGE(TAG, "Failed to register MQTT event handler: 0x%x", ret);
         esp_mqtt_client_destroy(client);
         client = NULL;
-        if (xSemaphoreTake(mqtt_mutex, portMAX_DELAY)) {
+        MUTEX_LOCK(mqtt_mutex, TAG) {
             initialized = false;
-            xSemaphoreGive(mqtt_mutex);
-        }
+        } MUTEX_UNLOCK();
         return (naila_err_t)ret;
     }
 
@@ -163,10 +158,9 @@ naila_err_t mqtt_client_init(const mqtt_config_t* config) {
         NAILA_LOGE(TAG, "Failed to start MQTT client: 0x%x", ret);
         esp_mqtt_client_destroy(client);
         client = NULL;
-        if (xSemaphoreTake(mqtt_mutex, portMAX_DELAY)) {
+        MUTEX_LOCK(mqtt_mutex, TAG) {
             initialized = false;
-            xSemaphoreGive(mqtt_mutex);
-        }
+        } MUTEX_UNLOCK();
         return (naila_err_t)ret;
     }
 
@@ -215,17 +209,17 @@ naila_err_t mqtt_client_subscribe(const char* topic, int qos) {
 }
 
 void mqtt_client_register_handler(mqtt_message_handler_t handler) {
-    if (xSemaphoreTake(mqtt_mutex, portMAX_DELAY)) {
+    MUTEX_LOCK_VOID(mqtt_mutex, TAG) {
         message_handler = handler;
-        xSemaphoreGive(mqtt_mutex);
-    }
+    } MUTEX_UNLOCK_VOID();
 }
 
 bool mqtt_client_is_connected(void) {
     bool status = false;
-    if (mqtt_mutex && xSemaphoreTake(mqtt_mutex, portMAX_DELAY)) {
-        status = connected;
-        xSemaphoreGive(mqtt_mutex);
+    if (mqtt_mutex) {
+        MUTEX_LOCK_BOOL(mqtt_mutex, TAG) {
+            status = connected;
+        } MUTEX_UNLOCK_BOOL();
     }
     return status;
 }
@@ -235,7 +229,7 @@ naila_err_t mqtt_client_stop(void) {
         return NAILA_OK;
     }
 
-    if (xSemaphoreTake(mqtt_mutex, portMAX_DELAY)) {
+    MUTEX_LOCK(mqtt_mutex, TAG) {
         if (!initialized) {
             xSemaphoreGive(mqtt_mutex);
             return NAILA_OK;
@@ -257,9 +251,7 @@ naila_err_t mqtt_client_stop(void) {
             }
             client = NULL;
         }
-
-        xSemaphoreGive(mqtt_mutex);
-    }
+    } MUTEX_UNLOCK();
 
     NAILA_LOGI(TAG, "MQTT client stopped");
     return NAILA_OK;

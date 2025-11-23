@@ -1,19 +1,17 @@
 #include "wifi.h"
 #include "config.h"
 #include "naila_log.h"
+#include "mutex_helpers.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include <string.h>
 
 static const char *TAG = "WIFI";
 
-#define CONNECTED_BIT BIT0
-#define FAIL_BIT BIT1
 #define WIFI_CONNECT_DELAY_MS 1000
 #define WIFI_DISCONNECT_DELAY_MS 500
 #define WIFI_RECONNECT_TIMEOUT_MS 10000
@@ -24,11 +22,11 @@ static const char *TAG = "WIFI";
 #define WIFI_TASK_STOP_WAIT_DELAY_MS 100
 
 typedef struct {
-    EventGroupHandle_t event_group;
     TaskHandle_t task_handle;
     wifi_event_callbacks_t callbacks;
     bool initialized;
     bool task_should_stop;
+    bool connected;
 } wifi_state_t;
 
 static wifi_state_t g_wifi = {0};
@@ -68,20 +66,15 @@ static void event_handler(void *arg __attribute__((unused)),
         }
 
         bool should_start_task = false;
-        if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
+        MUTEX_LOCK_VOID(wifi_mutex, TAG) {
+          g_wifi.connected = false;
           should_start_task = !g_wifi.task_handle;
-          xSemaphoreGive(wifi_mutex);
-        }
-
-        if (g_wifi.event_group) {
-          xEventGroupClearBits(g_wifi.event_group, CONNECTED_BIT);
-        }
+        } MUTEX_UNLOCK_VOID();
 
         if (should_start_task) {
           naila_err_t result = start_reconnection_task();
-          if (result != NAILA_OK && g_wifi.event_group) {
+          if (result != NAILA_OK) {
             NAILA_LOGE(TAG, "Failed to start reconnection task: 0x%x", result);
-            xEventGroupSetBits(g_wifi.event_group, FAIL_BIT);
           }
         }
         break;
@@ -93,17 +86,13 @@ static void event_handler(void *arg __attribute__((unused)),
   } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
     wifi_event_callbacks_t callbacks = {0};
 
-    if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
+    MUTEX_LOCK_VOID(wifi_mutex, TAG) {
+      g_wifi.connected = true;
       if (g_wifi.task_handle) {
         g_wifi.task_should_stop = true;
       }
       callbacks = g_wifi.callbacks;
-      xSemaphoreGive(wifi_mutex);
-    }
-
-    if (g_wifi.event_group) {
-      xEventGroupSetBits(g_wifi.event_group, CONNECTED_BIT);
-    }
+    } MUTEX_UNLOCK_VOID();
 
     if (callbacks.on_connected) {
       callbacks.on_connected();
@@ -120,36 +109,23 @@ naila_err_t wifi_init(void) {
     }
   }
 
-  if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
+  MUTEX_LOCK(wifi_mutex, TAG) {
     if (g_wifi.initialized) {
       xSemaphoreGive(wifi_mutex);
       NAILA_LOGW(TAG, "WiFi already initialized");
       return NAILA_ERR_ALREADY_INITIALIZED;
     }
     g_wifi.initialized = true;
-    xSemaphoreGive(wifi_mutex);
-  }
-
-  EventGroupHandle_t event_group = xEventGroupCreate();
-  if (!event_group) {
-    if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
-      g_wifi.initialized = false;
-      xSemaphoreGive(wifi_mutex);
-    }
-    NAILA_LOGE(TAG, "Failed to create event group");
-    return NAILA_ERR_NO_MEM;
-  }
+  } MUTEX_UNLOCK();
 
   esp_netif_create_default_wifi_sta();
 
   wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
   esp_err_t err = esp_wifi_init(&cfg);
   if (err != ESP_OK) {
-    vEventGroupDelete(event_group);
-    if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
+    MUTEX_LOCK(wifi_mutex, TAG) {
       g_wifi.initialized = false;
-      xSemaphoreGive(wifi_mutex);
-    }
+    } MUTEX_UNLOCK();
     NAILA_LOGE(TAG, "WiFi init failed: %s", esp_err_to_name(err));
     return (naila_err_t)err;
   }
@@ -166,29 +142,18 @@ naila_err_t wifi_init(void) {
     NAILA_LOGE(TAG, "Failed to register IP event handler: 0x%x", err);
   }
 
-  if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
-    g_wifi.event_group = event_group;
-    xSemaphoreGive(wifi_mutex);
-  }
-
   NAILA_LOGI(TAG, "WiFi initialized");
   return NAILA_OK;
 }
 
 naila_err_t wifi_connect(const wifi_config_simple_t *config) {
-  if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
+  MUTEX_LOCK(wifi_mutex, TAG) {
     if (!g_wifi.initialized) {
       xSemaphoreGive(wifi_mutex);
       NAILA_LOGE(TAG, "WiFi not initialized");
       return NAILA_ERR_NOT_INITIALIZED;
     }
-    xSemaphoreGive(wifi_mutex);
-  }
-
-  if (!g_wifi.event_group) {
-    NAILA_LOGE(TAG, "Event group not available");
-    return NAILA_ERR_NOT_INITIALIZED;
-  }
+  } MUTEX_UNLOCK();
 
   wifi_config_t wifi_config = {
       .sta = {
@@ -208,32 +173,36 @@ naila_err_t wifi_connect(const wifi_config_simple_t *config) {
   esp_wifi_start();
 
   vTaskDelay(pdMS_TO_TICKS(WIFI_CONNECT_DELAY_MS));
-  esp_wifi_connect();
+  esp_err_t err = esp_wifi_connect();
 
-  EventBits_t bits = xEventGroupWaitBits(g_wifi.event_group,
-      CONNECTED_BIT | FAIL_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
+  if (err != ESP_OK) {
+    NAILA_LOGE(TAG, "Failed to initiate WiFi connection: %s", esp_err_to_name(err));
+    return (naila_err_t)err;
+  }
 
-  return (bits & CONNECTED_BIT) ? NAILA_OK : NAILA_ERR_WIFI_NOT_CONNECTED;
+  // Return immediately - connection status will come via callback
+  return NAILA_OK;
 }
 
 bool wifi_is_connected(void) {
-  if (!g_wifi.event_group) {
-    return false;
+  bool connected = false;
+  if (wifi_mutex) {
+    MUTEX_LOCK_BOOL(wifi_mutex, TAG) {
+      connected = g_wifi.connected;
+    } MUTEX_UNLOCK_BOOL();
   }
-
-  EventBits_t bits = xEventGroupGetBits(g_wifi.event_group);
-  return (bits & CONNECTED_BIT) != 0;
+  return connected;
 }
 
 naila_err_t wifi_disconnect(void) {
-  if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
+  MUTEX_LOCK(wifi_mutex, TAG) {
     if (!g_wifi.initialized) {
       xSemaphoreGive(wifi_mutex);
       NAILA_LOGE(TAG, "WiFi not initialized");
       return NAILA_ERR_NOT_INITIALIZED;
     }
-    xSemaphoreGive(wifi_mutex);
-  }
+    g_wifi.connected = false;
+  } MUTEX_UNLOCK();
 
   esp_err_t err = esp_wifi_disconnect();
   if (err != ESP_OK) {
@@ -244,10 +213,6 @@ naila_err_t wifi_disconnect(void) {
 
   esp_wifi_stop();
 
-  if (g_wifi.event_group) {
-    xEventGroupClearBits(g_wifi.event_group, CONNECTED_BIT | FAIL_BIT);
-  }
-
   return NAILA_OK;
 }
 
@@ -255,14 +220,13 @@ static naila_err_t start_reconnection_task(void) {
   bool already_running = false;
   TaskHandle_t new_task_handle = NULL;
 
-  if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
+  MUTEX_LOCK(wifi_mutex, TAG) {
     if (g_wifi.task_handle) {
       already_running = true;
     } else {
       g_wifi.task_should_stop = false;
     }
-    xSemaphoreGive(wifi_mutex);
-  }
+  } MUTEX_UNLOCK();
 
   if (already_running) {
     NAILA_LOGD(TAG, "Reconnection task already running, skipping");
@@ -278,10 +242,9 @@ static naila_err_t start_reconnection_task(void) {
     return NAILA_ERR_NO_MEM;
   }
 
-  if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
+  MUTEX_LOCK(wifi_mutex, TAG) {
     g_wifi.task_handle = new_task_handle;
-    xSemaphoreGive(wifi_mutex);
-  }
+  } MUTEX_UNLOCK();
 
   return NAILA_OK;
 }
@@ -292,23 +255,13 @@ static void wifi_reconnection_task(void *pvParameters __attribute__((unused))) {
     NAILA_LOGE(TAG, "Config unavailable");
 
     wifi_event_callbacks_t callbacks = {0};
-    if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
+    MUTEX_LOCK_VOID(wifi_mutex, TAG) {
       callbacks = g_wifi.callbacks;
       g_wifi.task_handle = NULL;
-      xSemaphoreGive(wifi_mutex);
-    }
+    } MUTEX_UNLOCK_VOID();
 
     if (callbacks.on_error) {
       callbacks.on_error(NAILA_ERR_INVALID_ARG);
-    }
-    vTaskDelete(NULL);
-    return;
-  }
-
-  if (!g_wifi.event_group) {
-    if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
-      g_wifi.task_handle = NULL;
-      xSemaphoreGive(wifi_mutex);
     }
     vTaskDelete(NULL);
     return;
@@ -318,24 +271,31 @@ static void wifi_reconnection_task(void *pvParameters __attribute__((unused))) {
   bool should_stop = false;
 
   while (!should_stop && !wifi_is_connected() && attempt < config->wifi.max_retry) {
-    if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
+    MUTEX_LOCK_VOID(wifi_mutex, TAG) {
       should_stop = g_wifi.task_should_stop;
-      xSemaphoreGive(wifi_mutex);
-    }
+    } MUTEX_UNLOCK_VOID();
 
     if (should_stop) break;
 
     attempt++;
     NAILA_LOGD(TAG, "WiFi connection attempt %d/%d", attempt, config->wifi.max_retry);
 
-    xEventGroupClearBits(g_wifi.event_group, FAIL_BIT);
-
     esp_err_t err = esp_wifi_connect();
     if (err == ESP_OK) {
-      EventBits_t bits = xEventGroupWaitBits(g_wifi.event_group,
-          CONNECTED_BIT | FAIL_BIT, pdFALSE, pdFALSE, pdMS_TO_TICKS(WIFI_RECONNECT_TIMEOUT_MS));
+      // Poll for connection with timeout
+      int elapsed_ms = 0;
+      while (elapsed_ms < WIFI_RECONNECT_TIMEOUT_MS && !wifi_is_connected()) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        elapsed_ms += 100;
 
-      if (bits & CONNECTED_BIT) {
+        // Check if we should stop
+        MUTEX_LOCK_VOID(wifi_mutex, TAG) {
+          should_stop = g_wifi.task_should_stop;
+        } MUTEX_UNLOCK_VOID();
+        if (should_stop) break;
+      }
+
+      if (wifi_is_connected()) {
         NAILA_LOGI(TAG, "WiFi reconnection successful");
         break;
       }
@@ -343,15 +303,16 @@ static void wifi_reconnection_task(void *pvParameters __attribute__((unused))) {
       NAILA_LOGE(TAG, "Failed to initiate connection: %s", esp_err_to_name(err));
     }
 
-    vTaskDelay(pdMS_TO_TICKS(WIFI_RECONNECT_RETRY_DELAY_MS));
+    if (!should_stop) {
+      vTaskDelay(pdMS_TO_TICKS(WIFI_RECONNECT_RETRY_DELAY_MS));
+    }
   }
 
   wifi_event_callbacks_t callbacks = {0};
-  if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
+  MUTEX_LOCK_VOID(wifi_mutex, TAG) {
     callbacks = g_wifi.callbacks;
     g_wifi.task_handle = NULL;
-    xSemaphoreGive(wifi_mutex);
-  }
+  } MUTEX_UNLOCK_VOID();
 
   if (attempt >= config->wifi.max_retry && callbacks.on_error) {
     NAILA_LOGE(TAG, "Max reconnection attempts reached");
@@ -362,7 +323,7 @@ static void wifi_reconnection_task(void *pvParameters __attribute__((unused))) {
 }
 
 naila_err_t wifi_start_task(const wifi_event_callbacks_t *callbacks) {
-  if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
+  MUTEX_LOCK(wifi_mutex, TAG) {
     if (!g_wifi.initialized) {
       xSemaphoreGive(wifi_mutex);
       NAILA_LOGE(TAG, "WiFi not initialized");
@@ -371,8 +332,7 @@ naila_err_t wifi_start_task(const wifi_event_callbacks_t *callbacks) {
     if (callbacks) {
       g_wifi.callbacks = *callbacks;
     }
-    xSemaphoreGive(wifi_mutex);
-  }
+  } MUTEX_UNLOCK();
 
   const naila_config_t *config = config_manager_get();
   if (config && !wifi_is_connected()) {
@@ -396,34 +356,31 @@ naila_err_t wifi_start_task(const wifi_event_callbacks_t *callbacks) {
 naila_err_t wifi_stop_task(void) {
   TaskHandle_t task_to_stop = NULL;
 
-  if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
+  MUTEX_LOCK(wifi_mutex, TAG) {
     if (!g_wifi.task_handle) {
       xSemaphoreGive(wifi_mutex);
       return NAILA_OK;
     }
     g_wifi.task_should_stop = true;
     task_to_stop = g_wifi.task_handle;
-    xSemaphoreGive(wifi_mutex);
-  }
+  } MUTEX_UNLOCK();
 
   int wait_count = 0;
   bool task_still_running = true;
   while (task_still_running && wait_count < WIFI_TASK_STOP_WAIT_ITERATIONS) {
     vTaskDelay(pdMS_TO_TICKS(WIFI_TASK_STOP_WAIT_DELAY_MS));
-    if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
+    MUTEX_LOCK(wifi_mutex, TAG) {
       task_still_running = g_wifi.task_handle;
-      xSemaphoreGive(wifi_mutex);
-    }
+    } MUTEX_UNLOCK();
     wait_count++;
   }
 
   if (task_still_running && task_to_stop) {
     NAILA_LOGW(TAG, "Force deleting reconnection task");
     vTaskDelete(task_to_stop);
-    if (xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
+    MUTEX_LOCK(wifi_mutex, TAG) {
       g_wifi.task_handle = NULL;
-      xSemaphoreGive(wifi_mutex);
-    }
+    } MUTEX_UNLOCK();
   }
 
   return NAILA_OK;
@@ -431,9 +388,10 @@ naila_err_t wifi_stop_task(void) {
 
 bool wifi_is_task_running(void) {
   bool running = false;
-  if (wifi_mutex && xSemaphoreTake(wifi_mutex, portMAX_DELAY)) {
-    running = g_wifi.task_handle;
-    xSemaphoreGive(wifi_mutex);
+  if (wifi_mutex) {
+    MUTEX_LOCK_BOOL(wifi_mutex, TAG) {
+      running = g_wifi.task_handle;
+    } MUTEX_UNLOCK_BOOL();
   }
   return running;
 }
