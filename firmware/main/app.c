@@ -7,6 +7,7 @@
 
 #include "network_manager.h"
 #include "naila_log.h"
+#include "mutex_helpers.h"
 
 static const char *TAG = "APP_MANAGER";
 
@@ -37,31 +38,24 @@ naila_err_t app_manager_init(const app_callbacks_t *callbacks) {
     }
   }
 
-  if (xSemaphoreTake(g_app_mutex, portMAX_DELAY) != pdTRUE) {
-    NAILA_LOGE(TAG, "Failed to acquire mutex in init");
-    return NAILA_FAIL;
-  }
+  MUTEX_LOCK(g_app_mutex, TAG) {
+    if (g_app.initialized) {
+      xSemaphoreGive(g_app_mutex);
+      NAILA_LOGW(TAG, "Application manager already initialized");
+      return NAILA_ERR_ALREADY_INITIALIZED;
+    }
 
-  if (g_app.initialized) {
-    xSemaphoreGive(g_app_mutex);
-    NAILA_LOGW(TAG, "Application manager already initialized");
-    return NAILA_ERR_ALREADY_INITIALIZED;
-  }
-
-  g_app.initialized = true;
-  g_app.callbacks = callbacks;
-  g_app.state = APP_STATE_INITIALIZING;
-  xSemaphoreGive(g_app_mutex);
+    g_app.initialized = true;
+    g_app.callbacks = callbacks;
+    g_app.state = APP_STATE_INITIALIZING;
+  } MUTEX_UNLOCK();
 
   // Initialize configuration manager
   naila_err_t result = config_manager_init();
   if (result != NAILA_OK) {
-    if (xSemaphoreTake(g_app_mutex, portMAX_DELAY) == pdTRUE) {
+    MUTEX_LOCK(g_app_mutex, TAG) {
       g_app.initialized = false;
-      xSemaphoreGive(g_app_mutex);
-    } else {
-      NAILA_LOGW(TAG, "Failed to acquire mutex during config init rollback");
-    }
+    } MUTEX_UNLOCK();
     NAILA_LOG_ERROR(TAG, result, "Error in config manager init: config_manager_init()");
     return result;
   }
@@ -73,12 +67,9 @@ naila_err_t app_manager_init(const app_callbacks_t *callbacks) {
   result = network_manager_init(&network_config);
   if (result != NAILA_OK) {
     // Rollback: reset initialized flag (config manager has no cleanup needed)
-    if (xSemaphoreTake(g_app_mutex, portMAX_DELAY) == pdTRUE) {
+    MUTEX_LOCK(g_app_mutex, TAG) {
       g_app.initialized = false;
-      xSemaphoreGive(g_app_mutex);
-    } else {
-      NAILA_LOGW(TAG, "Failed to acquire mutex during network init rollback");
-    }
+    } MUTEX_UNLOCK();
     NAILA_LOG_ERROR(TAG, result, "Error in network manager init: network_manager_init()");
     return result;
   }
@@ -97,12 +88,8 @@ static void on_network_event(network_event_t event) {
   bool should_call_error = false;
 
   // Acquire mutex once and perform all state updates
-  if (!g_app_mutex || xSemaphoreTake(g_app_mutex, portMAX_DELAY) != pdTRUE) {
-    NAILA_LOGE(TAG, "Failed to acquire mutex in network event callback");
-    return;
-  }
-
-  callbacks = g_app.callbacks;
+  MUTEX_LOCK_VOID(g_app_mutex, TAG) {
+    callbacks = g_app.callbacks;
 
   switch (event) {
     case NETWORK_EVENT_WIFI_CONNECTED:
@@ -146,8 +133,7 @@ static void on_network_event(network_event_t event) {
       NAILA_LOGW(TAG, "Unknown network event: %d", event);
       break;
   }
-
-  xSemaphoreGive(g_app_mutex);
+  } MUTEX_UNLOCK_VOID();
 
   // Call callbacks outside of mutex to prevent deadlocks
   if (callbacks) {
@@ -168,13 +154,9 @@ static void on_network_event(network_event_t event) {
 
 naila_err_t app_manager_start(void) {
   bool is_initialized = false;
-  if (!g_app_mutex || xSemaphoreTake(g_app_mutex, portMAX_DELAY) != pdTRUE) {
-    NAILA_LOGE(TAG, "Failed to acquire mutex in start");
-    return NAILA_FAIL;
-  }
-
-  is_initialized = g_app.initialized;
-  xSemaphoreGive(g_app_mutex);
+  MUTEX_LOCK(g_app_mutex, TAG) {
+    is_initialized = g_app.initialized;
+  } MUTEX_UNLOCK();
 
   if (!is_initialized) {
     NAILA_LOGE(TAG, "Application manager not initialized");
@@ -204,20 +186,16 @@ naila_err_t app_manager_stop(void) {
     return NAILA_OK;
   }
 
-  if (xSemaphoreTake(g_app_mutex, portMAX_DELAY) != pdTRUE) {
-    NAILA_LOGE(TAG, "Failed to acquire mutex in stop");
-    return NAILA_FAIL;
-  }
+  MUTEX_LOCK(g_app_mutex, TAG) {
+    if (!g_app.initialized) {
+      xSemaphoreGive(g_app_mutex);
+      return NAILA_OK;
+    }
 
-  if (!g_app.initialized) {
-    xSemaphoreGive(g_app_mutex);
-    return NAILA_OK;
-  }
-
-  g_app.initialized = false;
-  g_app.callbacks = NULL;
-  g_app.state = APP_STATE_SHUTDOWN;
-  xSemaphoreGive(g_app_mutex);
+    g_app.initialized = false;
+    g_app.callbacks = NULL;
+    g_app.state = APP_STATE_SHUTDOWN;
+  } MUTEX_UNLOCK();
 
   // Stop network manager
   network_manager_stop();
@@ -229,9 +207,10 @@ naila_err_t app_manager_stop(void) {
 app_state_t app_manager_get_state(void) {
   app_state_t state = APP_STATE_ERROR;
 
-  if (g_app_mutex && xSemaphoreTake(g_app_mutex, portMAX_DELAY) == pdTRUE) {
-    state = g_app.state;
-    xSemaphoreGive(g_app_mutex);
+  if (g_app_mutex) {
+    MUTEX_LOCK(g_app_mutex, TAG) {
+      state = g_app.state;
+    } MUTEX_UNLOCK();
   }
 
   return state;
@@ -240,9 +219,10 @@ app_state_t app_manager_get_state(void) {
 bool app_manager_is_running(void) {
   bool running = false;
 
-  if (g_app_mutex && xSemaphoreTake(g_app_mutex, portMAX_DELAY) == pdTRUE) {
-    running = (g_app.state == APP_STATE_RUNNING);
-    xSemaphoreGive(g_app_mutex);
+  if (g_app_mutex) {
+    MUTEX_LOCK_BOOL(g_app_mutex, TAG) {
+      running = (g_app.state == APP_STATE_RUNNING);
+    } MUTEX_UNLOCK_BOOL();
   }
 
   return running;

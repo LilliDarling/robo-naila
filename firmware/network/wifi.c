@@ -15,7 +15,8 @@ static const char *TAG = "WIFI";
 #define WIFI_CONNECT_DELAY_MS 1000
 #define WIFI_DISCONNECT_DELAY_MS 500
 #define WIFI_RECONNECT_TIMEOUT_MS 10000
-#define WIFI_RECONNECT_RETRY_DELAY_MS 5000
+#define WIFI_RECONNECT_INITIAL_DELAY_MS 1000
+#define WIFI_RECONNECT_MAX_DELAY_MS 30000
 #define WIFI_TASK_STACK_SIZE 2048
 #define WIFI_TASK_PRIORITY 5
 #define WIFI_TASK_STOP_WAIT_ITERATIONS 10
@@ -269,6 +270,7 @@ static void wifi_reconnection_task(void *pvParameters __attribute__((unused))) {
 
   int attempt = 0;
   bool should_stop = false;
+  int backoff_delay_ms = WIFI_RECONNECT_INITIAL_DELAY_MS;
 
   while (!should_stop && !wifi_is_connected() && attempt < config->wifi.max_retry) {
     MUTEX_LOCK_VOID(wifi_mutex, TAG) {
@@ -303,8 +305,16 @@ static void wifi_reconnection_task(void *pvParameters __attribute__((unused))) {
       NAILA_LOGE(TAG, "Failed to initiate connection: %s", esp_err_to_name(err));
     }
 
-    if (!should_stop) {
-      vTaskDelay(pdMS_TO_TICKS(WIFI_RECONNECT_RETRY_DELAY_MS));
+    // Exponential backoff with cap
+    if (!should_stop && attempt < config->wifi.max_retry) {
+      NAILA_LOGD(TAG, "Waiting %d ms before next attempt", backoff_delay_ms);
+      vTaskDelay(pdMS_TO_TICKS(backoff_delay_ms));
+
+      // Double the delay for next attempt, but cap at max
+      backoff_delay_ms *= 2;
+      if (backoff_delay_ms > WIFI_RECONNECT_MAX_DELAY_MS) {
+        backoff_delay_ms = WIFI_RECONNECT_MAX_DELAY_MS;
+      }
     }
   }
 

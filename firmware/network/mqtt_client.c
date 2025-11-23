@@ -10,6 +10,7 @@ static const char* TAG = "MQTT_CLIENT";
 // MQTT client configuration constants
 #define MQTT_RECONNECT_TIMEOUT_MS 10000
 #define MQTT_NETWORK_TIMEOUT_MS 10000
+#define MQTT_MAX_TOPIC_LEN 128
 
 static esp_mqtt_client_handle_t client = NULL;
 static mqtt_message_handler_t message_handler = NULL;
@@ -65,15 +66,22 @@ static void mqtt_event_handler(void* handler_args __attribute__((unused)),
                 } MUTEX_UNLOCK_VOID();
 
                 if (handler) {
-                    char* topic = malloc(event->topic_len + 1);
-                    if (topic) {
-                        memcpy(topic, event->topic, event->topic_len);
-                        topic[event->topic_len] = '\0';
-                        handler(topic, event->data, event->data_len);
-                        free(topic);
-                    } else {
-                        NAILA_LOGE(TAG, "Failed to allocate memory for topic (%d bytes)", event->topic_len + 1);
+                    // Use stack-allocated buffer to avoid malloc in event handler
+                    char topic_buf[MQTT_MAX_TOPIC_LEN];
+
+                    if (event->topic_len >= MQTT_MAX_TOPIC_LEN) {
+                        NAILA_LOGE(TAG, "Topic too long (%d bytes, max %d) - truncating",
+                                   event->topic_len, MQTT_MAX_TOPIC_LEN - 1);
                     }
+
+                    int copy_len = (event->topic_len < MQTT_MAX_TOPIC_LEN - 1)
+                                   ? event->topic_len
+                                   : MQTT_MAX_TOPIC_LEN - 1;
+
+                    memcpy(topic_buf, event->topic, copy_len);
+                    topic_buf[copy_len] = '\0';
+
+                    handler(topic_buf, event->data, event->data_len);
                 }
             }
             break;
