@@ -23,9 +23,7 @@ naila_err_t wifi_disconnect(void);
 // Task management functions
 typedef struct {
   void (*on_connected)(void);
-  void (*on_disconnected)(void);
   void (*on_error)(naila_err_t error);
-  void (*on_state_change)(int new_state);
 } wifi_event_callbacks_t;
 
 naila_err_t wifi_start_task(const wifi_event_callbacks_t *callbacks);

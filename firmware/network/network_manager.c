@@ -21,7 +21,6 @@ static SemaphoreHandle_t g_state_mutex = NULL;
 
 // Forward declarations
 static void on_wifi_ready(void);
-static void on_wifi_lost(void);
 static void on_wifi_error(naila_err_t error);
 
 naila_err_t network_manager_init(network_config_t* config) {
@@ -71,16 +70,9 @@ naila_err_t network_manager_start(void) {
         return NAILA_ERR_NOT_INITIALIZED;
     }
 
-    if (wifi_is_task_running()) {
-        NAILA_LOGW(TAG, "Network manager already started");
-        return NAILA_OK;
-    }
-
     wifi_event_callbacks_t wifi_cb = {
         .on_connected = on_wifi_ready,
-        .on_disconnected = on_wifi_lost,
-        .on_error = on_wifi_error,
-        .on_state_change = NULL
+        .on_error = on_wifi_error
     };
 
     naila_err_t err = wifi_start_task(&wifi_cb);
@@ -184,22 +176,6 @@ static void on_wifi_ready(void) {
     } else {
         NAILA_LOGE(TAG, "MQTT initialization failed: 0x%x", result);
         if (callback) callback(NETWORK_EVENT_ERROR);
-    }
-}
-
-static void on_wifi_lost(void) {
-    NAILA_LOGI(TAG, "WiFi disconnected");
-
-    network_event_callback_t callback = NULL;
-    if (xSemaphoreTake(g_state_mutex, portMAX_DELAY)) {
-        g_network.wifi_connected = false;
-        g_network.mqtt_connected = false;
-        callback = g_network.callback;
-        xSemaphoreGive(g_state_mutex);
-    }
-
-    if (callback) {
-        callback(NETWORK_EVENT_WIFI_DISCONNECTED);
     }
 }
 
