@@ -34,15 +34,19 @@ naila_err_t network_manager_init(network_config_t* config) {
         }
     }
 
+    bool already_initialized = false;
     MUTEX_LOCK(g_state_mutex, TAG) {
-        if (g_network.initialized) {
-            xSemaphoreGive(g_state_mutex);
-            NAILA_LOGW(TAG, "Network manager already initialized");
-            return NAILA_ERR_ALREADY_INITIALIZED;
+        already_initialized = g_network.initialized;
+        if (!already_initialized) {
+            g_network.initialized = true;
+            g_network.callback = config->callback;
         }
-        g_network.initialized = true;
-        g_network.callback = config->callback;
     } MUTEX_UNLOCK();
+
+    if (already_initialized) {
+        NAILA_LOGW(TAG, "Network manager already initialized");
+        return NAILA_ERR_ALREADY_INITIALIZED;
+    }
 
     naila_err_t wifi_result = wifi_init();
     if (wifi_result != NAILA_OK) {
@@ -88,17 +92,20 @@ naila_err_t network_manager_stop(void) {
         return NAILA_OK;
     }
 
+    bool is_initialized = false;
     MUTEX_LOCK(g_state_mutex, TAG) {
-        if (!g_network.initialized) {
-            xSemaphoreGive(g_state_mutex);
-            return NAILA_OK;
+        is_initialized = g_network.initialized;
+        if (is_initialized) {
+            g_network.initialized = false;
+            g_network.callback = NULL;
+            g_network.wifi_connected = false;
+            g_network.mqtt_connected = false;
         }
-
-        g_network.initialized = false;
-        g_network.callback = NULL;
-        g_network.wifi_connected = false;
-        g_network.mqtt_connected = false;
     } MUTEX_UNLOCK();
+
+    if (!is_initialized) {
+        return NAILA_OK;
+    }
 
     mqtt_client_stop();
     wifi_stop_task();

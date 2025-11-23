@@ -12,9 +12,6 @@
 
 static const char *TAG = "WIFI";
 
-#define WIFI_CONNECT_DELAY_MS 1000
-#define WIFI_DISCONNECT_DELAY_MS 500
-#define WIFI_RECONNECT_TIMEOUT_MS 10000
 #define WIFI_RECONNECT_INITIAL_DELAY_MS 1000
 #define WIFI_RECONNECT_MAX_DELAY_MS 30000
 #define WIFI_TASK_STACK_SIZE 2048
@@ -110,14 +107,18 @@ naila_err_t wifi_init(void) {
     }
   }
 
+  bool already_initialized = false;
   MUTEX_LOCK(wifi_mutex, TAG) {
-    if (g_wifi.initialized) {
-      xSemaphoreGive(wifi_mutex);
-      NAILA_LOGW(TAG, "WiFi already initialized");
-      return NAILA_ERR_ALREADY_INITIALIZED;
+    already_initialized = g_wifi.initialized;
+    if (!already_initialized) {
+      g_wifi.initialized = true;
     }
-    g_wifi.initialized = true;
   } MUTEX_UNLOCK();
+
+  if (already_initialized) {
+    NAILA_LOGW(TAG, "WiFi already initialized");
+    return NAILA_ERR_ALREADY_INITIALIZED;
+  }
 
   esp_netif_create_default_wifi_sta();
 
@@ -136,11 +137,21 @@ naila_err_t wifi_init(void) {
   err = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL, NULL);
   if (err != ESP_OK) {
     NAILA_LOGE(TAG, "Failed to register WiFi event handler: 0x%x", err);
+    esp_wifi_deinit();
+    MUTEX_LOCK(wifi_mutex, TAG) {
+      g_wifi.initialized = false;
+    } MUTEX_UNLOCK();
+    return (naila_err_t)err;
   }
 
   err = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL, NULL);
   if (err != ESP_OK) {
     NAILA_LOGE(TAG, "Failed to register IP event handler: 0x%x", err);
+    esp_wifi_deinit();
+    MUTEX_LOCK(wifi_mutex, TAG) {
+      g_wifi.initialized = false;
+    } MUTEX_UNLOCK();
+    return (naila_err_t)err;
   }
 
   NAILA_LOGI(TAG, "WiFi initialized");
@@ -148,13 +159,15 @@ naila_err_t wifi_init(void) {
 }
 
 naila_err_t wifi_connect(const wifi_config_simple_t *config) {
+  bool is_initialized = false;
   MUTEX_LOCK(wifi_mutex, TAG) {
-    if (!g_wifi.initialized) {
-      xSemaphoreGive(wifi_mutex);
-      NAILA_LOGE(TAG, "WiFi not initialized");
-      return NAILA_ERR_NOT_INITIALIZED;
-    }
+    is_initialized = g_wifi.initialized;
   } MUTEX_UNLOCK();
+
+  if (!is_initialized) {
+    NAILA_LOGE(TAG, "WiFi not initialized");
+    return NAILA_ERR_NOT_INITIALIZED;
+  }
 
   wifi_config_t wifi_config = {
       .sta = {
@@ -173,7 +186,6 @@ naila_err_t wifi_connect(const wifi_config_simple_t *config) {
   esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
   esp_wifi_start();
 
-  vTaskDelay(pdMS_TO_TICKS(WIFI_CONNECT_DELAY_MS));
   esp_err_t err = esp_wifi_connect();
 
   if (err != ESP_OK) {
@@ -196,20 +208,22 @@ bool wifi_is_connected(void) {
 }
 
 naila_err_t wifi_disconnect(void) {
+  bool is_initialized = false;
   MUTEX_LOCK(wifi_mutex, TAG) {
-    if (!g_wifi.initialized) {
-      xSemaphoreGive(wifi_mutex);
-      NAILA_LOGE(TAG, "WiFi not initialized");
-      return NAILA_ERR_NOT_INITIALIZED;
+    is_initialized = g_wifi.initialized;
+    if (is_initialized) {
+      g_wifi.connected = false;
     }
-    g_wifi.connected = false;
   } MUTEX_UNLOCK();
+
+  if (!is_initialized) {
+    NAILA_LOGE(TAG, "WiFi not initialized");
+    return NAILA_ERR_NOT_INITIALIZED;
+  }
 
   esp_err_t err = esp_wifi_disconnect();
   if (err != ESP_OK) {
     NAILA_LOGW(TAG, "WiFi disconnect failed: 0x%x", err);
-  } else {
-    vTaskDelay(pdMS_TO_TICKS(WIFI_DISCONNECT_DELAY_MS));
   }
 
   esp_wifi_stop();
@@ -272,7 +286,7 @@ static void wifi_reconnection_task(void *pvParameters __attribute__((unused))) {
   bool should_stop = false;
   int backoff_delay_ms = WIFI_RECONNECT_INITIAL_DELAY_MS;
 
-  while (!should_stop && !wifi_is_connected() && attempt < config->wifi.max_retry) {
+  while (!should_stop && attempt < config->wifi.max_retry) {
     MUTEX_LOCK_VOID(wifi_mutex, TAG) {
       should_stop = g_wifi.task_should_stop;
     } MUTEX_UNLOCK_VOID();
@@ -283,38 +297,18 @@ static void wifi_reconnection_task(void *pvParameters __attribute__((unused))) {
     NAILA_LOGD(TAG, "WiFi connection attempt %d/%d", attempt, config->wifi.max_retry);
 
     esp_err_t err = esp_wifi_connect();
-    if (err == ESP_OK) {
-      // Poll for connection with timeout
-      int elapsed_ms = 0;
-      while (elapsed_ms < WIFI_RECONNECT_TIMEOUT_MS && !wifi_is_connected()) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-        elapsed_ms += 100;
-
-        // Check if we should stop
-        MUTEX_LOCK_VOID(wifi_mutex, TAG) {
-          should_stop = g_wifi.task_should_stop;
-        } MUTEX_UNLOCK_VOID();
-        if (should_stop) break;
-      }
-
-      if (wifi_is_connected()) {
-        NAILA_LOGI(TAG, "WiFi reconnection successful");
-        break;
-      }
-    } else {
+    if (err != ESP_OK) {
       NAILA_LOGE(TAG, "Failed to initiate connection: %s", esp_err_to_name(err));
     }
 
-    // Exponential backoff with cap
+    // Wait before next attempt (event handler signals success via callback)
     if (!should_stop && attempt < config->wifi.max_retry) {
       NAILA_LOGD(TAG, "Waiting %d ms before next attempt", backoff_delay_ms);
       vTaskDelay(pdMS_TO_TICKS(backoff_delay_ms));
 
-      // Double the delay for next attempt, but cap at max
-      backoff_delay_ms *= 2;
-      if (backoff_delay_ms > WIFI_RECONNECT_MAX_DELAY_MS) {
-        backoff_delay_ms = WIFI_RECONNECT_MAX_DELAY_MS;
-      }
+      backoff_delay_ms = (backoff_delay_ms * 2 > WIFI_RECONNECT_MAX_DELAY_MS)
+                         ? WIFI_RECONNECT_MAX_DELAY_MS
+                         : backoff_delay_ms * 2;
     }
   }
 
@@ -333,16 +327,18 @@ static void wifi_reconnection_task(void *pvParameters __attribute__((unused))) {
 }
 
 naila_err_t wifi_start_task(const wifi_event_callbacks_t *callbacks) {
+  bool is_initialized = false;
   MUTEX_LOCK(wifi_mutex, TAG) {
-    if (!g_wifi.initialized) {
-      xSemaphoreGive(wifi_mutex);
-      NAILA_LOGE(TAG, "WiFi not initialized");
-      return NAILA_ERR_NOT_INITIALIZED;
-    }
-    if (callbacks) {
+    is_initialized = g_wifi.initialized;
+    if (is_initialized && callbacks) {
       g_wifi.callbacks = *callbacks;
     }
   } MUTEX_UNLOCK();
+
+  if (!is_initialized) {
+    NAILA_LOGE(TAG, "WiFi not initialized");
+    return NAILA_ERR_NOT_INITIALIZED;
+  }
 
   const naila_config_t *config = config_manager_get();
   if (config && !wifi_is_connected()) {
@@ -364,33 +360,31 @@ naila_err_t wifi_start_task(const wifi_event_callbacks_t *callbacks) {
 }
 
 naila_err_t wifi_stop_task(void) {
-  TaskHandle_t task_to_stop = NULL;
-
+  bool has_task = false;
   MUTEX_LOCK(wifi_mutex, TAG) {
-    if (!g_wifi.task_handle) {
-      xSemaphoreGive(wifi_mutex);
-      return NAILA_OK;
+    has_task = (g_wifi.task_handle != NULL);
+    if (has_task) {
+      g_wifi.task_should_stop = true;
     }
-    g_wifi.task_should_stop = true;
-    task_to_stop = g_wifi.task_handle;
   } MUTEX_UNLOCK();
+
+  if (!has_task) {
+    return NAILA_OK;
+  }
 
   int wait_count = 0;
   bool task_still_running = true;
   while (task_still_running && wait_count < WIFI_TASK_STOP_WAIT_ITERATIONS) {
     vTaskDelay(pdMS_TO_TICKS(WIFI_TASK_STOP_WAIT_DELAY_MS));
     MUTEX_LOCK(wifi_mutex, TAG) {
-      task_still_running = g_wifi.task_handle;
+      task_still_running = (g_wifi.task_handle != NULL);
     } MUTEX_UNLOCK();
     wait_count++;
   }
 
-  if (task_still_running && task_to_stop) {
-    NAILA_LOGW(TAG, "Force deleting reconnection task");
-    vTaskDelete(task_to_stop);
-    MUTEX_LOCK(wifi_mutex, TAG) {
-      g_wifi.task_handle = NULL;
-    } MUTEX_UNLOCK();
+  if (task_still_running) {
+    NAILA_LOGW(TAG, "Reconnection task did not stop gracefully");
+    // Task will clean up itself via vTaskDelete(NULL)
   }
 
   return NAILA_OK;

@@ -38,17 +38,20 @@ naila_err_t app_manager_init(const app_callbacks_t *callbacks) {
     }
   }
 
+  bool already_initialized = false;
   MUTEX_LOCK(g_app_mutex, TAG) {
-    if (g_app.initialized) {
-      xSemaphoreGive(g_app_mutex);
-      NAILA_LOGW(TAG, "Application manager already initialized");
-      return NAILA_ERR_ALREADY_INITIALIZED;
+    already_initialized = g_app.initialized;
+    if (!already_initialized) {
+      g_app.initialized = true;
+      g_app.callbacks = callbacks;
+      g_app.state = APP_STATE_INITIALIZING;
     }
-
-    g_app.initialized = true;
-    g_app.callbacks = callbacks;
-    g_app.state = APP_STATE_INITIALIZING;
   } MUTEX_UNLOCK();
+
+  if (already_initialized) {
+    NAILA_LOGW(TAG, "Application manager already initialized");
+    return NAILA_ERR_ALREADY_INITIALIZED;
+  }
 
   // Initialize configuration manager
   naila_err_t result = config_manager_init();
@@ -186,16 +189,19 @@ naila_err_t app_manager_stop(void) {
     return NAILA_OK;
   }
 
+  bool is_initialized = false;
   MUTEX_LOCK(g_app_mutex, TAG) {
-    if (!g_app.initialized) {
-      xSemaphoreGive(g_app_mutex);
-      return NAILA_OK;
+    is_initialized = g_app.initialized;
+    if (is_initialized) {
+      g_app.initialized = false;
+      g_app.callbacks = NULL;
+      g_app.state = APP_STATE_SHUTDOWN;
     }
-
-    g_app.initialized = false;
-    g_app.callbacks = NULL;
-    g_app.state = APP_STATE_SHUTDOWN;
   } MUTEX_UNLOCK();
+
+  if (!is_initialized) {
+    return NAILA_OK;
+  }
 
   // Stop network manager
   network_manager_stop();

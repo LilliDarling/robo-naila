@@ -121,14 +121,18 @@ naila_err_t mqtt_client_init(const mqtt_config_t* config) {
         }
     }
 
+    bool already_initialized = false;
     MUTEX_LOCK(mqtt_mutex, TAG) {
-        if (initialized) {
-            xSemaphoreGive(mqtt_mutex);
-            NAILA_LOGW(TAG, "MQTT client already initialized");
-            return NAILA_OK;
+        already_initialized = initialized;
+        if (!already_initialized) {
+            initialized = true;
         }
-        initialized = true;
     } MUTEX_UNLOCK();
+
+    if (already_initialized) {
+        NAILA_LOGW(TAG, "MQTT client already initialized");
+        return NAILA_ERR_ALREADY_INITIALIZED;
+    }
 
     snprintf(mqtt_uri_buffer, sizeof(mqtt_uri_buffer), "mqtt://%s:%d", config->broker_ip, config->broker_port);
 
@@ -177,14 +181,9 @@ naila_err_t mqtt_client_init(const mqtt_config_t* config) {
 }
 
 naila_err_t mqtt_client_publish(const char* topic, const char* data, int len, int qos) {
-    if (!mqtt_client_is_connected()) {
-        NAILA_LOGW(TAG, "MQTT client not connected");
-        return NAILA_ERR_INVALID_ARG;
-    }
-
     if (!client) {
         NAILA_LOGW(TAG, "MQTT client not initialized");
-        return NAILA_ERR_INVALID_ARG;
+        return NAILA_ERR_NOT_INITIALIZED;
     }
 
     int msg_id = esp_mqtt_client_publish(client, topic, data, len, qos, 0);
@@ -197,14 +196,9 @@ naila_err_t mqtt_client_publish(const char* topic, const char* data, int len, in
 }
 
 naila_err_t mqtt_client_subscribe(const char* topic, int qos) {
-    if (!mqtt_client_is_connected()) {
-        NAILA_LOGW(TAG, "MQTT client not connected");
-        return NAILA_ERR_INVALID_ARG;
-    }
-
     if (!client) {
         NAILA_LOGW(TAG, "MQTT client not initialized");
-        return NAILA_ERR_INVALID_ARG;
+        return NAILA_ERR_NOT_INITIALIZED;
     }
 
     int msg_id = esp_mqtt_client_subscribe(client, topic, qos);
@@ -237,12 +231,16 @@ naila_err_t mqtt_client_stop(void) {
         return NAILA_OK;
     }
 
+    bool is_initialized = false;
     MUTEX_LOCK(mqtt_mutex, TAG) {
-        if (!initialized) {
-            xSemaphoreGive(mqtt_mutex);
-            return NAILA_OK;
-        }
+        is_initialized = initialized;
+    } MUTEX_UNLOCK();
 
+    if (!is_initialized) {
+        return NAILA_OK;
+    }
+
+    MUTEX_LOCK(mqtt_mutex, TAG) {
         initialized = false;
         connected = false;
         message_handler = NULL;
