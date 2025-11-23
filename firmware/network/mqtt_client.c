@@ -15,7 +15,6 @@ static const char* TAG = "MQTT_CLIENT";
 static esp_mqtt_client_handle_t client = NULL;
 static mqtt_message_handler_t message_handler = NULL;
 static bool connected = false;
-static bool initialized = false;
 static SemaphoreHandle_t mqtt_mutex = NULL;
 static char mqtt_uri_buffer[64];
 
@@ -121,19 +120,6 @@ naila_err_t mqtt_client_init(const mqtt_config_t* config) {
         }
     }
 
-    bool already_initialized = false;
-    MUTEX_LOCK(mqtt_mutex, TAG) {
-        already_initialized = initialized;
-        if (!already_initialized) {
-            initialized = true;
-        }
-    } MUTEX_UNLOCK();
-
-    if (already_initialized) {
-        NAILA_LOGW(TAG, "MQTT client already initialized");
-        return NAILA_ERR_ALREADY_INITIALIZED;
-    }
-
     snprintf(mqtt_uri_buffer, sizeof(mqtt_uri_buffer), "mqtt://%s:%d", config->broker_ip, config->broker_port);
 
     esp_mqtt_client_config_t mqtt_cfg = {
@@ -148,9 +134,6 @@ naila_err_t mqtt_client_init(const mqtt_config_t* config) {
     client = esp_mqtt_client_init(&mqtt_cfg);
     if (!client) {
         NAILA_LOGE(TAG, "Failed to initialize MQTT client");
-        MUTEX_LOCK(mqtt_mutex, TAG) {
-            initialized = false;
-        } MUTEX_UNLOCK();
         return NAILA_FAIL;
     }
 
@@ -159,9 +142,6 @@ naila_err_t mqtt_client_init(const mqtt_config_t* config) {
         NAILA_LOGE(TAG, "Failed to register MQTT event handler: 0x%x", ret);
         esp_mqtt_client_destroy(client);
         client = NULL;
-        MUTEX_LOCK(mqtt_mutex, TAG) {
-            initialized = false;
-        } MUTEX_UNLOCK();
         return (naila_err_t)ret;
     }
 
@@ -170,9 +150,6 @@ naila_err_t mqtt_client_init(const mqtt_config_t* config) {
         NAILA_LOGE(TAG, "Failed to start MQTT client: 0x%x", ret);
         esp_mqtt_client_destroy(client);
         client = NULL;
-        MUTEX_LOCK(mqtt_mutex, TAG) {
-            initialized = false;
-        } MUTEX_UNLOCK();
         return (naila_err_t)ret;
     }
 
@@ -181,11 +158,6 @@ naila_err_t mqtt_client_init(const mqtt_config_t* config) {
 }
 
 naila_err_t mqtt_client_publish(const char* topic, const char* data, int len, int qos) {
-    if (!client) {
-        NAILA_LOGW(TAG, "MQTT client not initialized");
-        return NAILA_ERR_NOT_INITIALIZED;
-    }
-
     int msg_id = esp_mqtt_client_publish(client, topic, data, len, qos, 0);
     if (msg_id < 0) {
         NAILA_LOGE(TAG, "Failed to publish to '%s'", topic);
@@ -196,11 +168,6 @@ naila_err_t mqtt_client_publish(const char* topic, const char* data, int len, in
 }
 
 naila_err_t mqtt_client_subscribe(const char* topic, int qos) {
-    if (!client) {
-        NAILA_LOGW(TAG, "MQTT client not initialized");
-        return NAILA_ERR_NOT_INITIALIZED;
-    }
-
     int msg_id = esp_mqtt_client_subscribe(client, topic, qos);
     if (msg_id < 0) {
         NAILA_LOGE(TAG, "Failed to subscribe to '%s'", topic);
@@ -218,30 +185,14 @@ void mqtt_client_register_handler(mqtt_message_handler_t handler) {
 
 bool mqtt_client_is_connected(void) {
     bool status = false;
-    if (mqtt_mutex) {
-        MUTEX_LOCK_BOOL(mqtt_mutex, TAG) {
-            status = connected;
-        } MUTEX_UNLOCK_BOOL();
-    }
+    MUTEX_LOCK_BOOL(mqtt_mutex, TAG) {
+        status = connected;
+    } MUTEX_UNLOCK_BOOL();
     return status;
 }
 
 naila_err_t mqtt_client_stop(void) {
-    if (!mqtt_mutex) {
-        return NAILA_OK;
-    }
-
-    bool is_initialized = false;
     MUTEX_LOCK(mqtt_mutex, TAG) {
-        is_initialized = initialized;
-    } MUTEX_UNLOCK();
-
-    if (!is_initialized) {
-        return NAILA_OK;
-    }
-
-    MUTEX_LOCK(mqtt_mutex, TAG) {
-        initialized = false;
         connected = false;
         message_handler = NULL;
 

@@ -13,7 +13,6 @@ static const char *TAG = "NETWORK_MANAGER";
 typedef struct {
     bool wifi_connected;
     bool mqtt_connected;
-    bool initialized;
     network_event_callback_t callback;
 } network_manager_t;
 
@@ -34,25 +33,12 @@ naila_err_t network_manager_init(network_config_t* config) {
         }
     }
 
-    bool already_initialized = false;
     MUTEX_LOCK(g_state_mutex, TAG) {
-        already_initialized = g_network.initialized;
-        if (!already_initialized) {
-            g_network.initialized = true;
-            g_network.callback = config->callback;
-        }
+        g_network.callback = config->callback;
     } MUTEX_UNLOCK();
-
-    if (already_initialized) {
-        NAILA_LOGW(TAG, "Network manager already initialized");
-        return NAILA_ERR_ALREADY_INITIALIZED;
-    }
 
     naila_err_t wifi_result = wifi_init();
     if (wifi_result != NAILA_OK) {
-        MUTEX_LOCK(g_state_mutex, TAG) {
-            g_network.initialized = false;
-        } MUTEX_UNLOCK();
         NAILA_LOG_ERROR(TAG, wifi_result, "Error in wifi init: wifi_init()");
         return wifi_result;
     }
@@ -62,16 +48,6 @@ naila_err_t network_manager_init(network_config_t* config) {
 }
 
 naila_err_t network_manager_start(void) {
-    bool is_initialized = false;
-    MUTEX_LOCK(g_state_mutex, TAG) {
-        is_initialized = g_network.initialized;
-    } MUTEX_UNLOCK();
-
-    if (!is_initialized) {
-        NAILA_LOGE(TAG, "Network manager not initialized");
-        return NAILA_ERR_NOT_INITIALIZED;
-    }
-
     wifi_event_callbacks_t wifi_cb = {
         .on_connected = on_wifi_ready,
         .on_error = on_wifi_error
@@ -88,24 +64,11 @@ naila_err_t network_manager_start(void) {
 }
 
 naila_err_t network_manager_stop(void) {
-    if (!g_state_mutex) {
-        return NAILA_OK;
-    }
-
-    bool is_initialized = false;
     MUTEX_LOCK(g_state_mutex, TAG) {
-        is_initialized = g_network.initialized;
-        if (is_initialized) {
-            g_network.initialized = false;
-            g_network.callback = NULL;
-            g_network.wifi_connected = false;
-            g_network.mqtt_connected = false;
-        }
+        g_network.callback = NULL;
+        g_network.wifi_connected = false;
+        g_network.mqtt_connected = false;
     } MUTEX_UNLOCK();
-
-    if (!is_initialized) {
-        return NAILA_OK;
-    }
 
     mqtt_client_stop();
     wifi_stop_task();
@@ -116,31 +79,25 @@ naila_err_t network_manager_stop(void) {
 
 bool network_manager_is_ready(void) {
     bool ready = false;
-    if (g_state_mutex) {
-        MUTEX_LOCK_BOOL(g_state_mutex, TAG) {
-            ready = g_network.wifi_connected && g_network.mqtt_connected;
-        } MUTEX_UNLOCK_BOOL();
-    }
+    MUTEX_LOCK_BOOL(g_state_mutex, TAG) {
+        ready = g_network.wifi_connected && g_network.mqtt_connected;
+    } MUTEX_UNLOCK_BOOL();
     return ready;
 }
 
 bool network_manager_is_wifi_connected(void) {
     bool connected = false;
-    if (g_state_mutex) {
-        MUTEX_LOCK_BOOL(g_state_mutex, TAG) {
-            connected = g_network.wifi_connected;
-        } MUTEX_UNLOCK_BOOL();
-    }
+    MUTEX_LOCK_BOOL(g_state_mutex, TAG) {
+        connected = g_network.wifi_connected;
+    } MUTEX_UNLOCK_BOOL();
     return connected;
 }
 
 bool network_manager_is_mqtt_connected(void) {
     bool connected = false;
-    if (g_state_mutex) {
-        MUTEX_LOCK_BOOL(g_state_mutex, TAG) {
-            connected = g_network.mqtt_connected;
-        } MUTEX_UNLOCK_BOOL();
-    }
+    MUTEX_LOCK_BOOL(g_state_mutex, TAG) {
+        connected = g_network.mqtt_connected;
+    } MUTEX_UNLOCK_BOOL();
     return connected;
 }
 

@@ -22,7 +22,6 @@ static const char *TAG = "WIFI";
 typedef struct {
     TaskHandle_t task_handle;
     wifi_event_callbacks_t callbacks;
-    bool initialized;
     bool task_should_stop;
     bool connected;
 } wifi_state_t;
@@ -107,27 +106,11 @@ naila_err_t wifi_init(void) {
     }
   }
 
-  bool already_initialized = false;
-  MUTEX_LOCK(wifi_mutex, TAG) {
-    already_initialized = g_wifi.initialized;
-    if (!already_initialized) {
-      g_wifi.initialized = true;
-    }
-  } MUTEX_UNLOCK();
-
-  if (already_initialized) {
-    NAILA_LOGW(TAG, "WiFi already initialized");
-    return NAILA_ERR_ALREADY_INITIALIZED;
-  }
-
   esp_netif_create_default_wifi_sta();
 
   wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
   esp_err_t err = esp_wifi_init(&cfg);
   if (err != ESP_OK) {
-    MUTEX_LOCK(wifi_mutex, TAG) {
-      g_wifi.initialized = false;
-    } MUTEX_UNLOCK();
     NAILA_LOGE(TAG, "WiFi init failed: %s", esp_err_to_name(err));
     return (naila_err_t)err;
   }
@@ -138,9 +121,6 @@ naila_err_t wifi_init(void) {
   if (err != ESP_OK) {
     NAILA_LOGE(TAG, "Failed to register WiFi event handler: 0x%x", err);
     esp_wifi_deinit();
-    MUTEX_LOCK(wifi_mutex, TAG) {
-      g_wifi.initialized = false;
-    } MUTEX_UNLOCK();
     return (naila_err_t)err;
   }
 
@@ -148,9 +128,6 @@ naila_err_t wifi_init(void) {
   if (err != ESP_OK) {
     NAILA_LOGE(TAG, "Failed to register IP event handler: 0x%x", err);
     esp_wifi_deinit();
-    MUTEX_LOCK(wifi_mutex, TAG) {
-      g_wifi.initialized = false;
-    } MUTEX_UNLOCK();
     return (naila_err_t)err;
   }
 
@@ -159,16 +136,6 @@ naila_err_t wifi_init(void) {
 }
 
 naila_err_t wifi_connect(const wifi_config_simple_t *config) {
-  bool is_initialized = false;
-  MUTEX_LOCK(wifi_mutex, TAG) {
-    is_initialized = g_wifi.initialized;
-  } MUTEX_UNLOCK();
-
-  if (!is_initialized) {
-    NAILA_LOGE(TAG, "WiFi not initialized");
-    return NAILA_ERR_NOT_INITIALIZED;
-  }
-
   wifi_config_t wifi_config = {
       .sta = {
           .threshold.authmode = WIFI_AUTH_WPA2_PSK,
@@ -199,27 +166,16 @@ naila_err_t wifi_connect(const wifi_config_simple_t *config) {
 
 bool wifi_is_connected(void) {
   bool connected = false;
-  if (wifi_mutex) {
-    MUTEX_LOCK_BOOL(wifi_mutex, TAG) {
-      connected = g_wifi.connected;
-    } MUTEX_UNLOCK_BOOL();
-  }
+  MUTEX_LOCK_BOOL(wifi_mutex, TAG) {
+    connected = g_wifi.connected;
+  } MUTEX_UNLOCK_BOOL();
   return connected;
 }
 
 naila_err_t wifi_disconnect(void) {
-  bool is_initialized = false;
   MUTEX_LOCK(wifi_mutex, TAG) {
-    is_initialized = g_wifi.initialized;
-    if (is_initialized) {
-      g_wifi.connected = false;
-    }
+    g_wifi.connected = false;
   } MUTEX_UNLOCK();
-
-  if (!is_initialized) {
-    NAILA_LOGE(TAG, "WiFi not initialized");
-    return NAILA_ERR_NOT_INITIALIZED;
-  }
 
   esp_err_t err = esp_wifi_disconnect();
   if (err != ESP_OK) {
@@ -327,18 +283,11 @@ static void wifi_reconnection_task(void *pvParameters __attribute__((unused))) {
 }
 
 naila_err_t wifi_start_task(const wifi_event_callbacks_t *callbacks) {
-  bool is_initialized = false;
   MUTEX_LOCK(wifi_mutex, TAG) {
-    is_initialized = g_wifi.initialized;
-    if (is_initialized && callbacks) {
+    if (callbacks) {
       g_wifi.callbacks = *callbacks;
     }
   } MUTEX_UNLOCK();
-
-  if (!is_initialized) {
-    NAILA_LOGE(TAG, "WiFi not initialized");
-    return NAILA_ERR_NOT_INITIALIZED;
-  }
 
   const naila_config_t *config = config_manager_get();
   if (config && !wifi_is_connected()) {
@@ -392,11 +341,9 @@ naila_err_t wifi_stop_task(void) {
 
 bool wifi_is_task_running(void) {
   bool running = false;
-  if (wifi_mutex) {
-    MUTEX_LOCK_BOOL(wifi_mutex, TAG) {
-      running = g_wifi.task_handle;
-    } MUTEX_UNLOCK_BOOL();
-  }
+  MUTEX_LOCK_BOOL(wifi_mutex, TAG) {
+    running = (g_wifi.task_handle != NULL);
+  } MUTEX_UNLOCK_BOOL();
   return running;
 }
 
