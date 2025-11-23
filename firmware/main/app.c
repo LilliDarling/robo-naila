@@ -69,13 +69,8 @@ static void on_wifi_connected(void) {
     callbacks = g_app.callbacks;
   } MUTEX_UNLOCK_VOID();
 
-  if (callbacks) {
-    if (callbacks->on_state_change) {
-      callbacks->on_state_change(APP_STATE_SERVICES_STARTING);
-    }
-    if (callbacks->on_wifi_connected) {
-      callbacks->on_wifi_connected();
-    }
+  if (callbacks && callbacks->on_state_change) {
+    callbacks->on_state_change(APP_STATE_SERVICES_STARTING);
   }
 
   const naila_config_t *config = config_manager_get();
@@ -112,13 +107,11 @@ static void on_wifi_error(naila_err_t error) {
     callbacks = g_app.callbacks;
   } MUTEX_UNLOCK_VOID();
 
-  if (callbacks) {
-    if (callbacks->on_state_change) {
-      callbacks->on_state_change(APP_STATE_ERROR);
-    }
-    if (callbacks->on_error) {
-      callbacks->on_error(error);
-    }
+  if (callbacks && callbacks->on_state_change) {
+    callbacks->on_state_change(APP_STATE_ERROR);
+  }
+  if (callbacks && callbacks->on_error) {
+    callbacks->on_error(error);
   }
 }
 

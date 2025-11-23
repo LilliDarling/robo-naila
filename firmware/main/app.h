@@ -10,7 +10,6 @@ extern "C" {
 // Application states
 typedef enum {
   APP_STATE_INITIALIZING,
-  APP_STATE_WIFI_CONNECTING,
   APP_STATE_SERVICES_STARTING,
   APP_STATE_RUNNING,
   APP_STATE_ERROR,
@@ -20,8 +19,6 @@ typedef enum {
 // Application manager callbacks
 typedef struct {
   void (*on_state_change)(app_state_t new_state);
-  void (*on_wifi_connected)(void);
-  void (*on_wifi_disconnected)(void);
   void (*on_error)(naila_err_t error);
 } app_callbacks_t;
 

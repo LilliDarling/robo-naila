@@ -29,22 +29,12 @@ static void on_state_change(app_state_t new_state) {
   NAILA_LOGI(TAG, "Application state changed to: %d", new_state);
 }
 
-static void on_wifi_connected(void) {
-  NAILA_LOGI(TAG, "WiFi connection established");
-}
-
-static void on_wifi_disconnected(void) {
-  NAILA_LOGW(TAG, "WiFi connection lost");
-}
-
 static void on_error(naila_err_t error) {
   NAILA_LOGE(TAG, "Application error occurred: 0x%x", error);
 }
 
 static const app_callbacks_t app_callbacks = {
   .on_state_change = on_state_change,
-  .on_wifi_connected = on_wifi_connected,
-  .on_wifi_disconnected = on_wifi_disconnected,
   .on_error = on_error,
 };
 
