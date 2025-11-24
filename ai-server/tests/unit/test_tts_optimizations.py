@@ -8,7 +8,7 @@ import pytest
 from unittest.mock import Mock, patch, AsyncMock
 import numpy as np
 
-from services.tts import TTSService, LRUCache
+from services.tts import TTSService, TTSPhraseLRUCache
 
 
 class TestLRUCacheEviction:
@@ -16,7 +16,7 @@ class TestLRUCacheEviction:
 
     def test_evicts_oldest_when_full(self):
         """Verify oldest item evicted when cache exceeds maxsize"""
-        cache = LRUCache(maxsize=3)
+        cache = TTSPhraseLRUCache(maxsize=3)
         cache["first"] = 1
         cache["second"] = 2
         cache["third"] = 3
@@ -31,7 +31,7 @@ class TestLRUCacheEviction:
 
     def test_access_refreshes_lru_order(self):
         """Verify accessing item moves it to most recent"""
-        cache = LRUCache(maxsize=3)
+        cache = TTSPhraseLRUCache(maxsize=3)
         cache["a"] = 1
         cache["b"] = 2
         cache["c"] = 3
@@ -48,7 +48,7 @@ class TestLRUCacheEviction:
 
     def test_update_refreshes_lru_order(self):
         """Verify updating existing key moves it to most recent"""
-        cache = LRUCache(maxsize=3)
+        cache = TTSPhraseLRUCache(maxsize=3)
         cache["a"] = 1
         cache["b"] = 2
         cache["c"] = 3
@@ -159,7 +159,11 @@ class TestParallelWarmupBehavior:
     @pytest.mark.asyncio
     @patch('services.tts.tts_config')
     async def test_warmup_synthesizes_concurrently(self, mock_config):
-        """Verify warmup synthesizes multiple phrases at once, not serially"""
+        """Verify warmup synthesizes multiple phrases at once, not serially.
+
+        Uses an Event-based approach to detect concurrent execution rather than
+        relying on wall-clock timing, which can be flaky on slow/loaded CI machines.
+        """
         mock_config.COMMON_PHRASES = ["Hello", "Goodbye", "Thank you"]
         mock_config.CACHE_INCLUDES_PARAMETERS = True
         mock_config.VOICE = "lessac"
@@ -170,24 +174,41 @@ class TestParallelWarmupBehavior:
         tts_service = TTSService()
         tts_service.model = Mock()
 
-        synthesis_times = []
+        # Track concurrent execution using events
+        tasks_started = 0
+        max_concurrent = 0
+        lock = asyncio.Lock()
+        all_started = asyncio.Event()
 
         async def track_synthesis(*args, **kwargs):
-            """Track when synthesis happens"""
-            synthesis_times.append(asyncio.get_event_loop().time())
-            await asyncio.sleep(0.05)  # Simulate synthesis time
+            """Track concurrent task execution"""
+            nonlocal tasks_started, max_concurrent
+
+            async with lock:
+                tasks_started += 1
+                current_count = tasks_started
+                if current_count > max_concurrent:
+                    max_concurrent = current_count
+
+            # Signal when all 3 tasks have started (proves concurrency)
+            if current_count == 3:
+                all_started.set()
+
+            # Wait a bit to keep tasks "in flight" together
+            await asyncio.sleep(0.05)
+
+            async with lock:
+                tasks_started -= 1
+
             return np.random.randn(100).astype('float32')
 
         with patch.object(tts_service, '_synthesize_to_audio', side_effect=track_synthesis):
             await tts_service._warmup_and_cache()
 
-        # All 3 phrases should be synthesized
-        assert len(synthesis_times) == 3
-
-        # If parallel, all start times should be very close (< 10ms apart)
-        time_diffs = [synthesis_times[i+1] - synthesis_times[i] for i in range(len(synthesis_times)-1)]
-        assert all(diff < 0.01 for diff in time_diffs), \
-            "Synthesis not parallel - time gaps too large"
+        # All 3 phrases should have reached concurrent execution
+        # If serial, max_concurrent would be 1; if parallel, it should be 3
+        assert max_concurrent == 3, \
+            f"Expected 3 concurrent tasks, but max was {max_concurrent} - synthesis not parallel"
 
 
 

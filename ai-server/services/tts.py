@@ -31,8 +31,8 @@ from utils import get_logger
 logger = get_logger(__name__)
 
 
-class LRUCache(OrderedDict):
-    """LRU cache with size limit for phrase caching"""
+class TTSPhraseLRUCache(OrderedDict):
+    """LRU cache with size limit for phrase caching, specific to TTS phrase/audio caching"""
 
     def __init__(self, maxsize: int = 256):
         self.maxsize = maxsize
@@ -74,7 +74,7 @@ class TTSService(BaseAIService):
         super().__init__(tts_config.MODEL_PATH)
         self.text_normalizer = TextNormalizer(language="en")
         self.audio_encoder = AudioEncoder()
-        self._phrase_cache = LRUCache(maxsize=tts_config.MAX_CACHED_PHRASES)
+        self._phrase_cache = TTSPhraseLRUCache(maxsize=tts_config.MAX_CACHED_PHRASES)
 
         # Multi-voice support
         self.voice_manager = VoiceManager()
@@ -384,6 +384,127 @@ class TTSService(BaseAIService):
 
         return groups
 
+    def _prepare_segment_synthesis_task(self, segment):
+        """Prepare a synthesis task for a single SSML segment.
+
+        Args:
+            segment: SSMLSegment to synthesize
+
+        Returns:
+            Coroutine for synthesis, or None if segment has no text
+        """
+        if not segment.text.strip():
+            return None
+
+        # Get synthesis parameters, applying emotion preset if specified
+        length_scale = segment.length_scale
+        noise_scale = segment.noise_scale
+        noise_w = segment.noise_w
+
+        if segment.emotion:
+            if emotion_params := get_emotion_parameters(segment.emotion):
+                length_scale = emotion_params["length_scale"]
+                noise_scale = emotion_params["noise_scale"]
+                noise_w = emotion_params["noise_w"]
+
+        normalized_text = self._preprocess_text(segment.text)
+        return self._synthesize_to_audio(
+            normalized_text,
+            length_scale=length_scale,
+            noise_scale=noise_scale,
+            noise_w=noise_w
+        )
+
+    def _add_segment_audio_with_pauses(
+        self,
+        segment,
+        audio_samples: Optional[np.ndarray],
+        sample_rate: int,
+        all_audio_samples: list,
+    ) -> int:
+        """Add a segment's audio with surrounding pauses to the audio list.
+
+        Args:
+            segment: SSMLSegment with pause information
+            audio_samples: Synthesized audio for this segment (None if no text)
+            sample_rate: Audio sample rate
+            all_audio_samples: List to append audio chunks to
+
+        Returns:
+            Total duration in milliseconds added by this segment
+        """
+        duration_ms = 0
+
+        # Add pause before segment
+        if segment.pause_before > 0:
+            silence_samples = int(segment.pause_before * sample_rate)
+            all_audio_samples.append(np.zeros(silence_samples, dtype=np.float32))
+            duration_ms += int(segment.pause_before * 1000)
+
+        # Add synthesized audio
+        if audio_samples is not None:
+            all_audio_samples.append(audio_samples)
+            duration_ms += int((len(audio_samples) / sample_rate) * 1000)
+
+        # Add pause after segment
+        if segment.pause_after > 0:
+            silence_samples = int(segment.pause_after * sample_rate)
+            all_audio_samples.append(np.zeros(silence_samples, dtype=np.float32))
+            duration_ms += int(segment.pause_after * 1000)
+
+        return duration_ms
+
+    async def _synthesize_voice_group(
+        self,
+        voice_name: Optional[str],
+        group_segments: list,
+        sample_rate: int,
+    ) -> tuple[list[np.ndarray], int]:
+        """Synthesize all segments for a single voice group.
+
+        Args:
+            voice_name: Voice to use for this group
+            group_segments: List of segments to synthesize
+            sample_rate: Audio sample rate
+
+        Returns:
+            Tuple of (audio_samples_list, total_duration_ms)
+        """
+        # Switch voice if needed
+        if voice_name and self.multi_voice_enabled:
+            await self._switch_voice(voice_name)
+
+        # Prepare synthesis tasks for segments with text
+        synthesis_tasks = []
+        segments_with_text = []
+        for segment in group_segments:
+            task = self._prepare_segment_synthesis_task(segment)
+            if task is not None:
+                synthesis_tasks.append(task)
+                segments_with_text.append(segment)
+
+        # Synthesize all segments in parallel
+        audio_results = await asyncio.gather(*synthesis_tasks) if synthesis_tasks else []
+
+        # Build audio list with pauses interleaved
+        all_audio_samples = []
+        total_duration_ms = 0
+        result_idx = 0
+
+        for segment in group_segments:
+            # Get audio for this segment if it had text
+            audio = None
+            if segment.text.strip() and result_idx < len(audio_results):
+                audio = audio_results[result_idx]
+                result_idx += 1
+
+            duration = self._add_segment_audio_with_pauses(
+                segment, audio, sample_rate, all_audio_samples
+            )
+            total_duration_ms += duration
+
+        return all_audio_samples, total_duration_ms
+
     async def _synthesize_ssml(self, ssml_text: str, output_format: Optional[str] = None) -> AudioData:
         """Synthesize speech from SSML markup
 
@@ -399,100 +520,41 @@ class TTSService(BaseAIService):
 
             # Parse SSML into segments
             segments = self.ssml_parser.parse(ssml_text)
-
             if not segments:
                 logger.warning("No segments parsed from SSML")
                 return self._empty_result()
 
             logger.debug("ssml_segments_parsed", segment_count=len(segments))
 
-            # Group segments by voice for batch synthesis
+            # Group segments by voice and synthesize each group
             voice_groups = self._group_segments_by_voice(segments)
-
-            # Synthesize each segment (with parallel synthesis for same-voice segments)
-            all_audio_samples = []
-            total_duration_ms = 0
             sample_rate = tts_config.SAMPLE_RATE
 
+            all_audio_samples = []
+            total_duration_ms = 0
+
             for voice_name, group_segments in voice_groups:
-                # Switch voice once per group
-                if voice_name and self.multi_voice_enabled:
-                    await self._switch_voice(voice_name)
-
-                # Prepare synthesis tasks for this voice group
-                synthesis_tasks = []
-                segment_indices = []
-
-                for i, segment in enumerate(group_segments):
-                    if segment.text.strip():
-                        # Prepare parameters
-                        length_scale = segment.length_scale
-                        noise_scale = segment.noise_scale
-                        noise_w = segment.noise_w
-
-                        if segment.emotion:
-                            if emotion_params := get_emotion_parameters(segment.emotion):
-                                length_scale = emotion_params["length_scale"]
-                                noise_scale = emotion_params["noise_scale"]
-                                noise_w = emotion_params["noise_w"]
-
-                        normalized_text = self._preprocess_text(segment.text)
-                        synthesis_tasks.append(
-                            self._synthesize_to_audio(
-                                normalized_text,
-                                length_scale=length_scale,
-                                noise_scale=noise_scale,
-                                noise_w=noise_w
-                            )
-                        )
-                        segment_indices.append((i, segment))
-
-                # Synthesize all segments in parallel for this voice
-                if synthesis_tasks:
-                    audio_results = await asyncio.gather(*synthesis_tasks)
-
-                    # Interleave results with pauses
-                    result_idx = 0
-                    for i, segment in enumerate(group_segments):
-                        # Add pause before segment
-                        if segment.pause_before > 0:
-                            silence_samples = int(segment.pause_before * sample_rate)
-                            all_audio_samples.append(np.zeros(silence_samples, dtype=np.float32))
-                            total_duration_ms += int(segment.pause_before * 1000)
-
-                        # Add synthesized audio
-                        if segment.text.strip() and result_idx < len(audio_results):
-                            audio_samples = audio_results[result_idx]
-                            all_audio_samples.append(audio_samples)
-                            segment_duration = int((len(audio_samples) / sample_rate) * 1000)
-                            total_duration_ms += segment_duration
-                            result_idx += 1
-
-                        # Add pause after segment
-                        if segment.pause_after > 0:
-                            silence_samples = int(segment.pause_after * sample_rate)
-                            all_audio_samples.append(np.zeros(silence_samples, dtype=np.float32))
-                            total_duration_ms += int(segment.pause_after * 1000)
+                group_audio, group_duration = await self._synthesize_voice_group(
+                    voice_name, group_segments, sample_rate
+                )
+                all_audio_samples.extend(group_audio)
+                total_duration_ms += group_duration
 
             # Concatenate all segments
-            if all_audio_samples:
-                final_audio = np.concatenate(all_audio_samples)
-            else:
+            if not all_audio_samples:
                 logger.warning("No audio samples generated from SSML")
                 return self._empty_result()
 
-            # Encode to requested format
+            final_audio = np.concatenate(all_audio_samples)
+
+            # Encode and build result
             output_format = output_format or tts_config.OUTPUT_FORMAT
             audio_bytes = await self._encode_audio(final_audio, output_format)
-
-            # Calculate metrics
             synthesis_time_ms = int((time.time() - start_time) * 1000)
 
-            # Extract plain text for logging
             plain_text = " ".join(seg.text for seg in segments if seg.text.strip())
             self._log_performance(total_duration_ms, synthesis_time_ms, plain_text[:50])
 
-            # Determine voice name
             voice_name = (
                 self.voice_manager.get_current_voice_name()
                 if self.multi_voice_enabled
@@ -650,20 +712,8 @@ class TTSService(BaseAIService):
             Encoded audio bytes
         """
         try:
-            # MP3/OGG encoding uses ffmpeg (blocking I/O), run in executor
-            if format.lower() in ('mp3', 'ogg'):
-                loop = asyncio.get_event_loop()
-                return await loop.run_in_executor(
-                    None,
-                    self.audio_encoder.encode,
-                    audio_samples,
-                    tts_config.SAMPLE_RATE,
-                    format,
-                    tts_config.MP3_BITRATE,
-                    tts_config.OGG_QUALITY
-                )
-            else:
-                # WAV/RAW are fast, no executor needed
+            # WAV/RAW are fast, no executor needed
+            if format.lower() not in {'mp3', 'ogg'}:
                 return self.audio_encoder.encode(
                     audio_samples,
                     tts_config.SAMPLE_RATE,
@@ -671,6 +721,18 @@ class TTSService(BaseAIService):
                     bitrate=tts_config.MP3_BITRATE,
                     quality=tts_config.OGG_QUALITY
                 )
+
+            # MP3/OGG encoding uses ffmpeg (blocking I/O), run in executor
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                None,
+                self.audio_encoder.encode,
+                audio_samples,
+                tts_config.SAMPLE_RATE,
+                format,
+                tts_config.MP3_BITRATE,
+                tts_config.OGG_QUALITY
+            )
         except Exception as e:
             logger.error("audio_encoding_failed", format=format, error=str(e), error_type=type(e).__name__)
             # Fallback to WAV if encoding fails

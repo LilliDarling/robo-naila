@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch, AsyncMock
 import numpy as np
 
-from services.tts import TTSService, AudioData, LRUCache
+from services.tts import TTSService, AudioData, TTSPhraseLRUCache
 from utils.text_normalizer import TextNormalizer
 from utils.audio_encoder import AudioEncoder
 

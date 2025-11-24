@@ -320,9 +320,10 @@ class TestConfiguration:
 
     def test_coco_classes_complete(self):
         """Test that COCO classes list is complete"""
-        expected_classes = ["person", "car", "dog", "cat", "chair", "bottle"]
-        for cls in expected_classes:
-            assert cls in vision_config.COCO_CLASSES
+        expected_classes = {"person", "car", "dog", "cat", "chair", "bottle"}
+        coco_classes_set = set(vision_config.COCO_CLASSES)
+        missing = expected_classes - coco_classes_set
+        assert not missing, f"Missing expected COCO classes: {missing}"
 
 
 class TestModelLoading:
@@ -454,6 +455,82 @@ class TestObjectDetection:
 
 class TestSceneAnalysis:
     """Test scene analysis with mocks"""
+
+    @pytest.mark.asyncio
+    async def test_analyze_scene_uses_scene_cache_for_repeated_content(
+        self,
+        vision_service,
+        sample_image_bytes,
+    ):
+        """Verify scene cache is used for repeated identical content"""
+        # Arrange: replace the scene cache with a fake that tracks hits/misses
+        class FakeContentHashCache:
+            def __init__(self):
+                self._store = {}
+                self._hits = 0
+                self._misses = 0
+
+            def get_by_content(self, content: bytes):
+                key = hash(content)
+                if key in self._store:
+                    self._hits += 1
+                    return self._store[key]
+                self._misses += 1
+                return None
+
+            def put_by_content(self, content: bytes, value):
+                key = hash(content)
+                self._store[key] = value
+
+            def get_stats(self):
+                return {
+                    "hits": self._hits,
+                    "misses": self._misses,
+                    "size": len(self._store),
+                }
+
+        fake_cache = FakeContentHashCache()
+        original_cache = vision_service._scene_cache
+        vision_service._scene_cache = fake_cache
+
+        # Setup mocked model for detection
+        mock_model = MagicMock()
+        mock_result = MagicMock()
+
+        mock_boxes = MagicMock()
+        mock_xyxy = [create_mock_tensor(np.array([10, 20, 100, 200]))]
+        mock_boxes.xyxy = mock_xyxy
+        mock_boxes.__len__ = lambda self: len(mock_xyxy)
+        mock_boxes.cls = [create_mock_tensor(np.array([0]))]
+        mock_boxes.conf = [create_mock_tensor(np.array([0.95]))]
+        mock_result.boxes = mock_boxes
+
+        mock_model.predict.return_value = [mock_result]
+
+        vision_service.model = mock_model
+        vision_service.is_ready = True
+        vision_service.device_name = 'cpu'
+
+        try:
+            # Act: call analyze_scene twice with identical content
+            first_result = await vision_service.analyze_scene(sample_image_bytes)
+            second_result = await vision_service.analyze_scene(sample_image_bytes)
+
+            stats = fake_cache.get_stats()
+
+            # Assert: cache was populated once and then hit on the second call
+            assert stats["misses"] == 1
+            assert stats["hits"] == 1
+            assert stats["size"] == 1
+
+            # The second result should come from cache and be the same object
+            assert second_result is first_result
+
+            # Model predict should only be called once (first call)
+            assert mock_model.predict.call_count == 1
+        finally:
+            # Restore original cache to avoid leaking state across tests
+            vision_service._scene_cache = original_cache
 
     @pytest.mark.asyncio
     async def test_analyze_scene(self, vision_service, sample_image_bytes):
