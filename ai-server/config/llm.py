@@ -55,6 +55,10 @@ STRIP_WHITESPACE = True
 MAX_RESPONSE_LENGTH = 1000  # Characters (safety limit)
 MIN_RESPONSE_LENGTH = 1  # Characters
 
+# Concurrency Control
+MAX_CONCURRENT_REQUESTS = int(os.getenv("LLM_MAX_CONCURRENT_REQUESTS", "2"))
+POOL_TIMEOUT_SECONDS = float(os.getenv("LLM_POOL_TIMEOUT_SECONDS", "60.0"))
+
 # Error Handling
 ENABLE_FALLBACK_RESPONSES = True
 MAX_RETRIES = 2  # Retry generation on failure

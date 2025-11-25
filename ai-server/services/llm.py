@@ -13,6 +13,7 @@ except ImportError:
 
 from config import llm as llm_config
 from services.base import BaseAIService
+from utils.resource_pool import ResourcePool
 from utils import get_logger
 
 
@@ -24,16 +25,20 @@ class LLMService(BaseAIService):
 
     def __init__(self):
         super().__init__(llm_config.MODEL_PATH)
-        self.system_prompt = self._load_system_prompt()
+        self.system_prompt: Optional[str] = None
+        self._pool: Optional[ResourcePool] = None
 
-    def _load_system_prompt(self) -> str:
-        """Load system prompt from file"""
+    async def _load_system_prompt(self) -> str:
+        """Load system prompt from file asynchronously"""
+        loop = asyncio.get_event_loop()
         try:
             if llm_config.SYSTEM_PROMPT_FILE.exists():
-                with open(llm_config.SYSTEM_PROMPT_FILE, 'r', encoding='utf-8') as f:
-                    prompt = f.read().strip()
-                    logger.info("system_prompt_loaded", prompt_file=str(llm_config.SYSTEM_PROMPT_FILE))
-                    return prompt
+                prompt = await loop.run_in_executor(
+                    None,
+                    lambda: llm_config.SYSTEM_PROMPT_FILE.read_text(encoding='utf-8').strip()
+                )
+                logger.info("system_prompt_loaded", prompt_file=str(llm_config.SYSTEM_PROMPT_FILE))
+                return prompt
         except Exception as e:
             logger.warning("system_prompt_load_failed", error=str(e), error_type=type(e).__name__)
 
@@ -113,12 +118,21 @@ class LLMService(BaseAIService):
                     logger.error("llm_runtime_error", error=str(e), error_type=type(e).__name__)
                 return False
 
+            # Load system prompt asynchronously
+            self.system_prompt = await self._load_system_prompt()
+
+            # Initialize resource pool for concurrency control
+            self._pool = ResourcePool(
+                max_concurrent=llm_config.MAX_CONCURRENT_REQUESTS,
+                timeout=llm_config.POOL_TIMEOUT_SECONDS
+            )
+            logger.info("resource_pool_initialized", max_concurrent=llm_config.MAX_CONCURRENT_REQUESTS)
+
             return True
 
         except Exception as e:
             logger.error("llm_model_loading_exception", error=str(e), error_type=type(e).__name__)
             return False
-
 
     def _get_gpu_layers(self) -> int:
         """Determine how many layers to offload to GPU, based on hardware capabilities"""
@@ -165,6 +179,19 @@ class LLMService(BaseAIService):
             logger.error("Model not loaded, cannot generate")
             return ""
 
+        if self._pool is None:
+            return await self._generate_chat_impl(messages, max_tokens, temperature, top_p)
+        async with self._pool:
+            return await self._generate_chat_impl(messages, max_tokens, temperature, top_p)
+
+    async def _generate_chat_impl(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+    ) -> str:
+        """Internal implementation of chat generation"""
         try:
             start_time = time.time()
 
@@ -327,4 +354,6 @@ class LLMService(BaseAIService):
             "context_size": llm_config.CONTEXT_SIZE,
             "max_tokens": llm_config.MAX_TOKENS_PER_RESPONSE,
         })
+        if self._pool is not None:
+            status["pool"] = self._pool.get_stats()
         return status

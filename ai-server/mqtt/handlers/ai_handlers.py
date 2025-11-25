@@ -122,6 +122,14 @@ class AIHandlers(BaseHandler):
 
         except Exception as e:
             self.logger.error(f"Error processing audio from {message.device_id}: {e}", exc_info=True)
+            error_topic = f"naila/device/{message.device_id}/audio/error"
+            error_payload = {
+                "error": "audio_processing_failed",
+                "message": "Failed to process audio. Please try again.",
+                "device_id": message.device_id,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            await self.mqtt_service.publish(error_topic, error_payload)
 
     async def handle_stt_result(self, message: MQTTMessage):
         """Handle speech-to-text results - fast orchestration trigger"""
@@ -197,7 +205,15 @@ class AIHandlers(BaseHandler):
 
         except Exception as e:
             self.logger.error(f"Error processing image from {message.device_id}: {e}", exc_info=True)
-    
+            error_topic = f"naila/device/{message.device_id}/vision/error"
+            error_payload = {
+                "error": "vision_processing_failed",
+                "message": "Failed to process image. Please try again.",
+                "device_id": message.device_id,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            await self.mqtt_service.publish(error_topic, error_payload)
+
     async def handle_main_task(self, message: MQTTMessage):
         """Handle main orchestration tasks with LangGraph integration"""
         task_id = message.payload.get("task_id")

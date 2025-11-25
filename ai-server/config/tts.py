@@ -56,6 +56,10 @@ CACHE_COMMON_PHRASES = os.getenv("TTS_CACHE_COMMON_PHRASES", "true").lower() == 
 CACHE_INCLUDES_PARAMETERS = os.getenv("TTS_CACHE_INCLUDES_PARAMETERS", "true").lower() == "true"
 MAX_CACHED_PHRASES = int(os.getenv("TTS_MAX_CACHED_PHRASES", "256"))
 
+# Concurrency Control
+MAX_CONCURRENT_REQUESTS = int(os.getenv("TTS_MAX_CONCURRENT_REQUESTS", "4"))
+POOL_TIMEOUT_SECONDS = float(os.getenv("TTS_POOL_TIMEOUT_SECONDS", "30.0"))
+
 # Text Processing
 NORMALIZE_NUMBERS = os.getenv("TTS_NORMALIZE_NUMBERS", "true").lower() == "true"
 NORMALIZE_DATES = os.getenv("TTS_NORMALIZE_DATES", "true").lower() == "true"
