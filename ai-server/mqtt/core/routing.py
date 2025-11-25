@@ -81,8 +81,8 @@ class MessageRouter:
 
         # Evict oldest entries if cache is full
         if len(self._topic_cache) >= self._topic_cache_size:
-            # Remove first 10% of entries
-            evict_count = self._topic_cache_size // 10
+            # Remove first 10% of entries (minimum 1)
+            evict_count = max(1, self._topic_cache_size // 10)
             for key in list(self._topic_cache.keys())[:evict_count]:
                 del self._topic_cache[key]
 

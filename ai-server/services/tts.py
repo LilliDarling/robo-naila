@@ -419,7 +419,7 @@ class TTSService(BaseAIService):
             else:
                 processed_results.append(result)
 
-        logger.info("batch_synthesis_completed", count=len(texts), successful=sum(1 for r in processed_results if r.audio_bytes))
+        logger.info("batch_synthesis_completed", count=len(texts), successful=sum(bool(r.audio_bytes) for r in processed_results))
         return processed_results
 
     def _group_segments_by_voice(self, segments):

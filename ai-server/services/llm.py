@@ -30,7 +30,7 @@ class LLMService(BaseAIService):
 
     async def _load_system_prompt(self) -> str:
         """Load system prompt from file asynchronously"""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             if llm_config.SYSTEM_PROMPT_FILE.exists():
                 prompt = await loop.run_in_executor(
