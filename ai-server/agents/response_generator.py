@@ -101,10 +101,8 @@ class ResponseGenerator(BaseAgent):
 
         # Handle visual query responses
         if visual_context:
-            if visual_context.get("answer"):
-                return visual_context["answer"]
-            elif visual_context.get("description"):
-                return visual_context["description"]
+            if result := visual_context.get("answer") or visual_context.get("description"):
+                return result
 
         # Handle low confidence inputs
         if confidence < 0.6:
