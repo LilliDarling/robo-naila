@@ -6,6 +6,7 @@ from typing import Dict, Optional
 from services.llm import LLMService
 from services.stt import STTService
 from services.tts import TTSService
+from services.vision import VisionService
 from config.hardware import HardwareOptimizer
 from utils import get_logger
 
@@ -20,11 +21,13 @@ class AIModelManager:
         self,
         llm_service: Optional[LLMService] = None,
         stt_service: Optional[STTService] = None,
-        tts_service: Optional[TTSService] = None
+        tts_service: Optional[TTSService] = None,
+        vision_service: Optional[VisionService] = None
     ):
         self.llm_service = llm_service
         self.stt_service = stt_service
         self.tts_service = tts_service
+        self.vision_service = vision_service
         self._models_loaded = False
         self._hardware_info = None
 
@@ -85,6 +88,13 @@ class AIModelManager:
         else:
             logger.info("service_not_configured", service="TTS", impact="audio output disabled")
 
+        if self.vision_service:
+            logger.info("loading_model", model_type="Vision")
+            tasks.append(self.vision_service.load_model(hardware_info=hardware_info))
+            task_names.append("Vision")
+        else:
+            logger.info("service_not_configured", service="Vision", impact="visual analysis disabled")
+
         # Load all models in parallel if there are any to load
         if tasks:
             logger.info("loading_models_parallel", model_count=len(tasks))
@@ -131,6 +141,11 @@ class AIModelManager:
             self.tts_service.unload_model()
             logger.info("model_unloaded", model_type="TTS")
 
+        # Unload Vision model
+        if self.vision_service and self.vision_service.is_ready:
+            self.vision_service.unload_model()
+            logger.info("model_unloaded", model_type="Vision")
+
         self._models_loaded = False
 
     def get_llm_service(self) -> Optional[LLMService]:
@@ -145,6 +160,10 @@ class AIModelManager:
         """Get the TTS service instance"""
         return self.tts_service
 
+    def get_vision_service(self) -> Optional[VisionService]:
+        """Get the Vision service instance"""
+        return self.vision_service
+
     def is_ready(self) -> bool:
         """Check if models are loaded and ready"""
         return self._models_loaded
@@ -155,7 +174,8 @@ class AIModelManager:
             "models_loaded": self._models_loaded,
             "llm": None,
             "stt": None,
-            "tts": None
+            "tts": None,
+            "vision": None
         }
 
         if self.llm_service:
@@ -166,5 +186,8 @@ class AIModelManager:
 
         if self.tts_service:
             status["tts"] = self.tts_service.get_status()
+
+        if self.vision_service:
+            status["vision"] = self.vision_service.get_status()
 
         return status

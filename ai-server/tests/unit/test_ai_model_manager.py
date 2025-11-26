@@ -35,7 +35,12 @@ class TestAIModelManager:
 
     @pytest.fixture
     def manager(self, llm_service, stt_service):
-        return AIModelManager(llm_service, stt_service)
+        yield AIModelManager(llm_service, stt_service)
+        # Cleanup any pending async mocks
+        if hasattr(llm_service.load_model, 'reset_mock'):
+            llm_service.load_model.reset_mock()
+        if hasattr(stt_service.load_model, 'reset_mock'):
+            stt_service.load_model.reset_mock()
 
     @pytest.mark.asyncio
     async def test_hardware_detection_called_once(self, manager, llm_service, stt_service):
@@ -91,8 +96,7 @@ class TestAIModelManager:
             # Verify return_exceptions=True was passed
             assert call_args[1].get('return_exceptions') is True
 
-    @pytest.mark.asyncio
-    async def test_hardware_info_cached(self, manager):
+    def test_hardware_info_cached(self, manager):
         """Test that hardware info is cached after first detection"""
         mock_hw_optimizer = MagicMock()
         mock_hw_optimizer.hardware_info.device_type = 'cpu'
@@ -137,7 +141,9 @@ class TestAIModelManager:
     @pytest.mark.asyncio
     async def test_load_models_llm_failure(self, manager, llm_service, stt_service):
         """Test that LLM failure affects overall success"""
-        llm_service.load_model = AsyncMock(return_value=False)
+        # Reset the mock to avoid unawaited coroutine warnings
+        llm_service.load_model.reset_mock()
+        llm_service.load_model.return_value = False
 
         with patch('managers.ai_model.HardwareOptimizer'):
             result = await manager.load_models()
@@ -147,7 +153,9 @@ class TestAIModelManager:
     @pytest.mark.asyncio
     async def test_load_models_stt_failure(self, manager, llm_service, stt_service):
         """Test that STT failure doesn't affect overall success"""
-        stt_service.load_model = AsyncMock(return_value=False)
+        # Reset the mock to avoid unawaited coroutine warnings
+        stt_service.load_model.reset_mock()
+        stt_service.load_model.return_value = False
 
         with patch('managers.ai_model.HardwareOptimizer'):
             result = await manager.load_models()
@@ -159,7 +167,8 @@ class TestAIModelManager:
     async def test_load_models_exception_handling(self, manager, llm_service, stt_service):
         """Test that exceptions during loading are handled gracefully"""
         # Make STT raise an exception
-        stt_service.load_model = AsyncMock(side_effect=RuntimeError("Model corrupted"))
+        stt_service.load_model.reset_mock()
+        stt_service.load_model.side_effect = RuntimeError("Model corrupted")
 
         with patch('managers.ai_model.HardwareOptimizer'):
             result = await manager.load_models()
@@ -171,7 +180,8 @@ class TestAIModelManager:
     async def test_load_models_llm_exception(self, manager, llm_service, stt_service):
         """Test that LLM exception affects overall result"""
         # Make LLM raise an exception
-        llm_service.load_model = AsyncMock(side_effect=RuntimeError("LLM failed"))
+        llm_service.load_model.reset_mock()
+        llm_service.load_model.side_effect = RuntimeError("LLM failed")
 
         with patch('managers.ai_model.HardwareOptimizer'):
             result = await manager.load_models()
