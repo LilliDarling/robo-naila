@@ -39,9 +39,6 @@ static const app_callbacks_t app_callbacks = {
 };
 
 static naila_err_t initialize_system(void) {
-  // Initialize logging system first
-  naila_log_init();
-
   // Log system info
   ESP_LOGI(TAG, "CPU freq: %d MHz", ets_get_cpu_frequency());
   ESP_LOGI(TAG, "Free heap: %d bytes", esp_get_free_heap_size());
@@ -86,6 +83,5 @@ extern "C" void app_main() {
     restart_with_delay("Application start failed");
   }
 
-  NAILA_TIME_END(TAG, total_init);
   NAILA_LOGI(TAG, "NAILA Robot Application started successfully");
 }
