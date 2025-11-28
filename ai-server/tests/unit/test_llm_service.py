@@ -21,31 +21,41 @@ class TestLLMServiceInit:
         assert service.is_ready is False
         assert service.hardware_info is None
         assert isinstance(service.model_path, Path)
-        assert service.system_prompt is not None
+        # system_prompt is None until model is loaded (loaded asynchronously)
+        assert service.system_prompt is None
+        assert service._pool is None
 
-    @patch('builtins.open', new_callable=mock_open, read_data="Custom system prompt")
-    @patch.object(Path, 'exists', return_value=True)
-    def test_init_loads_system_prompt_from_file(self, mock_exists, mock_file):
+    @pytest.mark.asyncio
+    async def test_load_system_prompt_from_file(self):
         """Test that system prompt is loaded from file if it exists"""
         service = LLMService()
 
-        assert service.system_prompt == "Custom system prompt"
-        mock_file.assert_called_once()
+        with patch.object(Path, 'exists', return_value=True):
+            with patch.object(Path, 'read_text', return_value="Custom system prompt"):
+                prompt = await service._load_system_prompt()
 
-    @patch.object(Path, 'exists', return_value=False)
-    def test_init_uses_fallback_prompt_when_file_missing(self, mock_exists):
+        assert prompt == "Custom system prompt"
+
+    @pytest.mark.asyncio
+    async def test_load_system_prompt_uses_fallback_when_file_missing(self):
         """Test that fallback prompt is used when file doesn't exist"""
         service = LLMService()
 
-        assert service.system_prompt == llm_config.FALLBACK_SYSTEM_PROMPT
+        with patch.object(Path, 'exists', return_value=False):
+            prompt = await service._load_system_prompt()
 
-    @patch('builtins.open', side_effect=IOError("File error"))
-    @patch.object(Path, 'exists', return_value=True)
-    def test_init_uses_fallback_prompt_on_read_error(self, mock_exists, mock_file):
+        assert prompt == llm_config.FALLBACK_SYSTEM_PROMPT
+
+    @pytest.mark.asyncio
+    async def test_load_system_prompt_uses_fallback_on_read_error(self):
         """Test that fallback prompt is used when file read fails"""
         service = LLMService()
 
-        assert service.system_prompt == llm_config.FALLBACK_SYSTEM_PROMPT
+        with patch.object(Path, 'exists', return_value=True):
+            with patch.object(Path, 'read_text', side_effect=IOError("File error")):
+                prompt = await service._load_system_prompt()
+
+        assert prompt == llm_config.FALLBACK_SYSTEM_PROMPT
 
 
 class TestLoadModel:

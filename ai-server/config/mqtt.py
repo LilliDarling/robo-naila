@@ -1,4 +1,5 @@
 import os
+import uuid
 from dataclasses import dataclass
 from typing import Optional
 
@@ -39,5 +40,4 @@ class MQTTConfig:
   
   def __post_init__(self):
     if self.client_id == "ai-server":
-      import random
-      self.client_id = f"ai-server-{random.randint(1000,9999)}"
+      self.client_id = f"ai-server-{uuid.uuid4().hex[:12]}"
