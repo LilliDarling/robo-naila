@@ -4,7 +4,7 @@ import asyncio
 import time
 from typing import Any, Dict, List, Optional
 from datetime import datetime
-from collections import OrderedDict
+from cachetools import TTLCache
 from agents.base import BaseAgent
 
 
@@ -13,10 +13,7 @@ class ResponseGenerator(BaseAgent):
 
     def __init__(self, llm_service=None, tts_service=None):
         super().__init__("response_generator")
-        # Use OrderedDict for LRU cache with O(1) operations
-        self._response_cache = OrderedDict()
-        self._cache_ttl = 600  # 10 minutes
-        self._max_cache_size = 200
+        self._response_cache = TTLCache(maxsize=200, ttl=600)
         self.llm_service = llm_service
         self.tts_service = tts_service
     
@@ -202,54 +199,12 @@ class ResponseGenerator(BaseAgent):
             return f"Following up on our previous topic, {text.lower()}. Let me help with that."
     
     def _get_cached_response(self, cache_key: str) -> Optional[str]:
-        """Get cached response with TTL using LRU eviction
-
-        Uses OrderedDict for O(1) get/set/delete operations.
-        """
-        if cache_key not in self._response_cache:
-            return None
-
-        cached_time, response = self._response_cache[cache_key]
-        current_time = time.time()
-
-        # Check if expired
-        if current_time - cached_time >= self._cache_ttl:
-            del self._response_cache[cache_key]
-            return None
-
-        # Move to end (mark as recently used)
-        self._response_cache.move_to_end(cache_key)
-        return response
+        """Get cached response (TTLCache handles expiration automatically)"""
+        return self._response_cache.get(cache_key)
 
     def _cache_response(self, cache_key: str, response: str):
-        """Cache response with TTL and LRU eviction
-
-        Uses OrderedDict for efficient LRU cache:
-        - O(1) insertion
-        - O(1) eviction of oldest item
-        - No sorting required
-        """
-        current_time = time.time()
-
-        # If key exists, update and move to end
-        if cache_key in self._response_cache:
-            self._response_cache[cache_key] = (current_time, response)
-            self._response_cache.move_to_end(cache_key)
-            return
-
-        # Evict oldest items if cache is full (LRU eviction)
-        if len(self._response_cache) >= self._max_cache_size:
-            # Remove oldest 25% of items (scaled with max cache size) in O(1) per item
-            eviction_count = max(1, self._max_cache_size // 4)
-            # Ensure we don't try to evict more items than currently in the cache
-            eviction_count = min(eviction_count, len(self._response_cache))
-
-            for _ in range(eviction_count):
-                # popitem(last=False) removes the least recently used (oldest) item in O(1)
-                self._response_cache.popitem(last=False)
-
-        # Add new entry
-        self._response_cache[cache_key] = (current_time, response)
+        """Cache response (TTLCache handles eviction and TTL automatically)"""
+        self._response_cache[cache_key] = response
     
     def _personalize_response(self, base_response: str, context: Dict[str, Any]) -> str:
         """Add personalization based on context"""

@@ -6,7 +6,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from piper.config import SynthesisConfig
 
 import numpy as np
@@ -25,6 +25,7 @@ from utils.text_normalizer import TextNormalizer
 from managers.voice import VoiceManager, VoiceConfig
 from utils.emotion_presets import get_emotion_parameters, list_emotions
 from utils.ssml_parser import SSMLParser
+from utils.resource_pool import ResourcePool
 from utils import get_logger
 
 
@@ -75,6 +76,7 @@ class TTSService(BaseAIService):
         self.text_normalizer = TextNormalizer(language="en")
         self.audio_encoder = AudioEncoder()
         self._phrase_cache = TTSPhraseLRUCache(maxsize=tts_config.MAX_CACHED_PHRASES)
+        self._pool: Optional[ResourcePool] = None
 
         # Multi-voice support
         self.voice_manager = VoiceManager()
@@ -177,6 +179,13 @@ class TTSService(BaseAIService):
             # Warm up model if enabled (cache common phrases)
             if tts_config.CACHE_COMMON_PHRASES:
                 await self._warmup_and_cache()
+
+            # Initialize resource pool for concurrency control
+            self._pool = ResourcePool(
+                max_concurrent=tts_config.MAX_CONCURRENT_REQUESTS,
+                timeout=tts_config.POOL_TIMEOUT_SECONDS
+            )
+            logger.info("resource_pool_initialized", max_concurrent=tts_config.MAX_CONCURRENT_REQUESTS)
 
             return True
 
@@ -348,6 +357,70 @@ class TTSService(BaseAIService):
         except Exception as e:
             logger.error("tts_synthesis_failed", error=str(e), error_type=type(e).__name__)
             return self._empty_result()
+
+    async def synthesize_batch(
+        self,
+        texts: List[str],
+        output_format: Optional[str] = None,
+        length_scale: Optional[float] = None,
+        noise_scale: Optional[float] = None,
+        noise_w: Optional[float] = None,
+        voice: Optional[str] = None,
+        emotion: Optional[str] = None,
+    ) -> List[AudioData]:
+        """Synthesize multiple texts in parallel for improved throughput.
+
+        Args:
+            texts: List of texts to synthesize
+            output_format: Output format (wav, mp3, ogg, raw). Defaults to config.
+            length_scale: Speaking rate (1.0 = normal). Defaults to config.
+            noise_scale: Pitch variation. Defaults to config.
+            noise_w: Energy variation. Defaults to config.
+            voice: Voice name to use (only if multi-voice enabled). Defaults to current voice.
+            emotion: Emotion/tone preset. Overrides length/noise params.
+
+        Returns:
+            List of AudioData results in same order as input texts
+        """
+        if not texts:
+            return []
+
+        if not self.is_ready or self.model is None:
+            logger.error("tts_model_not_loaded")
+            return [self._empty_result() for _ in texts]
+
+        # Handle voice switching once before batch
+        if voice and self.multi_voice_enabled:
+            await self._switch_voice(voice)
+
+        # Create synthesis tasks for all texts
+        tasks = [
+            self.synthesize(
+                text,
+                output_format=output_format,
+                length_scale=length_scale,
+                noise_scale=noise_scale,
+                noise_w=noise_w,
+                voice=None,  # Already switched
+                emotion=emotion,
+            )
+            for text in texts
+        ]
+
+        # Execute all syntheses in parallel
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Convert exceptions to empty results
+        processed_results = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error("batch_synthesis_item_failed", index=i, error=str(result), error_type=type(result).__name__)
+                processed_results.append(self._empty_result())
+            else:
+                processed_results.append(result)
+
+        logger.info("batch_synthesis_completed", count=len(texts), successful=sum(bool(r.audio_bytes) for r in processed_results))
+        return processed_results
 
     def _group_segments_by_voice(self, segments):
         """Group SSML segments by voice to enable batch synthesis
@@ -594,6 +667,19 @@ class TTSService(BaseAIService):
         Returns:
             Audio samples as numpy array (float32)
         """
+        if self._pool is None:
+            return await self._synthesize_to_audio_impl(text, length_scale, noise_scale, noise_w)
+        async with self._pool:
+            return await self._synthesize_to_audio_impl(text, length_scale, noise_scale, noise_w)
+
+    async def _synthesize_to_audio_impl(
+        self,
+        text: str,
+        length_scale: Optional[float] = None,
+        noise_scale: Optional[float] = None,
+        noise_w: Optional[float] = None,
+    ) -> np.ndarray:
+        """Internal implementation of synthesis to audio samples"""
         model = self.model
         assert model is not None, "Model should be loaded"
 
@@ -930,5 +1016,8 @@ class TTSService(BaseAIService):
                 "output_format": tts_config.OUTPUT_FORMAT,
                 "cached_phrases": len(self._phrase_cache),
             })
+
+        if self._pool is not None:
+            status["pool"] = self._pool.get_stats()
 
         return status

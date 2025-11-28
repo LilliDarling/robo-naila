@@ -9,18 +9,24 @@ from utils import get_logger
 class MessageRouter:
     """High-performance message routing with caching and topic parsing"""
 
-    def __init__(self):
+    def __init__(self, topic_cache_size: int = 1000):
         self.logger = get_logger(__name__)
-        
+
         # Handler management
         self.event_handlers: Dict[str, List[MQTTEventHandler]] = {}
         self._handler_cache: Dict[str, List[MQTTEventHandler]] = {}
-        
+
+        # Topic parsing cache (LRU-style with max size)
+        self._topic_cache: Dict[str, dict] = {}
+        self._topic_cache_size = topic_cache_size
+
         # Performance metrics
         self._message_count = 0
         self._error_count = 0
         self._cache_hits = 0
         self._cache_misses = 0
+        self._topic_cache_hits = 0
+        self._topic_cache_misses = 0
     
     def register_handler(self, topics: List[str], handler_func) -> MQTTEventHandler:
         """Register an event handler for specific topics"""
@@ -39,7 +45,7 @@ class MessageRouter:
         """Parse incoming message into structured format"""
         self._message_count += 1
         binary_data = None
-        
+
         # Fast JSON parsing with fallback
         try:
             parsed_payload = json.loads(payload)
@@ -50,8 +56,8 @@ class MessageRouter:
             else:
                 parsed_payload = {"raw": payload}
 
-        topic_info = self._parse_topic(topic)
-        
+        topic_info = self._get_cached_topic_info(topic)
+
         return MQTTMessage(
             topic=topic,
             payload=parsed_payload,
@@ -63,6 +69,25 @@ class MessageRouter:
             qos=0,
             binary_data=binary_data
         )
+
+    def _get_cached_topic_info(self, topic: str) -> dict:
+        """Get topic info from cache or parse and cache it"""
+        if topic in self._topic_cache:
+            self._topic_cache_hits += 1
+            return self._topic_cache[topic]
+
+        self._topic_cache_misses += 1
+        topic_info = self._parse_topic(topic)
+
+        # Evict oldest entries if cache is full
+        if len(self._topic_cache) >= self._topic_cache_size:
+            # Remove first 10% of entries (minimum 1)
+            evict_count = max(1, self._topic_cache_size // 10)
+            for key in list(self._topic_cache.keys())[:evict_count]:
+                del self._topic_cache[key]
+
+        self._topic_cache[topic] = topic_info
+        return topic_info
     
     def _parse_topic(self, topic: str) -> dict:
         """
@@ -225,13 +250,18 @@ class MessageRouter:
     def get_routing_stats(self) -> dict:
         """Get routing performance statistics"""
         cache_hit_rate = self._cache_hits / max(self._cache_hits + self._cache_misses, 1)
-        
+        topic_cache_hit_rate = self._topic_cache_hits / max(self._topic_cache_hits + self._topic_cache_misses, 1)
+
         return {
             "message_count": self._message_count,
             "error_count": self._error_count,
             "handlers_registered": len(self.event_handlers),
-            "cache_size": len(self._handler_cache),
-            "cache_hits": self._cache_hits,
-            "cache_misses": self._cache_misses,
-            "cache_hit_rate": cache_hit_rate
+            "handler_cache_size": len(self._handler_cache),
+            "handler_cache_hits": self._cache_hits,
+            "handler_cache_misses": self._cache_misses,
+            "handler_cache_hit_rate": cache_hit_rate,
+            "topic_cache_size": len(self._topic_cache),
+            "topic_cache_hits": self._topic_cache_hits,
+            "topic_cache_misses": self._topic_cache_misses,
+            "topic_cache_hit_rate": topic_cache_hit_rate
         }
