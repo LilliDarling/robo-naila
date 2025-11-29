@@ -20,6 +20,6 @@ PORT=$(detect_esp32_port)
 print_info "Starting monitor on $PORT..."
 print_info "Press Ctrl+] to exit monitor"
 echo "─────────────────────────────────────────"
-idf.py -p "$PORT" monitor
+python -m esp_idf_monitor -p "$PORT" build/robo_naila.elf
 
 print_success "Monitor session ended"

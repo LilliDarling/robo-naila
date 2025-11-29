@@ -1,6 +1,7 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#include <stdbool.h>
 #include "common_types.h"
 
 #ifdef __cplusplus
@@ -32,32 +33,17 @@ typedef struct {
   bool enable_debug;
 } ai_config_t;
 
-// Audio Configuration
-typedef struct {
-  int sample_rate;
-  int bit_depth;
-  int channels;
-  int buffer_size;
-} audio_config_t;
-
 // Main system configuration
 typedef struct {
   naila_wifi_config_t wifi;
   mqtt_config_t mqtt;
   ai_config_t ai;
-  audio_config_t audio;
-  component_info_t info;
 } naila_config_t;
 
 // Configuration manager API
+// NOTE: Config is immutable after init. To change config, save to NVS then esp_restart().
 naila_err_t config_manager_init(void);
-naila_err_t config_manager_load_defaults(naila_config_t *config);
-naila_err_t config_manager_load_from_nvs(naila_config_t *config);
-naila_err_t config_manager_save_to_nvs(const naila_config_t *config);
-naila_err_t config_manager_validate(const naila_config_t *config);
-const naila_config_t *config_manager_get(void);
-naila_err_t config_manager_update_wifi(const naila_wifi_config_t *wifi_config);
-naila_err_t config_manager_update_mqtt(const mqtt_config_t *mqtt_config);
+const naila_config_t *config_manager_get(void);  // Returns pointer to immutable config
 
 #ifdef __cplusplus
 }
