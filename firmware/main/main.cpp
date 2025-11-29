@@ -4,6 +4,7 @@
 #include <esp_netif.h>
 #include <esp_system.h>
 #include <esp_timer.h>
+#include <esp_clk_tree.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -40,36 +41,50 @@ static const app_callbacks_t app_callbacks = {
 
 static naila_err_t initialize_system(void) {
   // Log system info
-  ESP_LOGI(TAG, "CPU freq: %d MHz", ets_get_cpu_frequency());
-  ESP_LOGI(TAG, "Free heap: %d bytes", esp_get_free_heap_size());
-  
+  uint32_t cpu_freq_mhz = 0;
+  esp_clk_tree_src_get_freq_hz(SOC_MOD_CLK_CPU, ESP_CLK_TREE_SRC_FREQ_PRECISION_CACHED, &cpu_freq_mhz);
+  ESP_LOGI(TAG, "CPU freq: %lu MHz", cpu_freq_mhz / 1000000);
+  ESP_LOGI(TAG, "Free heap: %lu bytes", (unsigned long)esp_get_free_heap_size());
 
   // Initialize NVS flash for system configuration
   esp_err_t ret = nvs_flash_init();
   if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    NAILA_ESP_CHECK(nvs_flash_erase(), TAG, "NVS flash erase");
+    ret = nvs_flash_erase();
+    if (ret != ESP_OK) {
+      NAILA_LOGE(TAG, "NVS flash erase failed: 0x%x", ret);
+      return (naila_err_t)ret;
+    }
     ret = nvs_flash_init();
   }
-  NAILA_ESP_CHECK(ret, TAG, "NVS flash init");
+  if (ret != ESP_OK) {
+    NAILA_LOGE(TAG, "NVS flash init failed: 0x%x", ret);
+    return (naila_err_t)ret;
+  }
 
   // Initialize network interface
-  NAILA_ESP_CHECK(esp_netif_init(), TAG, "Network interface init");
-  NAILA_ESP_CHECK(esp_event_loop_create_default(), TAG, "Event loop create");
+  ret = esp_netif_init();
+  if (ret != ESP_OK) {
+    NAILA_LOGE(TAG, "Network interface init failed: 0x%x", ret);
+    return (naila_err_t)ret;
+  }
 
-  NAILA_LOG_FUNC_EXIT(TAG);
+  ret = esp_event_loop_create_default();
+  if (ret != ESP_OK) {
+    NAILA_LOGE(TAG, "Event loop create failed: 0x%x", ret);
+    return (naila_err_t)ret;
+  }
+
   return NAILA_OK;
 }
 
 extern "C" void app_main() {
   NAILA_LOGI(TAG, "Starting NAILA Application...");
-  NAILA_TIME_START(total_init);
 
   // Initialize basic system components
   naila_err_t result = initialize_system();
   if (result != NAILA_OK) {
     restart_with_delay("System initialization failed");
   }
-
 
   // Initialize application manager
   result = app_manager_init(&app_callbacks);

@@ -1,4 +1,6 @@
-#include "mqtt_client.h"
+#include <mqtt_client.h>
+#include <esp_event.h>
+#include "naila_mqtt.h"
 #include "naila_log.h"
 #include "mutex_helpers.h"
 #include <stdio.h>
@@ -34,14 +36,14 @@ static void mqtt_event_handler(void* handler_args __attribute__((unused)),
             NAILA_LOGI(TAG, "Successfully connected to MQTT broker");
             MUTEX_LOCK_VOID(mqtt_mutex, TAG) {
                 connected = true;
-            } MUTEX_UNLOCK_VOID();
+            } MUTEX_UNLOCK_VOID(mqtt_mutex, TAG);
             break;
 
         case MQTT_EVENT_DISCONNECTED:
             NAILA_LOGW(TAG, "Disconnected from MQTT broker");
             MUTEX_LOCK_VOID(mqtt_mutex, TAG) {
                 connected = false;
-            } MUTEX_UNLOCK_VOID();
+            } MUTEX_UNLOCK_VOID(mqtt_mutex, TAG);
             break;
 
         case MQTT_EVENT_SUBSCRIBED:
@@ -62,7 +64,7 @@ static void mqtt_event_handler(void* handler_args __attribute__((unused)),
                 mqtt_message_handler_t handler = NULL;
                 MUTEX_LOCK_VOID(mqtt_mutex, TAG) {
                     handler = message_handler;
-                } MUTEX_UNLOCK_VOID();
+                } MUTEX_UNLOCK_VOID(mqtt_mutex, TAG);
 
                 if (handler) {
                     // Use stack-allocated buffer to avoid malloc in event handler
@@ -180,14 +182,14 @@ naila_err_t mqtt_client_subscribe(const char* topic, int qos) {
 void mqtt_client_register_handler(mqtt_message_handler_t handler) {
     MUTEX_LOCK_VOID(mqtt_mutex, TAG) {
         message_handler = handler;
-    } MUTEX_UNLOCK_VOID();
+    } MUTEX_UNLOCK_VOID(mqtt_mutex, TAG);
 }
 
 bool mqtt_client_is_connected(void) {
     bool status = false;
     MUTEX_LOCK_BOOL(mqtt_mutex, TAG) {
         status = connected;
-    } MUTEX_UNLOCK_BOOL();
+    } MUTEX_UNLOCK_BOOL(mqtt_mutex, TAG);
     return status;
 }
 
@@ -208,7 +210,7 @@ naila_err_t mqtt_client_stop(void) {
             }
             client = NULL;
         }
-    } MUTEX_UNLOCK();
+    } MUTEX_UNLOCK(mqtt_mutex, TAG);
 
     NAILA_LOGI(TAG, "MQTT client stopped");
     return NAILA_OK;

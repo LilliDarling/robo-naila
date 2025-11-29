@@ -6,7 +6,7 @@
 #include <freertos/semphr.h>
 
 #include "wifi.h"
-#include "mqtt_client.h"
+#include "naila_mqtt.h"
 #include "naila_log.h"
 #include "mutex_helpers.h"
 
@@ -41,7 +41,7 @@ naila_err_t app_manager_init(const app_callbacks_t *callbacks) {
   MUTEX_LOCK(g_app_mutex, TAG) {
     g_app.callbacks = callbacks;
     g_app.state = APP_STATE_INITIALIZING;
-  } MUTEX_UNLOCK();
+  } MUTEX_UNLOCK(g_app_mutex, TAG);
 
   naila_err_t result = config_manager_init();
   if (result != NAILA_OK) {
@@ -67,7 +67,7 @@ static void on_wifi_connected(void) {
   MUTEX_LOCK_VOID(g_app_mutex, TAG) {
     g_app.state = APP_STATE_SERVICES_STARTING;
     callbacks = g_app.callbacks;
-  } MUTEX_UNLOCK_VOID();
+  } MUTEX_UNLOCK_VOID(g_app_mutex, TAG);
 
   if (callbacks && callbacks->on_state_change) {
     callbacks->on_state_change(APP_STATE_SERVICES_STARTING);
@@ -87,7 +87,7 @@ static void on_wifi_connected(void) {
     MUTEX_LOCK_VOID(g_app_mutex, TAG) {
       g_app.state = APP_STATE_RUNNING;
       callbacks = g_app.callbacks;
-    } MUTEX_UNLOCK_VOID();
+    } MUTEX_UNLOCK_VOID(g_app_mutex, TAG);
 
     if (callbacks && callbacks->on_state_change) {
       callbacks->on_state_change(APP_STATE_RUNNING);
@@ -105,7 +105,7 @@ static void on_wifi_error(naila_err_t error) {
   MUTEX_LOCK_VOID(g_app_mutex, TAG) {
     g_app.state = APP_STATE_ERROR;
     callbacks = g_app.callbacks;
-  } MUTEX_UNLOCK_VOID();
+  } MUTEX_UNLOCK_VOID(g_app_mutex, TAG);
 
   if (callbacks && callbacks->on_state_change) {
     callbacks->on_state_change(APP_STATE_ERROR);
@@ -116,7 +116,12 @@ static void on_wifi_error(naila_err_t error) {
 }
 
 naila_err_t app_manager_start(void) {
-  esp_err_t wdt_result = esp_task_wdt_init(WATCHDOG_TIMEOUT_SEC, WATCHDOG_PANIC_ON_TIMEOUT);
+  esp_task_wdt_config_t wdt_config = {
+    .timeout_ms = WATCHDOG_TIMEOUT_SEC * 1000,
+    .idle_core_mask = 0,
+    .trigger_panic = WATCHDOG_PANIC_ON_TIMEOUT,
+  };
+  esp_err_t wdt_result = esp_task_wdt_init(&wdt_config);
   if (wdt_result != ESP_OK) {
     NAILA_LOGE(TAG, "Failed to initialize watchdog: 0x%x", wdt_result);
     return (naila_err_t)wdt_result;
@@ -141,7 +146,7 @@ naila_err_t app_manager_stop(void) {
   MUTEX_LOCK(g_app_mutex, TAG) {
     g_app.callbacks = NULL;
     g_app.state = APP_STATE_SHUTDOWN;
-  } MUTEX_UNLOCK();
+  } MUTEX_UNLOCK(g_app_mutex, TAG);
 
   mqtt_client_stop();
   wifi_stop_task();
@@ -154,7 +159,7 @@ app_state_t app_manager_get_state(void) {
   app_state_t state = APP_STATE_ERROR;
   MUTEX_LOCK(g_app_mutex, TAG) {
     state = g_app.state;
-  } MUTEX_UNLOCK();
+  } MUTEX_UNLOCK(g_app_mutex, TAG);
   return state;
 }
 
@@ -162,6 +167,6 @@ bool app_manager_is_running(void) {
   bool running = false;
   MUTEX_LOCK_BOOL(g_app_mutex, TAG) {
     running = (g_app.state == APP_STATE_RUNNING);
-  } MUTEX_UNLOCK_BOOL();
+  } MUTEX_UNLOCK_BOOL(g_app_mutex, TAG);
   return running;
 }

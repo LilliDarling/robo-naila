@@ -1,6 +1,7 @@
 #ifndef APP_H
 #define APP_H
 
+#include <stdbool.h>
 #include "common_types.h"
 
 #ifdef __cplusplus

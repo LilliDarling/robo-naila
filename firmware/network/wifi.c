@@ -30,6 +30,13 @@ static wifi_state_t g_wifi = {0};
 
 static SemaphoreHandle_t wifi_mutex = NULL;
 
+// WiFi disconnect reason type (defined here for forward declaration)
+typedef struct {
+  wifi_err_reason_t reason;
+  esp_log_level_t log_level;
+  const char *message;
+} wifi_disconnect_reason_t;
+
 // Forward declarations
 static void wifi_reconnection_task(void *pvParameters);
 static naila_err_t start_reconnection_task(void);
@@ -66,7 +73,7 @@ static void event_handler(void *arg __attribute__((unused)),
         MUTEX_LOCK_VOID(wifi_mutex, TAG) {
           g_wifi.connected = false;
           should_start_task = !g_wifi.task_handle;
-        } MUTEX_UNLOCK_VOID();
+        } MUTEX_UNLOCK_VOID(wifi_mutex, TAG);
 
         if (should_start_task) {
           naila_err_t result = start_reconnection_task();
@@ -89,7 +96,7 @@ static void event_handler(void *arg __attribute__((unused)),
         g_wifi.task_should_stop = true;
       }
       callbacks = g_wifi.callbacks;
-    } MUTEX_UNLOCK_VOID();
+    } MUTEX_UNLOCK_VOID(wifi_mutex, TAG);
 
     if (callbacks.on_connected) {
       callbacks.on_connected();
@@ -168,14 +175,14 @@ bool wifi_is_connected(void) {
   bool connected = false;
   MUTEX_LOCK_BOOL(wifi_mutex, TAG) {
     connected = g_wifi.connected;
-  } MUTEX_UNLOCK_BOOL();
+  } MUTEX_UNLOCK_BOOL(wifi_mutex, TAG);
   return connected;
 }
 
 naila_err_t wifi_disconnect(void) {
   MUTEX_LOCK(wifi_mutex, TAG) {
     g_wifi.connected = false;
-  } MUTEX_UNLOCK();
+  } MUTEX_UNLOCK(wifi_mutex, TAG);
 
   esp_err_t err = esp_wifi_disconnect();
   if (err != ESP_OK) {
@@ -197,7 +204,7 @@ static naila_err_t start_reconnection_task(void) {
     } else {
       g_wifi.task_should_stop = false;
     }
-  } MUTEX_UNLOCK();
+  } MUTEX_UNLOCK(wifi_mutex, TAG);
 
   if (already_running) {
     NAILA_LOGD(TAG, "Reconnection task already running, skipping");
@@ -215,7 +222,7 @@ static naila_err_t start_reconnection_task(void) {
 
   MUTEX_LOCK(wifi_mutex, TAG) {
     g_wifi.task_handle = new_task_handle;
-  } MUTEX_UNLOCK();
+  } MUTEX_UNLOCK(wifi_mutex, TAG);
 
   return NAILA_OK;
 }
@@ -229,7 +236,7 @@ static void wifi_reconnection_task(void *pvParameters __attribute__((unused))) {
     MUTEX_LOCK_VOID(wifi_mutex, TAG) {
       callbacks = g_wifi.callbacks;
       g_wifi.task_handle = NULL;
-    } MUTEX_UNLOCK_VOID();
+    } MUTEX_UNLOCK_VOID(wifi_mutex, TAG);
 
     if (callbacks.on_error) {
       callbacks.on_error(NAILA_ERR_INVALID_ARG);
@@ -245,7 +252,7 @@ static void wifi_reconnection_task(void *pvParameters __attribute__((unused))) {
   while (!should_stop && attempt < config->wifi.max_retry) {
     MUTEX_LOCK_VOID(wifi_mutex, TAG) {
       should_stop = g_wifi.task_should_stop;
-    } MUTEX_UNLOCK_VOID();
+    } MUTEX_UNLOCK_VOID(wifi_mutex, TAG);
 
     if (should_stop) break;
 
@@ -272,7 +279,7 @@ static void wifi_reconnection_task(void *pvParameters __attribute__((unused))) {
   MUTEX_LOCK_VOID(wifi_mutex, TAG) {
     callbacks = g_wifi.callbacks;
     g_wifi.task_handle = NULL;
-  } MUTEX_UNLOCK_VOID();
+  } MUTEX_UNLOCK_VOID(wifi_mutex, TAG);
 
   if (attempt >= config->wifi.max_retry && callbacks.on_error) {
     NAILA_LOGE(TAG, "Max reconnection attempts reached");
@@ -287,7 +294,7 @@ naila_err_t wifi_start_task(const wifi_event_callbacks_t *callbacks) {
     if (callbacks) {
       g_wifi.callbacks = *callbacks;
     }
-  } MUTEX_UNLOCK();
+  } MUTEX_UNLOCK(wifi_mutex, TAG);
 
   const naila_config_t *config = config_manager_get();
   if (config && !wifi_is_connected()) {
@@ -315,7 +322,7 @@ naila_err_t wifi_stop_task(void) {
     if (has_task) {
       g_wifi.task_should_stop = true;
     }
-  } MUTEX_UNLOCK();
+  } MUTEX_UNLOCK(wifi_mutex, TAG);
 
   if (!has_task) {
     return NAILA_OK;
@@ -327,7 +334,7 @@ naila_err_t wifi_stop_task(void) {
     vTaskDelay(pdMS_TO_TICKS(WIFI_TASK_STOP_WAIT_DELAY_MS));
     MUTEX_LOCK(wifi_mutex, TAG) {
       task_still_running = (g_wifi.task_handle != NULL);
-    } MUTEX_UNLOCK();
+    } MUTEX_UNLOCK(wifi_mutex, TAG);
     wait_count++;
   }
 
@@ -343,17 +350,11 @@ bool wifi_is_task_running(void) {
   bool running = false;
   MUTEX_LOCK_BOOL(wifi_mutex, TAG) {
     running = (g_wifi.task_handle != NULL);
-  } MUTEX_UNLOCK_BOOL();
+  } MUTEX_UNLOCK_BOOL(wifi_mutex, TAG);
   return running;
 }
 
-// WiFi disconnect reason lookup table and helper
-typedef struct {
-  wifi_err_reason_t reason;
-  esp_log_level_t log_level;
-  const char *message;
-} wifi_disconnect_reason_t;
-
+// WiFi disconnect reason lookup table
 static const wifi_disconnect_reason_t disconnect_reasons[] = {
     {WIFI_REASON_AUTH_EXPIRE, ESP_LOG_ERROR, "Authentication expired - auth timeout"},
     {WIFI_REASON_AUTH_LEAVE, ESP_LOG_ERROR, "Authentication leave - deauth from AP"},

@@ -1,5 +1,5 @@
-#ifndef MQTT_CLIENT_H
-#define MQTT_CLIENT_H
+#ifndef NAILA_MQTT_H
+#define NAILA_MQTT_H
 
 #include "common_types.h"
 #include "config.h"
@@ -22,4 +22,4 @@ bool mqtt_client_is_connected(void);
 }
 #endif
 
-#endif // MQTT_CLIENT_H
+#endif // NAILA_MQTT_H

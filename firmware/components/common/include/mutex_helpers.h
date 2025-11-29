@@ -20,13 +20,13 @@ extern "C" {
  *   MUTEX_LOCK(my_mutex, TAG) {
  *       // Protected code here
  *       value = shared_state;
- *   } MUTEX_UNLOCK();
+ *   } MUTEX_UNLOCK(my_mutex, TAG);
  */
 #define MUTEX_LOCK(mutex, tag) \
     if (xSemaphoreTake(mutex, pdMS_TO_TICKS(MUTEX_TIMEOUT_MS))) { \
         do {
 
-#define MUTEX_UNLOCK() \
+#define MUTEX_UNLOCK(mutex, tag) \
         } while(0); \
         xSemaphoreGive(mutex); \
     } else { \
@@ -43,13 +43,13 @@ extern "C" {
  *   MUTEX_LOCK_BOOL(my_mutex, TAG) {
  *       // Protected code here
  *       result = shared_state;
- *   } MUTEX_UNLOCK_BOOL();
+ *   } MUTEX_UNLOCK_BOOL(my_mutex, TAG);
  */
 #define MUTEX_LOCK_BOOL(mutex, tag) \
     if (xSemaphoreTake(mutex, pdMS_TO_TICKS(MUTEX_TIMEOUT_MS))) { \
         do {
 
-#define MUTEX_UNLOCK_BOOL() \
+#define MUTEX_UNLOCK_BOOL(mutex, tag) \
         } while(0); \
         xSemaphoreGive(mutex); \
     } else { \
@@ -66,13 +66,13 @@ extern "C" {
  *   MUTEX_LOCK_VOID(my_mutex, TAG) {
  *       // Protected code here
  *       shared_state = value;
- *   } MUTEX_UNLOCK_VOID();
+ *   } MUTEX_UNLOCK_VOID(my_mutex, TAG);
  */
 #define MUTEX_LOCK_VOID(mutex, tag) \
     if (xSemaphoreTake(mutex, pdMS_TO_TICKS(MUTEX_TIMEOUT_MS))) { \
         do {
 
-#define MUTEX_UNLOCK_VOID() \
+#define MUTEX_UNLOCK_VOID(mutex, tag) \
         } while(0); \
         xSemaphoreGive(mutex); \
     } else { \
