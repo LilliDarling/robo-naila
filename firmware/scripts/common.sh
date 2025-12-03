@@ -32,17 +32,18 @@ print_step() {
 }
 
 # Auto-detect ESP32 port
+# Auto-detect ESP32 port
 detect_esp32_port() {
     local PORT=""
 
-    print_info "Detecting ESP32 port..."
+    print_info "Detecting ESP32 port..." >&2
 
     # Common ESP32 port patterns on macOS
     for pattern in "/dev/cu.usbmodem*" "/dev/cu.usbserial*" "/dev/cu.SLAB_USBtoUART*"; do
         for port in $pattern; do
             if [ -e "$port" ]; then
                 PORT="$port"
-                print_success "Found ESP32 at: $PORT"
+                print_success "Found ESP32 at: $PORT" >&2
                 echo "$PORT"
                 return 0
             fi
@@ -50,14 +51,14 @@ detect_esp32_port() {
     done
 
     # If no port found, ask user
-    print_warning "No ESP32 device auto-detected."
-    echo "Available ports:"
-    ls /dev/cu.* 2>/dev/null || echo "No ports found"
-    echo ""
+    print_warning "No ESP32 device auto-detected." >&2
+    echo "Available ports:" >&2
+    ls /dev/cu.* 2>/dev/null >&2 || echo "No ports found" >&2
+    echo "" >&2
     read -p "Enter port manually (e.g., /dev/cu.usbmodem123): " PORT
 
     if [ -z "$PORT" ] || [ ! -e "$PORT" ]; then
-        print_error "Invalid port: $PORT"
+        print_error "Invalid port: $PORT" >&2
         exit 1
     fi
 
@@ -68,8 +69,8 @@ detect_esp32_port() {
 setup_esp_idf() {
     # Try common ESP-IDF installation paths
     local ESP_IDF_PATHS=(
-        "/Users/j/code/esp/esp-idf/export.sh"
-        "$HOME/esp/esp-idf/export.sh"
+        "/Users/j/code/esp-idf/export.sh"
+        "$HOME/esp-idf/export.sh"
         "$IDF_PATH/export.sh"
     )
 

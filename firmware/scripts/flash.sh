@@ -32,8 +32,16 @@ load_env_vars
 # Auto-detect ESP32 port
 PORT=$(detect_esp32_port)
 
-# Flash and monitor
+# Flash using esptool directly (workaround for idf.py bug)
 print_info "Flashing to $PORT..."
-idf.py -p "$PORT" flash monitor
+cd build
+esptool.py --chip esp32s3 -p "$PORT" -b 460800 \
+    --before=default_reset --after=hard_reset \
+    write_flash @flash_args
+cd ..
 
 print_success "Flash completed!"
+
+# Start monitor
+print_info "Starting monitor..."
+idf.py -p "$PORT" monitor
