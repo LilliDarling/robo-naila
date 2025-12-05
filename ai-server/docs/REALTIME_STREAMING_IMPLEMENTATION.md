@@ -2,8 +2,8 @@
 
 ## NAILA AI Server - WebRTC + MQTT Architecture
 
-**Version:** 1.0
-**Date:** November 2025
+**Version:** 2.0
+**Date:** December 2025
 **Status:** Implementation Specification
 
 ---
@@ -13,19 +13,22 @@
 1. [Executive Summary](#1-executive-summary)
 2. [Architecture Overview](#2-architecture-overview)
 3. [Protocol Selection Rationale](#3-protocol-selection-rationale)
-4. [WebRTC Media Layer](#4-webrtc-media-layer)
-5. [MQTT Control Layer](#5-mqtt-control-layer)
-6. [Voice Conversation Pipeline](#6-voice-conversation-pipeline)
-7. [Vision Pipeline](#7-vision-pipeline)
-8. [Media Input Methods](#8-media-input-methods)
-9. [Signaling Server](#9-signaling-server)
-10. [Implementation Phases](#10-implementation-phases)
-11. [File Structure](#11-file-structure)
-12. [Configuration](#12-configuration)
-13. [Testing Strategy](#13-testing-strategy)
-14. [Performance Considerations](#14-performance-considerations)
-15. [Security Considerations](#15-security-considerations)
-16. [Migration Guide](#16-migration-guide)
+4. [Split Architecture Design](#4-split-architecture-design)
+5. [Pi Gateway Layer](#5-pi-gateway-layer)
+6. [AI Server Integration](#6-ai-server-integration)
+7. [Voice Conversation Pipeline](#7-voice-conversation-pipeline)
+8. [MQTT Control Layer](#8-mqtt-control-layer)
+9. [Signaling Flow](#9-signaling-flow)
+10. [Vision Pipeline](#10-vision-pipeline)
+11. [Media Input Methods](#11-media-input-methods)
+12. [Implementation Phases](#12-implementation-phases)
+13. [File Structure](#13-file-structure)
+14. [Configuration](#14-configuration)
+15. [Testing Strategy](#15-testing-strategy)
+16. [Performance Considerations](#16-performance-considerations)
+17. [Security Considerations](#17-security-considerations)
+18. [Hardware Requirements](#18-hardware-requirements)
+19. [Migration Guide](#19-migration-guide)
 
 **Note:** This doc is for alignment purposes only and not meant as a final version.
 
@@ -35,41 +38,41 @@
 
 ### 1.1 Purpose
 
-This document specifies a **WebRTC + MQTT hybrid architecture** for the NAILA AI Server, enabling:
+This document specifies a **Split Gateway Architecture** for the NAILA AI Server, enabling:
 
-1. **Seamless Voice Conversation** - Sub-100ms latency, interruptible voice with built-in echo cancellation
-2. **Continuous Security Monitoring** - Real-time video analysis with efficient codec compression
-3. **Conversational Visual Understanding** - On-demand image context for natural language queries
-4. **Multi-Device Support** - Multiple audio/video sources across WiFi network
-5. **Flexible Media Input** - Support for real-time streams, snapshots, uploads, and historical retrieval
+1. **Seamless Voice Conversation** - Sub-500ms latency, interruptible voice with built-in echo cancellation
+2. **Resource Isolation** - Real-time audio handling separated from CPU-intensive inference
+3. **Multi-Device Support** - Multiple audio/video sources across WiFi network
+4. **Flexible Media Input** - Support for real-time streams, snapshots, uploads, and historical retrieval
+5. **Scalable Design** - Gateway can be scaled independently of AI inference
 
 ### 1.2 Key Goals
 
 | Goal | Current State | Target State |
 |------|---------------|--------------|
-| Voice response latency | 2-5 seconds | <300ms |
+| Voice response latency | 2-5 seconds | <500ms (first audio) |
 | Conversation interruption | Not supported | Full support (WebRTC handles this) |
 | Echo cancellation | None | Built-in (WebRTC AEC) |
 | Audio codec | Raw PCM/base64 | Opus (10x compression) |
-| Video codec | JPEG snapshots | VP8/H264 (efficient streaming) |
+| CPU contention | N/A (no streaming) | Isolated (gateway separate from inference) |
 | NAT traversal | Not supported | Automatic (ICE/STUN) |
 | Network adaptation | None | Automatic bitrate adjustment |
-| Jitter handling | None | Built-in jitter buffer |
 
 ### 1.3 Architecture Decision
 
-**Hybrid Protocol Approach:**
+**Split Gateway Architecture:**
 
-| Layer | Protocol | Purpose |
-|-------|----------|---------|
-| **Media** | WebRTC | Audio/video streaming (voice, cameras) |
-| **Control** | MQTT | Commands, events, alerts, device coordination |
-| **Signaling** | MQTT | WebRTC session establishment |
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| **Pi Gateway** | Raspberry Pi | WebRTC, codecs, VAD, real-time audio |
+| **AI Server** | Main Server | STT, LLM, TTS, Vision inference |
+| **MQTT Broker** | Main Server | Signaling, control, alerts |
 
-**Why this combination:**
-- **WebRTC** handles all the hard media problems (codecs, jitter, echo, adaptation)
-- **MQTT** provides reliable pub/sub for control plane (already in use)
-- **No new infrastructure** - MQTT doubles as signaling transport
+**Why this approach:**
+- **CPU Isolation** - AI inference (Whisper, Llama, Piper) can saturate CPU without affecting real-time audio
+- **WebRTC on Pi** - Dedicated hardware for timing-critical operations
+- **Simple Integration** - TCP socket between gateway and AI server adds ~2ms latency
+- **Existing Infrastructure** - MQTT remains for signaling and control plane
 
 ---
 
@@ -78,108 +81,110 @@ This document specifies a **WebRTC + MQTT hybrid architecture** for the NAILA AI
 ### 2.1 High-Level Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                           NAILA AI Server                                    │
-├──────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│   ┌─────────────────────────────────────────────────────────────────────┐    │
-│   │                        WebRTC Layer                                 │    │
-│   │                                                                     │    │
-│   │   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐             │    │
-│   │   │ Audio Track │    │ Video Track │    │ Data Channel│             │    │
-│   │   │   (Opus)    │    │(VP8/H264)   │    │  (optional) │             │    │
-│   │   └──────┬──────┘    └──────┬──────┘    └─────────────┘             │    │
-│   │          │                  │                                       │    │
-│   │          │    ┌─────────────┴─────────────┐                         │    │
-│   │          │    │                           │                         │    │
-│   │          ▼    ▼                           ▼                         │    │
-│   │   ┌─────────────────┐              ┌─────────────────┐              │    │
-│   │   │  Voice Pipeline │              │ Vision Pipeline │              │    │
-│   │   │                 │              │                 │              │    │
-│   │   │ • VAD (built-in)│              │ • Frame decode  │              │    │
-│   │   │ • STT           │              │ • Motion detect │              │    │
-│   │   │ • LLM           │              │ • YOLO          │              │    │
-│   │   │ • TTS           │              │ • Alerts        │              │    │
-│   │   └────────┬────────┘              └────────┬────────┘              │    │
-│   │            │                                │                       │    │
-│   │            │ Audio response                 │ Alerts                │    │
-│   │            ▼                                ▼                       │    │
-│   │   ┌─────────────┐                   ┌─────────────┐                 │    │
-│   │   │ Audio Track │                   │    MQTT     │                 │    │
-│   │   │   (Out)     │                   │  Publish    │                 │    │
-│   │   └─────────────┘                   └─────────────┘                 │    │
-│   │                                                                     │    │
-│   └─────────────────────────────────────────────────────────────────────┘    │
-│                                                                              │
-│   ┌─────────────────────────────────────────────────────────────────────┐    │
-│   │                        MQTT Layer                                   │    │
-│   │                                                                     │    │
-│   │   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐             │    │
-│   │   │  Signaling  │    │   Control   │    │   Alerts    │             │    │
-│   │   │             │    │             │    │             │             │    │
-│   │   │ • SDP offer │    │ • Commands  │    │ • Motion    │             │    │
-│   │   │ • SDP answer│    │ • Status    │    │ • Person    │             │    │
-│   │   │ • ICE cands │    │ • Config    │    │ • Events    │             │    │
-│   │   └─────────────┘    └─────────────┘    └─────────────┘             │    │
-│   │                                                                     │    │
-│   └─────────────────────────────────────────────────────────────────────┘    │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              LOCAL NETWORK                                      │
+│                                                                                 │
+│  ┌──────────────┐       ┌───────────────────┐       ┌───────────────────┐       │
+│  │   Devices    │       │   Raspberry Pi    │       │    Main Server    │       │
+│  │              │       │    (Gateway)      │       │    (AI Server)    │       │
+│  │  • ESP32     │       │                   │       │                   │       │
+│  │  • Phones    │WebRTC │  • aiortc         │  TCP  │  • Whisper (STT)  │       │
+│  │  • Browsers  │◀════▶│  • Opus codec     │◀─────▶│  • Llama (LLM)   │       │
+│  │  • Cameras   │ Audio │  • VAD            │ Audio │  • Piper (TTS)    │       │
+│  │              │       │  • Buffering      │  PCM  │  • YOLOv8 (Vision)│       │
+│  └──────────────┘       │  • MQTT signaling │       │  • Orchestrator   │       │
+│                         └─────────┬─────────┘       └─────────┬─────────┘       │
+│                                   │                           │                 │
+│                                   │          MQTT             │                 │
+│                                   └───────────┬───────────────┘                 │
+│                                               │                                 │
+│                                   ┌───────────▼───────────┐                     │
+│                                   │     MQTT Broker       │                     │
+│                                   │                       │                     │
+│                                   │  • Signaling          │                     │
+│                                   │  • Device status      │                     │
+│                                   │  • Commands/Alerts    │                     │
+│                                   └───────────────────────┘                     │
+│                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 Connection Flow
+### 2.2 Component Responsibilities
 
 ```
-┌──────────┐                    ┌──────────┐                    ┌──────────┐
-│  Device  │                    │   MQTT   │                    │    AI    │
-│          │                    │  Broker  │                    │  Server  │
-└────┬─────┘                    └────┬─────┘                    └────┬─────┘
-     │                               │                               │
-     │  1. MQTT Connect              │                               │
-     │──────────────────────────────>│                               │
-     │                               │                               │
-     │  2. Subscribe to signaling    │                               │
-     │──────────────────────────────>│                               │
-     │                               │                               │
-     │  3. Publish: "device online"  │                               │
-     │──────────────────────────────>│──────────────────────────────>│
-     │                               │                               │
-     │                               │  4. Server creates PeerConn   │
-     │                               │                               │
-     │                               │  5. SDP Offer                 │
-     │<──────────────────────────────│<──────────────────────────────│
-     │                               │                               │
-     │  6. SDP Answer                │                               │
-     │──────────────────────────────>│──────────────────────────────>│
-     │                               │                               │
-     │  7. ICE Candidates (both ways)│                               │
-     │<─────────────────────────────>│<─────────────────────────────>│
-     │                               │                               │
-     │  8. WebRTC Connected (P2P or via TURN)                        │
-     │<─────────────────────────────────────────────────────────────>│
-     │                               │                               │
-     │  9. Audio/Video streaming     │                               │
-     │<═════════════════════════════════════════════════════════════>│
-     │                               │                               │
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           RESPONSIBILITY SPLIT                                  │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                 │
+│   PI GATEWAY (Real-Time Critical)       AI SERVER (Inference)                   │
+│   ─────────────────────────────         ─────────────────────                   │
+│                                                                                 │
+│   ┌─────────────────────────┐           ┌─────────────────────────┐             │
+│   │ • WebRTC connections    │           │ • Speech-to-Text        │             │
+│   │ • Opus encode/decode    │           │ • Language model        │             │
+│   │ • Voice activity detect │    TCP    │ • Text-to-Speech        │             │
+│   │ • Audio buffering       │◀────────▶│ • Vision analysis       │             │
+│   │ • Jitter handling       │   ~2ms    │ • Conversation memory   │             │
+│   │ • Echo cancellation     │           │ • Response generation   │             │
+│   │ • Device management     │           │ • MQTT publish          │             │
+│   └─────────────────────────┘           └─────────────────────────┘             │
+│                                                                                 │
+│   CPU: 20-40% (headroom)                CPU: Up to 100% (OK)                    │
+│   Latency: Timing-critical              Latency: Best-effort                    │
+│                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 2.3 Data Flow Summary
+### 2.3 Connection Flow
 
-| Data Type | Transport | Direction | Format |
-|-----------|-----------|-----------|--------|
-| Voice audio | WebRTC | Bidirectional | Opus |
-| Video frames | WebRTC | Device → Server | VP8/H264 |
-| TTS audio | WebRTC | Server → Device | Opus |
-| Signaling | MQTT | Bidirectional | JSON |
-| Commands | MQTT | Bidirectional | JSON |
-| Alerts | MQTT | Server → Clients | JSON |
-| Device status | MQTT | Device → Server | JSON |
+```
+┌──────────┐          ┌──────────┐          ┌──────────┐          ┌──────────┐
+│  Device  │          │   MQTT   │          │    Pi    │          │    AI    │
+│          │          │  Broker  │          │  Gateway │          │  Server  │
+└────┬─────┘          └────┬─────┘          └────┬─────┘          └────┬─────┘
+     │                     │                     │                     │
+     │  1. MQTT Connect    │                     │                     │
+     │────────────────────>│                     │                     │
+     │                     │                     │                     │
+     │  2. Publish status  │                     │                     │
+     │────────────────────>│────────────────────>│                     │
+     │                     │                     │                     │
+     │                     │  3. Pi creates PeerConnection             │
+     │                     │                     │                     │
+     │                     │  4. SDP Offer       │                     │
+     │<────────────────────│<────────────────────│                     │
+     │                     │                     │                     │
+     │  5. SDP Answer      │                     │                     │
+     │────────────────────>│────────────────────>│                     │
+     │                     │                     │                     │
+     │  6. ICE Candidates  │                     │                     │
+     │<───────────────────>│<───────────────────>│                     │
+     │                     │                     │                     │
+     │  7. WebRTC Connected                      │                     │
+     │<═════════════════════════════════════════>│                     │
+     │                     │                     │                     │
+     │  8. Audio streaming │                     │  9. TCP: PCM audio  │
+     │<═════════════════════════════════════════>│<═══════════════════>│
+     │                     │                     │                     │
+```
+
+### 2.4 Data Flow Summary
+
+| Data Type | Transport | Path | Format |
+|-----------|-----------|------|--------|
+| Voice (in) | WebRTC | Device → Pi | Opus |
+| Voice (out) | WebRTC | Pi → Device | Opus |
+| Audio (processing) | TCP | Pi ↔ AI Server | Raw PCM |
+| Signaling | MQTT | Device ↔ Pi | JSON |
+| Commands | MQTT | All components | JSON |
+| Alerts | MQTT | AI Server → Clients | JSON |
+| Device status | MQTT | Device → Pi/Server | JSON |
 
 ---
 
 ## 3. Protocol Selection Rationale
 
-### 3.1 Why WebRTC over WebSocket
+### 3.1 Why WebRTC for Device Communication
 
 | Requirement | WebSocket | WebRTC |
 |-------------|-----------|--------|
@@ -194,7 +199,31 @@ This document specifies a **WebRTC + MQTT hybrid architecture** for the NAILA AI
 
 **Bottom line:** WebSocket requires rebuilding 10+ years of real-time media engineering. WebRTC provides it out of the box.
 
-### 3.2 Why MQTT for Control (Not WebRTC Data Channels)
+### 3.2 Why Split Gateway from AI Server
+
+| Concern | Single Server | Split Architecture |
+|---------|---------------|-------------------|
+| CPU contention | WebRTC stutters during inference | Isolated, no impact |
+| Latency consistency | Variable (0-500ms jitter) | Consistent (~25ms) |
+| Scalability | Limited by slowest component | Scale independently |
+| Debugging | Complex interactions | Clear boundaries |
+| Hardware flexibility | All-or-nothing | Mix CPU/GPU as needed |
+
+**Key insight:** AI inference (Whisper, Llama, Piper) can saturate 100% CPU for 200-500ms. Without isolation, WebRTC audio drops or stutters during these spikes.
+
+### 3.3 Why TCP for Gateway-Server Communication
+
+| Option | Latency | Complexity | Reliability |
+|--------|---------|------------|-------------|
+| Unix socket | ~0.1ms | Low | High |
+| TCP (localhost) | ~0.5ms | Low | High |
+| TCP (network) | ~2ms | Low | High |
+| MQTT | ~5-10ms | Medium | High |
+| gRPC | ~3-5ms | High | High |
+
+**Decision:** TCP socket for simplicity. The ~2ms network latency is negligible compared to the 200-400ms inference time.
+
+### 3.4 Why MQTT for Signaling and Control
 
 - **Already deployed** - MQTT broker exists in current architecture
 - **Pub/Sub model** - Better fit for alerts, multi-subscriber events
@@ -202,148 +231,552 @@ This document specifies a **WebRTC + MQTT hybrid architecture** for the NAILA AI
 - **QoS levels** - Guaranteed delivery for critical commands
 - **Simpler debugging** - Standard MQTT tools work
 
-### 3.3 Why MQTT for Signaling (Not HTTP/WebSocket)
+---
 
-- **No additional server** - Reuse existing MQTT broker
-- **Bidirectional** - Both parties can initiate
-- **Reliable** - QoS 1 ensures delivery
-- **Simple** - Just pub/sub to device-specific topics
+## 4. Split Architecture Design
+
+### 4.1 Design Principles
+
+1. **Separation of Concerns** - Real-time audio handling isolated from inference
+2. **Fail Independently** - Gateway failure doesn't crash AI server and vice versa
+3. **Simple Protocol** - TCP with minimal framing between components
+4. **Stateless Gateway** - Conversation state lives in AI server only
+
+### 4.2 Communication Protocol
+
+**Gateway → AI Server (Audio Request):**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      AUDIO REQUEST FRAME                        │
+├─────────────────────────────────────────────────────────────────┤
+│  Header (text, newline-terminated):                             │
+│    {device_id}|{audio_length}|{sample_rate}|{request_id}\n      │
+│                                                                 │
+│  Body (binary):                                                 │
+│    Raw PCM audio bytes (int16, mono)                            │
+└─────────────────────────────────────────────────────────────────┘
+
+Example:
+  "living_room|96000|48000|req_abc123\n" + <96000 bytes of PCM>
+```
+
+**AI Server → Gateway (Audio Response):**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      AUDIO RESPONSE FRAME                       │
+├─────────────────────────────────────────────────────────────────┤
+│  Header (text, newline-terminated):                             │
+│    {device_id}|{audio_length}|{sample_rate}|{request_id}\n      │
+│                                                                 │
+│  Body (binary):                                                 │
+│    Raw PCM audio bytes (int16, mono)                            │
+└─────────────────────────────────────────────────────────────────┘
+
+Example:
+  "living_room|144000|48000|req_abc123\n" + <144000 bytes of PCM>
+```
+
+### 4.3 Connection Management
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    CONNECTION LIFECYCLE                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Gateway Startup:                                               │
+│    1. Connect to MQTT broker                                    │
+│    2. Connect TCP to AI server (with retry)                     │
+│    3. Subscribe to device status topics                         │
+│    4. Publish gateway online status                             │
+│                                                                 │
+│  Device Connection:                                             │
+│    1. Device publishes status (via MQTT)                        │
+│    2. Gateway receives status, creates PeerConnection           │
+│    3. Gateway sends SDP offer (via MQTT)                        │
+│    4. Device responds with SDP answer                           │
+│    5. ICE candidates exchanged                                  │
+│    6. WebRTC connected, audio flows                             │
+│                                                                 │
+│  Reconnection:                                                  │
+│    - Gateway reconnects to AI server automatically              │
+│    - Pending audio requests are dropped (acceptable)            │
+│    - Device WebRTC sessions maintained during AI server outage  │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 4.4 Error Handling
+
+| Scenario | Gateway Behavior | AI Server Behavior |
+|----------|------------------|-------------------|
+| AI server disconnect | Buffer audio, retry connection | N/A |
+| AI server slow response | Timeout after 10s, notify device | Log, continue processing |
+| Device disconnect | Clean up PeerConnection | Notified via MQTT |
+| Invalid audio | Log and skip | Return empty response |
+| Gateway crash | Devices lose audio | Continue MQTT operations |
 
 ---
 
-## 4. WebRTC Media Layer
+## 5. Pi Gateway Layer
 
-### 4.1 Server-Side WebRTC (aiortc)
+### 5.1 Overview
+
+The Pi Gateway runs on a Raspberry Pi and handles all real-time audio operations using `aiortc`.
 
 **Library:** `aiortc` - Pure Python WebRTC implementation
 
-**Capabilities:**
-- Full WebRTC stack (ICE, DTLS, SRTP)
-- Audio/video track handling
-- Opus and VP8 codec support
-- Works with asyncio
+**Responsibilities:**
+- Manage WebRTC connections to all devices
+- Opus codec encode/decode
+- Voice Activity Detection (VAD)
+- Buffer and forward audio to AI server
+- Receive TTS audio and stream to devices
+- MQTT signaling coordination
 
-**PeerConnection Manager:**
+### 5.2 Core Components
 
-Responsibilities:
-- Create and manage RTCPeerConnection per device
-- Handle ICE candidate exchange
-- Add/remove media tracks
-- Monitor connection state
-- Reconnect on failure
-
-**Audio Track Handling:**
-- Receive Opus-encoded audio from device
-- Decode to PCM for STT processing
-- Encode TTS output to Opus
-- Send back via audio track
-
-**Video Track Handling:**
-- Receive VP8/H264 frames from device cameras
-- Decode to raw frames for vision processing
-- No video sent back to device (audio-only response)
-
-### 4.2 Device-Side WebRTC
-
-**For Linux/Raspberry Pi:** `libwebrtc` or `aiortc`
-
-**For ESP32/Embedded:** `esp-webrtc` or audio-only via `opus` library
-
-**For Mobile/Browser:** Native WebRTC APIs
-
-**Device Responsibilities:**
-- Capture audio from microphone
-- Capture video from camera (if equipped)
-- Establish WebRTC connection via signaling
-- Play received audio through speaker
-- Handle reconnection
-
-### 4.3 Media Configuration
-
-**Audio:**
-- Codec: Opus
-- Sample rate: 48kHz (Opus native)
-- Channels: Mono
-- Bitrate: 24-32 kbps (configurable)
-- Frame size: 20ms
-
-**Video:**
-- Codec: VP8 (or H264 if hardware encoding available)
-- Resolution: 640x480 (configurable)
-- Framerate: 5-15 FPS (adaptive)
-- Bitrate: 500-1500 kbps (adaptive)
-
-### 4.4 ICE Configuration
-
-**For local WiFi network:**
 ```
-ICE Servers: []  # No STUN/TURN needed on local network
-ICE Transport Policy: "all"
+┌─────────────────────────────────────────────────────────────────┐
+│                      PI GATEWAY COMPONENTS                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌─────────────────┐    ┌─────────────────┐                     │
+│  │  MQTT Handler   │    │  TCP Client     │                     │
+│  │                 │    │                 │                     │
+│  │  • Signaling    │    │  • AI server    │                     │
+│  │  • Device status│    │    connection   │                     │
+│  │  • Commands     │    │  • Send PCM     │                     │
+│  └────────┬────────┘    │  • Recv TTS     │                     │
+│           │             └────────┬────────┘                     │
+│           │                      │                              │
+│           ▼                      ▼                              │
+│  ┌──────────────────────────────────────────┐                   │
+│  │           Session Manager                │                   │
+│  │                                          │                   │
+│  │  • Device sessions (PeerConnection each) │                   │
+│  │  • Audio buffers per device              │                   │
+│  │  • Request/response correlation          │                   │
+│  └──────────────────────────────────────────┘                   │
+│           │                                                     │
+│           ▼                                                     │
+│  ┌──────────────────────────────────────────┐                   │
+│  │           Audio Pipeline                 │                   │
+│  │                                          │                   │
+│  │  ┌─────────┐  ┌─────────┐  ┌─────────┐   │                   │
+│  │  │  Opus   │  │   VAD   │  │ Buffer  │   │                   │
+│  │  │ Decode  │─▶│ Detect  │─▶│ Speech │   │                   │
+│  │  └─────────┘  └─────────┘  └─────────┘   │                   │
+│  │                                          │                   │
+│  │  ┌─────────┐  ┌─────────┐                │                   │
+│  │  │  Opus   │  │  Queue  │                │                   │
+│  │  │ Encode  │◀─│   TTS   │               │                    │
+│  │  └─────────┘  └─────────┘                │                   │
+│  │                                          │                   │
+│  └──────────────────────────────────────────┘                   │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-**For internet deployment (future):**
+### 5.3 Device Session
+
+Each connected device gets a session:
+
+```python
+@dataclass
+class DeviceSession:
+    device_id: str
+    pc: RTCPeerConnection
+    audio_buffer: np.ndarray      # Accumulates speech
+    buffer_pos: int = 0
+    is_speaking: bool = False
+    silence_frames: int = 0
+    pending_requests: dict = field(default_factory=dict)
 ```
-ICE Servers:
-  - urls: "stun:stun.l.google.com:19302"
-  - urls: "turn:your-turn-server.com"
-    username: "user"
-    credential: "pass"
+
+### 5.4 Voice Activity Detection
+
+**Option 1: Energy-based (Simple)**
+```python
+def is_speech(pcm: np.ndarray, threshold: int = 500) -> bool:
+    return np.abs(pcm).mean() > threshold
+```
+
+**Option 2: Silero VAD (Accurate)**
+```python
+from silero_vad import load_silero_vad
+
+vad_model = load_silero_vad()
+
+def is_speech(pcm: np.ndarray) -> bool:
+    # Silero expects float32, normalized
+    audio = pcm.astype(np.float32) / 32768.0
+    confidence = vad_model(audio, sample_rate=48000)
+    return confidence > 0.5
+```
+
+**Utterance Detection:**
+- Speech starts: Begin buffering
+- Speech continues: Append to buffer
+- Silence detected: Count frames
+- 300ms silence: End of utterance, send to AI server
+
+### 5.5 WebRTC Configuration
+
+**Audio Settings:**
+```python
+audio_config = {
+    "codec": "opus",
+    "sample_rate": 48000,
+    "channels": 1,
+    "bitrate": 32000,      # 32 kbps
+    "frame_size": 960,     # 20ms at 48kHz
+}
+```
+
+**ICE Configuration (Local Network):**
+```python
+ice_config = RTCConfiguration(
+    iceServers=[]  # No STUN/TURN needed on local network
+)
+```
+
+### 5.6 Audio Track Implementation
+
+**Receiving Audio (from device):**
+```python
+@pc.on("track")
+async def on_track(track: MediaStreamTrack):
+    if track.kind == "audio":
+        while True:
+            frame = await track.recv()
+            pcm = frame.to_ndarray().flatten().astype(np.int16)
+            await process_audio(session, pcm)
+```
+
+**Sending Audio (TTS to device):**
+```python
+class TTSOutputTrack(MediaStreamTrack):
+    kind = "audio"
+
+    def __init__(self, audio_queue: asyncio.Queue):
+        super().__init__()
+        self.queue = audio_queue
+        self.sample_rate = 48000
+        self.frame_size = 960  # 20ms
+
+    async def recv(self) -> AudioFrame:
+        # Get audio from queue or return silence
+        try:
+            pcm = self.queue.get_nowait()
+        except asyncio.QueueEmpty:
+            pcm = np.zeros(self.frame_size, dtype=np.int16)
+
+        frame = AudioFrame.from_ndarray(
+            pcm.reshape(1, -1), format="s16", layout="mono"
+        )
+        frame.sample_rate = self.sample_rate
+        return frame
+```
+
+### 5.7 Dependencies
+
+```
+# Pi Gateway requirements
+aiortc>=1.6.0,<2.0.0
+aioice>=0.9.0
+av>=11.0.0,<12.0.0
+numpy>=1.24.0
+asyncio-mqtt>=0.16.0
+silero-vad>=4.0.0        # Optional, for better VAD
 ```
 
 ---
 
-## 5. MQTT Control Layer
+## 6. AI Server Integration
 
-### 5.1 Topic Structure
+### 6.1 Audio Socket Server
+
+The AI server exposes a TCP socket for receiving audio from the Pi gateway.
+
+```python
+class AudioInferenceServer:
+    """
+    TCP server that receives PCM audio, runs inference, returns TTS.
+    """
+
+    def __init__(self, stt, llm, tts, orchestrator):
+        self.stt = stt
+        self.llm = llm
+        self.tts = tts
+        self.orchestrator = orchestrator
+
+    async def start(self, host: str = "0.0.0.0", port: int = 9999):
+        server = await asyncio.start_server(
+            self._handle_client, host, port
+        )
+        await server.serve_forever()
+
+    async def _handle_client(self, reader, writer):
+        while True:
+            # Read header: device_id|audio_len|sample_rate|request_id\n
+            header = await reader.readline()
+            if not header:
+                break
+
+            device_id, audio_len, sample_rate, request_id = (
+                header.decode().strip().split("|")
+            )
+
+            # Read PCM audio
+            pcm_bytes = await reader.readexactly(int(audio_len))
+
+            # Process and respond
+            response_audio = await self._process(device_id, pcm_bytes)
+
+            # Send response
+            resp_header = f"{device_id}|{len(response_audio)}|48000|{request_id}\n"
+            writer.write(resp_header.encode() + response_audio)
+            await writer.drain()
+```
+
+### 6.2 Inference Pipeline
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    AI SERVER PIPELINE                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  PCM Audio (from Gateway)                                       │
+│       │                                                         │
+│       ▼                                                         │
+│  ┌─────────────────┐                                            │
+│  │  Format Audio   │  Convert to WAV for Whisper                │
+│  └────────┬────────┘                                            │
+│           │                                                     │
+│           ▼                                                     │
+│  ┌─────────────────┐                                            │
+│  │      STT        │  Whisper: PCM → Text                       │
+│  │   (Whisper)     │  ~150-300ms (CPU)                          │
+│  └────────┬────────┘                                            │
+│           │                                                     │
+│           ▼                                                     │
+│  ┌─────────────────┐                                            │
+│  │  Orchestrator   │  Context, memory, routing                  │
+│  └────────┬────────┘                                            │
+│           │                                                     │
+│           ▼                                                     │
+│  ┌─────────────────┐                                            │
+│  │      LLM        │  Llama: Text → Response                    │
+│  │    (Llama)      │  ~100-400ms (CPU)                          │
+│  └────────┬────────┘                                            │
+│           │                                                     │
+│           ▼                                                     │
+│  ┌─────────────────┐                                            │
+│  │      TTS        │  Piper: Text → PCM                         │
+│  │    (Piper)      │  ~50-150ms (CPU)                           │
+│  └────────┬────────┘                                            │
+│           │                                                     │
+│           ▼                                                     │
+│  PCM Audio (to Gateway)                                         │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 6.3 Integration with Existing Services
+
+Minimal changes to existing ai-server:
+
+**New file:** `server/audio_socket.py`
+- TCP server for gateway communication
+- Request/response handling
+
+**Modified:** `server/lifecycle.py`
+- Start audio socket server on boot
+
+**No changes to:**
+- `services/stt.py` - Already accepts audio bytes
+- `services/llm.py` - Already generates responses
+- `services/tts.py` - Already produces PCM
+- `agents/orchestrator.py` - Already coordinates pipeline
+
+### 6.4 Processing Flow
+
+```python
+async def _process(self, device_id: str, pcm_bytes: bytes) -> bytes:
+    """STT → LLM → TTS pipeline."""
+
+    # 1. Convert PCM to WAV (Whisper expects WAV)
+    wav_data = pcm_to_wav(pcm_bytes, sample_rate=48000)
+
+    # 2. Speech to text
+    result = await self.stt.transcribe(wav_data)
+    if not result.text.strip():
+        return b""  # Silence/noise
+
+    # 3. Generate response via orchestrator
+    response = await self.orchestrator.process_text(
+        device_id=device_id,
+        text=result.text
+    )
+
+    # 4. Text to speech
+    audio = await self.tts.synthesize(
+        text=response.text,
+        output_format="raw"  # Raw PCM for gateway
+    )
+
+    return audio.data
+```
+
+---
+
+## 7. Voice Conversation Pipeline
+
+### 7.1 Pipeline Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       VOICE CONVERSATION FLOW                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌──────────┐  WebRTC   ┌──────────┐   TCP    ┌──────────────────────────┐  │
+│  │  Device  │  (Opus)   │    Pi    │  (PCM)   │       AI Server          │  │
+│  │          │◀════════▶│  Gateway │◀═══════▶│                          │  │
+│  └──────────┘           └──────────┘          └──────────────────────────┘  │
+│                                                                             │
+│  DETAILED FLOW:                                                             │
+│                                                                             │
+│  Device        Pi Gateway              AI Server                            │
+│    │               │                       │                                │
+│    │──── Opus ───▶│                       │                                │
+│    │               │── Decode ──▶ PCM      │                               │
+│    │               │── VAD ────▶ Speech?   │                               │
+│    │               │── Buffer ─▶ Utterance │                               │
+│    │               │                       │                                │
+│    │               │════ PCM (TCP) ═══════▶│                               │
+│    │               │                       │── STT ──▶ Text                │
+│    │               │                       │── LLM ──▶ Response            │
+│    │               │                       │── TTS ──▶ PCM                 │
+│    │               │◀════ PCM (TCP) ═══════│                               │
+│    │               │                       │                                │
+│    │               │── Queue ──▶ Buffer    │                               │
+│    │               │── Encode ─▶ Opus      │                               │
+│    │◀─── Opus ─────│                       │                               │
+│    │               │                       │                                │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 7.2 Interruption Handling
+
+Interruptions are handled at the Pi gateway:
+
+1. **User speaks while TTS playing**
+   - Gateway detects speech via VAD
+   - Gateway clears TTS output queue
+   - Gateway sends interrupt signal to device (optional)
+   - New utterance buffered and sent to AI server
+
+2. **Implementation:**
+```python
+async def handle_audio(session, pcm):
+    is_speech = vad.is_speech(pcm)
+
+    if is_speech and session.tts_playing:
+        # Clear TTS queue - stop playback
+        session.tts_queue.clear()
+        session.tts_playing = False
+
+    # Continue with normal VAD/buffering...
+```
+
+### 7.3 Latency Breakdown
+
+| Stage | Location | Target | Notes |
+|-------|----------|--------|-------|
+| Audio capture | Device | ~20ms | WebRTC frame size |
+| Network (WebRTC) | Device→Pi | ~20-50ms | Local WiFi, UDP |
+| Opus decode | Pi | ~1ms | Software decode |
+| VAD + buffer | Pi | ~100ms | Wait for utterance end |
+| Network (TCP) | Pi→Server | ~2ms | Wired ethernet |
+| STT (Whisper) | Server | ~150-300ms | CPU inference |
+| LLM (Llama) | Server | ~100-400ms | CPU inference |
+| TTS (Piper) | Server | ~50-150ms | CPU inference |
+| Network (TCP) | Server→Pi | ~2ms | Wired ethernet |
+| Opus encode | Pi | ~1ms | Software encode |
+| Network (WebRTC) | Pi→Device | ~20-50ms | Local WiFi, UDP |
+| **Total** | | **~450-950ms** | First audio response |
+
+### 7.4 Latency Optimization
+
+**Priority optimizations:**
+
+1. **Streaming TTS** - Send first chunk before full synthesis complete
+2. **Smaller LLM** - Use quantized model (Q4) for faster inference
+3. **Whisper tiny/base** - Trade accuracy for speed
+4. **Wired Pi connection** - Eliminate one WiFi hop
+
+---
+
+## 8. MQTT Control Layer
+
+### 8.1 Topic Structure
 
 ```
 naila/
+├── gateway/
+│   ├── status                # Gateway online status (retained)
+│   └── metrics               # Gateway performance metrics
 ├── devices/
 │   └── {device_id}/
-│       ├── status          # Device status (retained)
-│       ├── command         # Commands to device
+│       ├── status            # Device status (retained)
+│       ├── command           # Commands to device
 │       ├── signaling/
-│       │   ├── offer       # SDP offers
-│       │   ├── answer      # SDP answers
-│       │   └── ice         # ICE candidates
+│       │   ├── offer         # SDP offers (from gateway)
+│       │   ├── answer        # SDP answers (from device)
+│       │   └── ice           # ICE candidates
 │       ├── media/
-│       │   ├── snapshot    # On-demand image capture (device → server)
-│       │   ├── recording   # Audio/video clip upload (device → server)
-│       │   └── request     # Server requests media (server → device)
-│       └── events          # Device events
+│       │   ├── snapshot      # On-demand image capture
+│       │   └── request       # Media requests
+│       └── events            # Device events
 ├── server/
-│   ├── status              # Server status (retained)
-│   └── broadcast           # Broadcast to all devices
-├── uploads/
-│   └── {session_id}/
-│       ├── image           # Web/app image uploads
-│       ├── audio           # Web/app audio uploads
-│       └── video           # Web/app video uploads
+│   ├── status                # AI server status (retained)
+│   └── broadcast             # Broadcast to all
 └── alerts/
     ├── {zone}/
-    │   └── {alert_type}    # Zone-specific alerts
-    └── all                 # All alerts
+    │   └── {alert_type}      # Zone-specific alerts
+    └── all                   # All alerts
 ```
 
-### 5.2 Message Types
+### 8.2 Message Types
 
 **Device Status (retained):**
 ```json
 {
   "device_id": "living_room_hub",
   "online": true,
-  "capabilities": ["audio", "video", "speaker"],
+  "capabilities": ["audio", "speaker"],
   "firmware_version": "1.2.0",
-  "timestamp": "2024-01-15T10:30:00Z"
+  "timestamp": "2025-01-15T10:30:00Z"
 }
 ```
 
-**Signaling - SDP Offer/Answer:**
+**Signaling - SDP Offer (Gateway → Device):**
 ```json
 {
   "type": "offer",
   "sdp": "v=0\r\no=- 123456 ...",
-  "device_id": "living_room_hub",
+  "session_id": "abc123"
+}
+```
+
+**Signaling - SDP Answer (Device → Gateway):**
+```json
+{
+  "type": "answer",
+  "sdp": "v=0\r\no=- 789012 ...",
   "session_id": "abc123"
 }
 ```
@@ -358,18 +791,6 @@ naila/
 }
 ```
 
-**Command:**
-```json
-{
-  "command": "start_video",
-  "params": {
-    "resolution": "640x480",
-    "fps": 10
-  },
-  "request_id": "req_123"
-}
-```
-
 **Alert:**
 ```json
 {
@@ -377,48 +798,11 @@ naila/
   "zone": "front_door",
   "confidence": 0.92,
   "source_device": "front_camera",
-  "timestamp": "2024-01-15T10:30:00Z",
-  "snapshot_available": true
+  "timestamp": "2025-01-15T10:30:00Z"
 }
 ```
 
-**Media Request (server → device):**
-```json
-{
-  "request_type": "snapshot",
-  "request_id": "req_456",
-  "params": {
-    "resolution": "1280x720",
-    "format": "jpeg",
-    "quality": 85
-  }
-}
-```
-
-**Media Upload (device → server):**
-```json
-{
-  "request_id": "req_456",
-  "media_type": "image",
-  "format": "jpeg",
-  "timestamp": "2024-01-15T10:30:00Z",
-  "data": "<base64 encoded>"
-}
-```
-
-**Web/App Upload:**
-```json
-{
-  "session_id": "web_session_789",
-  "media_type": "image",
-  "format": "jpeg",
-  "filename": "photo.jpg",
-  "context": "What's in this picture?",
-  "data": "<base64 encoded>"
-}
-```
-
-### 5.3 QoS Levels
+### 8.3 QoS Levels
 
 | Message Type | QoS | Rationale |
 |--------------|-----|-----------|
@@ -430,162 +814,136 @@ naila/
 
 ---
 
-## 6. Voice Conversation Pipeline
+## 9. Signaling Flow
 
-### 6.1 Pipeline Overview
+### 9.1 Device Connection Sequence
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                     VOICE CONVERSATION FLOW                             │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  ┌──────────┐    WebRTC     ┌──────────────────────────────────────┐    │
-│  │  Device  │    (Opus)     │            AI Server                 │    │
-│  │          │═══════════════│                                      │    │
-│  │  • Mic   │──────────────>│  ┌─────────┐                         │    │
-│  │          │               │  │ Decode  │                         │    │
-│  │          │               │  │  Opus   │                         │    │
-│  │          │               │  └────┬────┘                         │    │
-│  │          │               │       │ PCM                          │    │
-│  │          │               │       ▼                              │    │
-│  │          │               │  ┌─────────┐                         │    │
-│  │          │               │  │   VAD   │ (WebRTC or Silero)      │    │
-│  │          │               │  └────┬────┘                         │    │
-│  │          │               │       │ Speech segments              │    │
-│  │          │               │       ▼                              │    │
-│  │          │               │  ┌─────────┐                         │    │
-│  │          │               │  │   STT   │ (Whisper)               │    │
-│  │          │               │  └────┬────┘                         │    │
-│  │          │               │       │ Transcription                │    │
-│  │          │               │       ▼                              │    │
-│  │          │               │  ┌─────────┐                         │    │
-│  │          │               │  │   LLM   │ + Personality           │    │
-│  │          │               │  └────┬────┘   + Visual context      │    │
-│  │          │               │       │ Response text                │    │
-│  │          │               │       ▼                              │    │
-│  │          │               │  ┌─────────┐                         │    │
-│  │          │               │  │   TTS   │ (with emotion)          │    │
-│  │          │               │  └────┬────┘                         │    │
-│  │          │               │       │ PCM                          │    │
-│  │          │               │       ▼                              │    │
-│  │          │               │  ┌─────────┐                         │    │
-│  │          │<──────────────│  │ Encode  │                         │    │
-│  │ • Speaker│    (Opus)     │  │  Opus   │                         │    │
-│  └──────────┘               │  └─────────┘                         │    │
-│                             └──────────────────────────────────────┘    │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
+┌──────────┐          ┌──────────┐          ┌──────────┐
+│  Device  │          │   MQTT   │          │    Pi    │
+│          │          │  Broker  │          │  Gateway │
+└────┬─────┘          └────┬─────┘          └────┬─────┘
+     │                     │                     │
+     │  1. Connect MQTT    │                     │
+     │────────────────────>│                     │
+     │                     │                     │
+     │  2. Publish status  │                     │
+     │  (online: true)     │                     │
+     │────────────────────>│────────────────────>│
+     │                     │                     │
+     │                     │  3. Gateway receives status
+     │                     │     Creates PeerConnection
+     │                     │     Generates SDP offer
+     │                     │                     │
+     │  4. SDP Offer       │                     │
+     │  signaling/offer    │                     │
+     │<────────────────────│<────────────────────│
+     │                     │                     │
+     │  5. Device creates answer                 │
+     │                     │                     │
+     │  6. SDP Answer      │                     │
+     │  signaling/answer   │                     │
+     │────────────────────>│────────────────────>│
+     │                     │                     │
+     │  7. ICE Candidates (both directions)      │
+     │<───────────────────>│<───────────────────>│
+     │                     │                     │
+     │  8. WebRTC Connection Established         │
+     │<═══════════════════════════════════════>  │
+     │                     │                     │
 ```
 
-### 6.2 Voice Activity Detection
+### 9.2 Gateway MQTT Subscriptions
 
-**Option 1: WebRTC Built-in VAD**
-- Enabled by default in WebRTC audio tracks
-- Good enough for most cases
-- Zero additional CPU
+```python
+# Gateway subscribes to:
+subscriptions = [
+    "naila/devices/+/status",           # Device online/offline
+    "naila/devices/+/signaling/answer", # SDP answers
+    "naila/devices/+/signaling/ice",    # ICE candidates from devices
+]
 
-**Option 2: Silero VAD (Higher Accuracy)**
-- Run on decoded PCM
-- Better for noisy environments
-- ~10ms per 30ms audio frame
+# Gateway publishes to:
+# naila/devices/{device_id}/signaling/offer  - SDP offers
+# naila/devices/{device_id}/signaling/ice    - ICE candidates to devices
+# naila/gateway/status                        - Gateway status
+```
 
-### 6.3 Interruption Handling
+### 9.3 Reconnection Handling
 
-WebRTC makes this natural:
+**Device Reconnect:**
+1. Device reconnects to MQTT
+2. Device publishes new status
+3. Gateway receives status, initiates new WebRTC session
+4. Old PeerConnection cleaned up
 
-1. **Simultaneous streams** - Both directions active at once
-2. **Echo cancellation** - Device won't pick up its own speaker
-3. **Server detects speech** - While TTS is playing
-4. **Server stops TTS** - Immediately, mid-sentence
-5. **Process new input** - No audio cleanup needed
-
-### 6.4 Latency Breakdown
-
-| Stage | Target | Notes |
-|-------|--------|-------|
-| Audio capture | ~20ms | WebRTC frame size |
-| Network (WebRTC) | ~20-50ms | Local WiFi, UDP |
-| Opus decode | ~1ms | Hardware accelerated |
-| VAD | ~5ms | Per-frame |
-| STT (streaming) | ~150-200ms | Whisper streaming |
-| LLM | ~100-300ms | Depends on model |
-| TTS (streaming) | ~50-100ms | First chunk |
-| Opus encode | ~1ms | Hardware accelerated |
-| Network back | ~20-50ms | Local WiFi, UDP |
-| **Total** | **~400-700ms** | First audio response |
+**Gateway Reconnect:**
+1. Gateway reconnects to MQTT
+2. Gateway publishes online status
+3. Gateway re-subscribes to device topics
+4. Devices detect gateway via status, may re-publish their status
 
 ---
 
-## 7. Vision Pipeline
+## 10. Vision Pipeline
 
-### 7.1 Pipeline Overview
+### 10.1 Current Approach (Phase 1-2)
+
+Vision remains on MQTT snapshots during initial audio-focused phases:
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                     VISION MONITORING FLOW                              │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  ┌──────────┐    WebRTC     ┌──────────────────────────────────────┐    │
-│  │  Camera  │    (VP8)      │            AI Server                 │    │
-│  │          │═══════════════│                                      │    │
-│  │          │──────────────>│  ┌─────────┐                         │    │
-│  │          │               │  │ Decode  │                         │    │
-│  │          │               │  │  VP8    │                         │    │
-│  │          │               │  └────┬────┘                         │    │
-│  │          │               │       │ Raw frames                   │    │
-│  │          │               │       ▼                              │    │
-│  │          │               │  ┌─────────┐                         │    │
-│  │          │               │  │ Motion  │                         │    │
-│  │          │               │  │ Detect  │                         │    │
-│  │          │               │  └────┬────┘                         │    │
-│  │          │               │       │ If motion                    │    │
-│  │          │               │       ▼                              │    │
-│  │          │               │  ┌─────────┐                         │    │
-│  │          │               │  │  YOLO   │                         │    │
-│  │          │               │  │ Detect  │                         │    │
-│  │          │               │  └────┬────┘                         │    │
-│  │          │               │       │ Detections                   │    │
-│  │          │               │       ▼                              │    │
-│  │          │               │  ┌─────────┐     ┌─────────┐         │    │
-│  │          │               │  │  Zone   │────>│  Alert  │──> MQTT │    │
-│  │          │               │  │ Filter  │     │  Dedup  │         │    │
-│  │          │               │  └─────────┘     └─────────┘         │    │
-│  │          │               │                                      │    │
-│  └──────────┘               └──────────────────────────────────────┘    │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                    VISION (MQTT SNAPSHOTS)                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Device                    AI Server                            │
+│    │                           │                                │
+│    │── MQTT: image ──────────▶│                                │
+│    │   (base64 JPEG)          │── Decode ──▶ Image             │
+│    │                          │── YOLO ───▶ Detections         │
+│    │                          │── Alert ──▶ MQTT               │
+│    │                          │                                 │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### 7.2 Efficient Video Processing
+### 10.2 Future Approach (Phase 3+)
 
-**Frame Rate Management:**
-- WebRTC adaptive: 5-15 FPS based on bandwidth
-- Process every Nth frame for detection (configurable)
-- Motion detection on all frames (cheap)
-- YOLO only when motion detected (expensive)
+Video streaming via Pi gateway (after audio is stable):
 
-**Resource Optimization:**
-- Decode only keyframes when idle
-- Skip B-frames during high load
-- Resize before YOLO (640x480 → 320x240)
-- Batch detections when possible
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    VISION (WebRTC STREAMING)                    │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Camera      Pi Gateway           AI Server                     │
+│    │             │                     │                        │
+│    │── WebRTC ─▶│                     │                        │
+│    │   (VP8)     │── Decode frames     │                        │
+│    │             │── Motion detect     │                        │
+│    │             │                     │                        │
+│    │             │── TCP: frame ─────▶│  (only if motion)      │
+│    │             │   (JPEG)            │── YOLO ──▶ Detect     │
+│    │             │                     │── Alert ─▶ MQTT       │
+│    │             │                     │                        │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-### 7.3 Multi-Camera Support
+### 10.3 Vision Processing Notes
 
-Each camera is a separate WebRTC peer connection:
-
-- Independent streams and processing
-- Per-camera zone configuration
-- Cross-camera alert deduplication
-- Prioritization (front door > backyard)
+- Motion detection runs on Pi (cheap, reduces server load)
+- Only motion frames sent to AI server
+- YOLO runs on AI server (CPU intensive)
+- Alerts published via MQTT to all subscribers
 
 ---
 
-## 8. Media Input Methods
+## 11. Media Input Methods
 
 The system supports multiple ways to receive media, ensuring flexibility across device types and use cases.
 
-### 8.1 Real-Time vs Asynchronous Input
+### 11.1 Real-Time vs Asynchronous Input
 
 The fundamental distinction in this architecture is between **real-time streaming** and **asynchronous uploads**:
 
@@ -643,7 +1001,7 @@ The fundamental distinction in this architecture is between **real-time streamin
 | **Echo cancellation** | Built-in | N/A |
 | **Codec** | Opus (audio), VP8 (video) | Any format, decoded on receive |
 
-### 8.2 Input Method Summary
+### 11.2 Input Method Summary
 
 | Method | Transport | Use Case | Latency |
 |--------|-----------|----------|---------|
@@ -653,7 +1011,7 @@ The fundamental distinction in this architecture is between **real-time streamin
 | **MQTT Upload** | MQTT | Web/app uploads (via web service) | Async |
 | **Database Retrieval** | Internal | Historical media lookup | Async |
 
-### 8.3 Media Input Architecture
+### 11.3 Media Input Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -695,7 +1053,7 @@ The fundamental distinction in this architecture is between **real-time streamin
 - **Web Service** - Handles HTTP, WebSocket, browser UI, bridges to MQTT/WebRTC
 - **Devices** - Connect directly via MQTT/WebRTC
 
-### 8.4 Method 1: WebRTC Stream (Real-Time)
+### 11.4 Method 1: WebRTC Stream (Real-Time)
 
 **Best for:** Continuous monitoring, live conversations, security cameras
 
@@ -723,7 +1081,7 @@ Camera streaming via WebRTC
 - Real-time visual Q&A
 - Security monitoring
 
-### 8.5 Method 2: MQTT Snapshot (On-Demand)
+### 11.5 Method 2: MQTT Snapshot (On-Demand)
 
 **Best for:** Devices not continuously streaming, power-saving mode, legacy devices
 
@@ -775,7 +1133,7 @@ Process image
 - Device is in low-power mode
 - One-time capture needed
 
-### 8.6 Method 3: MQTT Recording (Clips)
+### 11.6 Method 3: MQTT Recording (Clips)
 
 **Best for:** Audio messages, video clips, event recordings
 
@@ -796,7 +1154,7 @@ Process image
 - Video: MP4 (H264), WebM (VP8)
 - Image: JPEG, PNG, WebP
 
-### 8.7 Method 4: Web/Mobile Upload (via Web Service)
+### 11.7 Method 4: Web/Mobile Upload (via Web Service)
 
 **Best for:** Browser uploads, mobile apps
 
@@ -834,7 +1192,7 @@ Web browsers and mobile apps connect to a **separate web service** (not the AI s
 
 The web service publishes to MQTT, and the AI server receives it just like any other MQTT upload.
 
-### 8.8 Method 5: Database Retrieval (Historical)
+### 11.8 Method 5: Database Retrieval (Historical)
 
 **Best for:** Accessing previously stored media, reviewing past alerts, conversation context
 
@@ -876,7 +1234,7 @@ User: "Show me what happened at the front door last night"
 - "Show me the last alert from the backyard"
 - "What was I asking about yesterday?"
 
-### 8.9 MQTT Upload Format (from any source)
+### 11.9 MQTT Upload Format (from any source)
 
 All uploads arrive at the AI server via MQTT in the same format, regardless of origin (device, web service bridge, or direct MQTT client):
 
@@ -894,7 +1252,7 @@ All uploads arrive at the AI server via MQTT in the same format, regardless of o
 }
 ```
 
-### 8.10 Media Source Selection Logic
+### 11.10 Media Source Selection Logic
 
 When visual context is needed, the system chooses the best source:
 
@@ -924,7 +1282,7 @@ When visual context is needed, the system chooses the best source:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 8.11 Visual Context Format (Unified)
+### 11.11 Visual Context Format (Unified)
 
 Regardless of input method, visual context is normalized:
 
@@ -956,7 +1314,7 @@ Regardless of input method, visual context is normalized:
 }
 ```
 
-### 8.12 Visual Query Detection
+### 11.12 Visual Query Detection
 
 Keywords that trigger visual context capture:
 
@@ -966,7 +1324,7 @@ Keywords that trigger visual context capture:
 - **Location:** "desk", "room", "door", "window", "outside", "screen"
 - **Analysis:** "read", "OCR", "text", "recognize", "identify"
 
-### 8.13 Audio Input Methods
+### 11.13 Audio Input Methods
 
 Same flexibility applies to audio:
 
@@ -981,154 +1339,99 @@ All audio is normalized to PCM and processed through STT.
 
 ---
 
-## 9. Signaling Server
+## 12. Implementation Phases
 
-### 9.1 Signaling via MQTT
+### Phase 1: Pi Gateway Setup
+- Set up Raspberry Pi with aiortc
+- Basic MQTT signaling implementation
+- Single device WebRTC audio connection
+- Audio passthrough test (device → Pi → device)
 
-No separate signaling server needed - MQTT handles it:
+**Deliverable:** WebRTC audio streaming on Pi
 
-**Server Subscribes To:**
-- `naila/devices/+/status` - Device online/offline
-- `naila/devices/+/signaling/answer` - SDP answers
-- `naila/devices/+/signaling/ice` - ICE candidates from devices
-
-**Server Publishes To:**
-- `naila/devices/{device_id}/signaling/offer` - SDP offers
-- `naila/devices/{device_id}/signaling/ice` - ICE candidates to devices
-
-### 9.2 Session Establishment
-
-**When device comes online:**
-
-1. Device publishes to `naila/devices/{id}/status` with `online: true`
-2. Server receives status, checks device capabilities
-3. If device has audio/video, server creates RTCPeerConnection
-4. Server creates SDP offer, publishes to `naila/devices/{id}/signaling/offer`
-5. Device receives offer, creates answer
-6. Device publishes answer to `naila/devices/{id}/signaling/answer`
-7. Both exchange ICE candidates via `signaling/ice` topics
-8. WebRTC connection established
-
-### 9.3 Reconnection Handling
-
-**On WebRTC disconnect:**
-1. Server detects connection state change
-2. Server closes old PeerConnection
-3. Server creates new offer
-4. Signaling repeats
-
-**On MQTT disconnect:**
-1. Device reconnects to MQTT (automatic with client library)
-2. Device publishes new status
-3. Server initiates new WebRTC session
-
----
-
-## 10. Implementation Phases
-
-### Phase 1: WebRTC Infrastructure
-- `aiortc` integration
-- MQTT signaling
-- Single device audio connection
-- Basic audio passthrough test
-
-**Deliverable:** Voice audio streaming working
-
-### Phase 2: Voice Pipeline
-- STT integration with WebRTC audio
-- LLM response generation
-- TTS with Opus encoding back to device
-- Interruption handling
+### Phase 2: AI Server Integration
+- TCP socket server on AI server
+- Gateway-to-server audio forwarding
+- Basic STT → LLM → TTS pipeline
+- End-to-end voice test
 
 **Deliverable:** Full voice conversation working
 
-### Phase 3: Video Pipeline
-- Video track handling
-- Motion detection on frames
-- YOLO integration
-- Alert generation and MQTT publishing
-
-**Deliverable:** Security monitoring working
-
-### Phase 4: Media Input Flexibility
-- MQTT snapshot request/response
-- HTTP upload endpoint
-- MQTT upload handler
-- Media source selection logic
-- Unified media context format
-
-**Deliverable:** All input methods working (stream, snapshot, upload)
-
-### Phase 5: Multi-Device Support
-- Multiple peer connections
-- Device registry
-- Audio source selection
-- Camera prioritization
-
-**Deliverable:** Multi-room support working
-
-### Phase 6: Polish & Production
+### Phase 3: Production Hardening
+- VAD tuning and optimization
+- Interruption handling
 - Reconnection robustness
-- Error handling
-- Performance optimization
-- Monitoring and metrics
+- Multi-device support on gateway
+- Error handling and logging
 
-**Deliverable:** Production-ready system
+**Deliverable:** Reliable multi-device voice
+
+### Phase 4: Vision Integration (Future)
+- Video track support on Pi gateway
+- Motion detection on Pi
+- Frame forwarding to AI server
+- YOLO integration
+- Alert generation
+
+**Deliverable:** Video monitoring via WebRTC
 
 ### Phase Summary
 
-| Phase | Focus | Key Deliverable |
-|-------|-------|-----------------|
-| 1 | WebRTC Infrastructure | Audio streaming |
-| 2 | Voice Pipeline | Full conversation |
-| 3 | Video Pipeline | Security monitoring |
-| 4 | Media Input Flexibility | All input methods (stream, snapshot, MQTT upload) |
-| 5 | Multi-Device | Multi-room support |
-| 6 | Polish | Production ready |
+| Phase | Focus | Location | Key Deliverable |
+|-------|-------|----------|-----------------|
+| 1 | Gateway Setup | Pi | WebRTC audio working |
+| 2 | Server Integration | Both | Voice conversation |
+| 3 | Hardening | Both | Multi-device reliable |
+| 4 | Vision | Both | Video monitoring |
 
 ---
 
-## 11. File Structure
+## 13. File Structure
 
-### 11.1 New Files
+### 13.1 Pi Gateway (New Repository)
+
+```
+pi-gateway/
+├── main.py                 # Entry point
+├── gateway/
+│   ├── __init__.py
+│   ├── audio_gateway.py    # Main gateway class
+│   ├── session.py          # Device session management
+│   ├── vad.py              # Voice activity detection
+│   └── tracks.py           # Audio track implementations
+├── mqtt/
+│   ├── __init__.py
+│   ├── client.py           # MQTT connection
+│   └── signaling.py        # WebRTC signaling handlers
+├── tcp/
+│   ├── __init__.py
+│   └── ai_client.py        # TCP client to AI server
+├── config/
+│   ├── __init__.py
+│   └── settings.py         # Configuration
+├── requirements.txt
+└── README.md
+```
+
+### 13.2 AI Server Additions
 
 | File | Purpose |
 |------|---------|
-| `webrtc/__init__.py` | Module exports |
-| `webrtc/peer_manager.py` | PeerConnection lifecycle management |
-| `webrtc/audio_track.py` | Audio track handling (receive/send) |
-| `webrtc/video_track.py` | Video track handling |
-| `webrtc/signaling.py` | MQTT-based signaling |
-| `media/__init__.py` | Media handling exports |
-| `media/input_handler.py` | Unified media input handler |
-| `media/upload_handler.py` | MQTT upload processing |
-| `media/snapshot_handler.py` | MQTT snapshot request/response |
-| `media/source_selector.py` | Media source selection logic |
-| `media/context_builder.py` | Build unified media context for LLM |
-| `pipelines/__init__.py` | Pipeline exports |
-| `pipelines/voice.py` | Voice conversation pipeline |
-| `pipelines/vision.py` | Video processing pipeline |
-| `config/webrtc.py` | WebRTC configuration |
-| `config/media.py` | Media handling configuration |
+| `server/audio_socket.py` | TCP server for gateway communication |
+| `utils/pcm_utils.py` | PCM ↔ WAV conversion utilities |
 
-### 11.2 Modified Files
+### 13.3 AI Server Modifications
 
 | File | Changes |
 |------|---------|
-| `server/naila_server.py` | Initialize WebRTC |
-| `server/lifecycle.py` | Add WebRTC startup stage |
-| `services/stt.py` | Accept PCM from WebRTC or uploaded audio |
-| `services/tts.py` | Output PCM for WebRTC encoder |
-| `services/vision.py` | Accept frames from any source |
-| `mqtt/handlers/device_handlers.py` | Add signaling and media handlers |
-| `config/__init__.py` | Export new configs |
-| `requirements.txt` | Add aiortc, Pillow, pydub |
+| `server/lifecycle.py` | Start audio socket server |
+| `config/__init__.py` | Add audio socket config |
 
 ---
 
-## 12. Configuration
+## 14. Configuration
 
-### 12.1 Configuration Classes
+### 14.1 Configuration Classes
 
 **WebRTCConfig:**
 - ICE servers (empty for local network)
@@ -1152,125 +1455,128 @@ No separate signaling server needed - MQTT handles it:
 - Supported formats
 - Snapshot timeout
 
-### 12.2 Environment Variables
+### 14.2 Environment Variables
 
+**Pi Gateway:**
 ```bash
+# MQTT
+MQTT_HOST=main-server.local
+MQTT_PORT=1883
+MQTT_USERNAME=gateway
+MQTT_PASSWORD=secret
+
+# AI Server Connection
+AI_SERVER_HOST=main-server.local
+AI_SERVER_PORT=9999
+
 # WebRTC
 WEBRTC_ICE_SERVERS=[]  # Empty for local network
-WEBRTC_AUDIO_BITRATE=32000
-WEBRTC_VIDEO_BITRATE=1000000
 
 # Audio
-AUDIO_VAD_MODE=webrtc  # or "silero"
-AUDIO_ECHO_CANCELLATION=true
-AUDIO_NOISE_SUPPRESSION=true
+AUDIO_VAD_MODE=energy  # or "silero"
+AUDIO_VAD_THRESHOLD=500
+AUDIO_SILENCE_FRAMES=15  # 300ms at 20ms/frame
+AUDIO_SAMPLE_RATE=48000
 
-# Video
-VIDEO_RESOLUTION=640x480
-VIDEO_MAX_FPS=15
-VIDEO_MOTION_THRESHOLD=25
-VIDEO_PROCESS_EVERY_N_FRAMES=3
+# Logging
+LOG_LEVEL=INFO
+```
 
-# Media Input
-MEDIA_MAX_UPLOAD_SIZE=52428800  # 50MB
-MEDIA_SUPPORTED_IMAGE_FORMATS=jpeg,png,webp,gif
-MEDIA_SUPPORTED_AUDIO_FORMATS=opus,wav,mp3,m4a
-MEDIA_SUPPORTED_VIDEO_FORMATS=mp4,webm
-MEDIA_SNAPSHOT_TIMEOUT_MS=5000
+**AI Server:**
+```bash
+# Audio Socket
+AUDIO_SOCKET_HOST=0.0.0.0
+AUDIO_SOCKET_PORT=9999
 
+# Existing configs unchanged
+# ...
 ```
 
 ---
 
-## 13. Testing Strategy
+## 15. Testing Strategy
 
-### 13.1 Unit Tests
+### 15.1 Unit Tests
 
-**WebRTC:**
-- PeerConnection creation/teardown
-- SDP offer/answer exchange
-- ICE candidate handling
-- Track addition/removal
-
-**Voice Pipeline:**
-- Audio decode → STT → LLM → TTS → encode
-- Interruption mid-response
+**Pi Gateway:**
+- MQTT signaling handlers
+- WebRTC PeerConnection lifecycle
 - VAD accuracy
+- Audio buffering logic
+- TCP client connection
 
-**Vision Pipeline:**
-- Frame decode → motion → YOLO → alert
-- Zone filtering
-- Alert deduplication
+**AI Server:**
+- Audio socket server
+- PCM ↔ WAV conversion
+- Existing service tests unchanged
 
-**Media Input:**
-- MQTT upload handling
-- MQTT snapshot request/response
-- Media source selection
-- Format conversion and normalization
-
-### 13.2 Integration Tests
+### 15.2 Integration Tests
 
 - Full signaling flow via MQTT
+- Gateway ↔ AI server communication
 - Voice conversation round trip
-- Video streaming with alerts
+- Interruption handling
 - Multi-device scenarios
-- MQTT upload → vision → LLM → response
-- MQTT snapshot flow end-to-end
+- Reconnection after failures
 
-### 13.3 Network Tests
+### 15.3 End-to-End Tests
 
-- Packet loss simulation
-- Bandwidth constraint simulation
-- Reconnection scenarios
-- NAT traversal (if configured)
-
----
-
-## 14. Performance Considerations
-
-### 14.1 Latency Budget (Voice)
-
-| Stage | Target | Optimization |
-|-------|--------|--------------|
-| Network (WebRTC) | 20-50ms | UDP, local WiFi |
-| Audio decode | <5ms | Opus hardware decode |
-| VAD + STT | 150-200ms | Streaming Whisper |
-| LLM | 100-300ms | Fast model, streaming |
-| TTS | 50-100ms | Streaming synthesis |
-| Audio encode | <5ms | Opus hardware encode |
-| Network back | 20-50ms | UDP, local WiFi |
-| **Total first audio** | **~400-700ms** | |
-
-### 14.2 CPU Optimization
-
-**WebRTC (handled by library):**
-- Hardware codec acceleration when available
-- Efficient RTP packetization
-- Built-in congestion control
-
-**Vision:**
-- Process every Nth frame
-- Motion detection gates YOLO
-- Batch frames when possible
-- GPU for YOLO inference
-
-### 14.3 Memory Management
-
-**Audio:**
-- Ring buffers with fixed size
-- Clear after STT processing
-- No raw audio persistence
-
-**Video:**
-- Frame pool with max size
-- Discard old frames under load
-- No frame persistence (except snapshots)
+- Device → Gateway → Server → Gateway → Device
+- Latency measurement
+- Audio quality assessment
+- Stress testing (multiple simultaneous conversations)
 
 ---
 
-## 15. Security Considerations
+## 16. Performance Considerations
 
-### 15.1 WebRTC Security
+### 16.1 Latency Budget (Voice)
+
+| Stage | Location | Target | Notes |
+|-------|----------|--------|-------|
+| Audio capture | Device | ~20ms | WebRTC frame |
+| Network (WebRTC) | Device→Pi | ~30ms | WiFi |
+| Opus decode + VAD | Pi | ~5ms | Software |
+| Utterance buffer | Pi | ~100ms | Wait for silence |
+| Network (TCP) | Pi→Server | ~2ms | Ethernet |
+| STT (Whisper) | Server | ~200ms | CPU |
+| LLM (Llama) | Server | ~300ms | CPU |
+| TTS (Piper) | Server | ~100ms | CPU |
+| Network (TCP) | Server→Pi | ~2ms | Ethernet |
+| Opus encode | Pi | ~2ms | Software |
+| Network (WebRTC) | Pi→Device | ~30ms | WiFi |
+| **Total** | | **~800ms** | First audio |
+
+### 16.2 CPU Distribution
+
+**Pi Gateway (~30% CPU):**
+- WebRTC: ~10% per connection
+- Opus codec: ~5% per stream
+- VAD: ~5%
+- Headroom for spikes
+
+**AI Server (up to 100% during inference):**
+- Whisper: 100-200% (1-2 cores)
+- Llama: 200-400% (2-4 cores)
+- Piper: 50-100% (0.5-1 core)
+- Inference is sequential, not concurrent
+
+### 16.3 Memory Management
+
+**Pi Gateway:**
+- Audio buffers: ~2MB per device (30s max)
+- PeerConnection overhead: ~10MB per device
+- Total for 5 devices: ~60MB
+
+**AI Server:**
+- Model memory (existing)
+- Audio socket buffers: ~1MB per request
+
+---
+
+## 17. Security Considerations
+
+### 17.1 WebRTC Security
 
 **Built-in:**
 - DTLS for signaling encryption
@@ -1282,76 +1588,142 @@ MEDIA_SNAPSHOT_TIMEOUT_MS=5000
 - Validate device IDs in signaling
 - ICE candidate filtering (optional)
 
-### 15.2 MQTT Security
+### 17.2 Network Security
 
+**Pi ↔ Server:**
+- Use wired ethernet (not WiFi) between Pi and server
+- Consider TLS for TCP socket if on untrusted network
+- Firewall: Only allow Pi IP to audio socket port
+
+**MQTT:**
 - TLS encryption
 - Username/password or certificate auth
 - ACLs per device (limit topic access)
 - Rate limiting
 
-### 15.3 General
+### 17.3 General
 
 - No media persistence by default
-- Secure alert delivery
 - Input validation on all messages
 - Audit logging for security events
-- Uploaded files scanned before processing
 
 ---
 
-## 16. Migration Guide
+## 18. Hardware Requirements
 
-### 16.1 From Current MQTT-Only Architecture
+### 18.1 Pi Gateway
 
-**Phase 1: Add WebRTC Server-Side**
-1. Install aiortc
-2. Add WebRTC module
-3. Add signaling handlers
-4. Test with single device
+**Minimum: Raspberry Pi 4 (2GB)**
+- Handles 2-3 simultaneous devices
+- Energy-based VAD only
+- Basic functionality
 
-**Phase 2: Update Device Firmware**
-1. Add WebRTC library to device
-2. Implement signaling client
-3. Connect audio to WebRTC track
-4. Test voice conversation
+**Recommended: Raspberry Pi 4 (4GB) or Pi 5 (4GB)**
+- Handles 5+ simultaneous devices
+- Silero VAD for better accuracy
+- Headroom for video (future)
+- Cost: ~$55-80
 
-**Phase 3: Migrate Features**
-1. Move voice from MQTT to WebRTC
-2. Add video streaming
-3. Keep commands/alerts on MQTT
-4. Deprecate old audio handlers
+**Network:**
+- Wired Ethernet to AI server (required)
+- WiFi for device connections (or wired)
 
-### 16.2 Rollback Plan
+### 18.2 AI Server
 
-1. Device firmware supports both paths
-2. Server flag to disable WebRTC
-3. Falls back to MQTT audio (degraded)
-4. No data loss
+**Minimum:**
+- 4-core CPU (Whisper, Llama, Piper are CPU-bound)
+- 16GB RAM (for models)
+- SSD storage
+
+**Recommended:**
+- 8+ core CPU
+- 32GB RAM
+- GPU optional (improves inference speed)
+
+### 18.3 Network Topology
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Recommended Setup                    │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  Devices ───WiFi───▶ Router ◀───Ethernet───┐           │
+│                        │                    │           │
+│                        │              ┌─────▼─────┐     │
+│                   Ethernet            │    Pi     │     │
+│                        │              │  Gateway  │     │
+│                        ▼              └─────┬─────┘     │
+│                  ┌──────────┐               │           │
+│                  │   MQTT   │          Ethernet         │
+│                  │  Broker  │               │           │
+│                  └────┬─────┘               │           │
+│                       │              ┌──────▼──────┐    │
+│                       └──────────────│  AI Server  │    │
+│                                      └─────────────┘    │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 19. Migration Guide
+
+### 19.1 From Current MQTT-Only Architecture
+
+**Step 1: Set up Pi Gateway**
+1. Install Raspberry Pi OS
+2. Install Python 3.11+
+3. Clone pi-gateway repository
+4. Install dependencies
+5. Configure MQTT and AI server addresses
+6. Test MQTT connectivity
+
+**Step 2: Add Audio Socket to AI Server**
+1. Add `server/audio_socket.py`
+2. Modify `server/lifecycle.py` to start socket server
+3. Test TCP connectivity from Pi
+
+**Step 3: Update Device Firmware**
+1. Add WebRTC support to device
+2. Implement MQTT signaling client
+3. Test WebRTC connection to Pi gateway
+
+**Step 4: End-to-End Testing**
+1. Test full voice conversation
+2. Tune VAD settings
+3. Measure latency
+
+### 19.2 Rollback Plan
+
+1. Pi gateway can be bypassed
+2. Devices fall back to MQTT audio (existing)
+3. AI server continues to accept MQTT audio
+4. No data loss or functionality regression
 
 ---
 
 ## Appendix A: Dependencies
 
-### Required
+### Pi Gateway
 
 ```
-# WebRTC
-aiortc>=1.6.0           # WebRTC for Python
+# requirements.txt for pi-gateway
+aiortc>=1.6.0,<2.0.0    # WebRTC for Python
 aioice>=0.9.0           # ICE implementation
-av>=11.0.0              # FFmpeg bindings (codec support)
+av>=11.0.0,<12.0.0      # FFmpeg bindings (codec support)
+numpy>=1.24.0           # Audio processing
+asyncio-mqtt>=0.16.0    # Async MQTT client
 
-# Media processing
-numpy>=1.24.0           # Audio/video processing
-opencv-python-headless>=4.8.0  # Video processing
-Pillow>=10.0.0          # Image handling
-pydub>=0.25.1           # Audio format conversion
+# Optional for better VAD
+silero-vad>=4.0.0
+torch>=2.0.0            # Required by Silero
 ```
 
-### Optional
+### AI Server Additions
 
 ```
-silero-vad>=4.0.0       # Better VAD than WebRTC built-in
-torch>=2.0.0            # GPU acceleration for YOLO/Whisper
+# Add to existing requirements.txt
+soundfile>=0.12.0       # If not already present (WAV handling)
 ```
 
 ---
