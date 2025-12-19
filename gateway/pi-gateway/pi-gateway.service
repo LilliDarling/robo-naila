@@ -1,0 +1,19 @@
+[Unit]
+Description=NAILA Pi Gateway - WebRTC Audio Gateway
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi2
+WorkingDirectory=/home/pi2/pi-gateway
+Environment="PATH=/home/pi2/pi-gateway/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+EnvironmentFile=/home/pi2/pi-gateway/.env
+ExecStart=/home/pi2/pi-gateway/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
