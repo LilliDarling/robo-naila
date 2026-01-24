@@ -1,558 +1,413 @@
-# Real-Time Conversational Audio Streaming Implementation Plan
+# NAILA Streaming Architecture
 
 ## Overview
 
-Transform the gateway into a full-duplex conversational audio system with:
-- **Full streaming pipeline**: Audio → STT → LLM (token-by-token) → TTS (chunked) → Audio playback
-- **Wake word activation** on devices before conversation starts
-- **Barge-in/interruption** support for natural conversation flow
-- **WebSocket** bidirectional streaming between gateway and AI server
+This document extends the core NAILA architecture (see `ARCHITECTURE.md`) with real-time streaming capabilities for low-latency voice conversations, continuous vision monitoring, and cross-room context awareness.
 
-## Architecture
+**This document adds:**
+- WebRTC for real-time audio/video streaming
+- gRPC for efficient Command Center ↔ AI server communication
+- Streaming pipeline optimizations
+
+**Existing infrastructure (unchanged):**
+- MQTT as central message broker
+- Command topics for device control
+- HTTP Server for historical data
+- Web Services for monitoring
+
+See also: `MQTT_PROTOCOL.md` for topic specifications.
+
+## System Architecture
 
 ```
-Device (Pi #3)  ←──WebRTC──→  Gateway (Pi #2)  ←──WebSocket──→  AI Server
-     │                              │                              │
- Wake Word                    State Machine                  Streaming Pipeline
- Detection                    VAD + Buffering                STT → LLM → TTS
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              DEVICE LAYER                                   │
+│                                                                             │
+│   ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌──────────┐  │
+│   │  Room A   │  │  Room B   │  │  Room C   │  │  Mobile   │  │  Browser │  │
+│   │   Pi      │  │  ESP32    │  │   Pi      │  │   Phone   │  │   Web    │  │
+│   │  Mic+Cam  │  │  Mic+Cam  │  │  Mic+Cam  │  │   App     │  │  Client  │  │
+│   └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └────┬─────┘  │
+│         │              │              │              │              │       │
+│     WebRTC          MQTT          WebRTC         WebRTC         WebRTC      │
+│         │              │              │              │              │       │
+│         └──────────────┴──────────────┼──────────────┴──────────────┘       │
+└───────────────────────────────────────┼─────────────────────────────────────┘
+                                        │
+┌───────────────────────────────────────▼─────────────────────────────────────┐
+│                           COMMAND CENTER (Rust)                             │
+│                                                                             │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────────┐  │
+│  │  WebRTC Server  │  │  Media Router   │  │  Filtering                  │  │
+│  │                 │──│                 │──│  • VAD (voice detection)    │  │
+│  │  • Audio tracks │  │  • Per-device   │  │  • Motion detection         │  │
+│  │  • Video tracks │  │  • Per-room     │  │  • Silence suppression      │  │
+│  └─────────────────┘  └─────────────────┘  └──────────────┬──────────────┘  │
+│                                                           │                 │
+│                                              Only relevant data passes      │
+│                                                           │                 │
+│  ┌────────────────────────────────────────────────────────▼──────────────┐  │
+│  │                         gRPC Client                                   │  │
+│  │                    (bidirectional streaming)                          │  │
+│  └────────────────────────────────────────────────────────┬──────────────┘  │
+└───────────────────────────────────────────────────────────┼─────────────────┘
+                                                            │
+                                               gRPC (protobuf, HTTP/2)
+                                                            │
+┌───────────────────────────────────────────────────────────▼─────────────────┐
+│                            AI SERVER LAYER (Python)                         │
+│                                                                             │
+│  ┌─────────────────┐                                                        │
+│  │  gRPC Service   │◄── Single endpoint for Command Center                  │
+│  └────────┬────────┘                                                        │
+│           │                                                                 │
+│           ▼                                                                 │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                      AI Processing Pipeline                         │    │
+│  │                                                                     │    │
+│  │  ┌───────┐    ┌─────────┐    ┌───────┐    ┌───────┐    ┌───────┐    │    │
+│  │  │  STT  │───▶│ Context │───▶│  LLM  │───▶│  TTS │──▶│ Output│   │    │
+│  │  └───────┘    └─────────┘    └───────┘    └───────┘    └───────┘    │    │
+│  │                    ▲                                                │    │
+│  │  ┌───────┐         │                                                │    │
+│  │  │Vision │─────────┘                                                │    │
+│  │  └───────┘                                                          │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│           │                                                                 │
+│           ▼                                                                 │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                              MQTT                                   │    │
+│  │  • Device commands          • Text chat           • Alerts          │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│           │                                                                 │
+│           ▼                                                                 │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                        Knowledge & Memory                           │    │
+│  │         Context Store (PostgreSQL)    Vector DB (Chroma)            │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Conversation State Flow
+## Communication Protocols
+
+| Connection | Protocol | Purpose |
+|------------|----------|---------|
+| Device ↔ Command Center | WebRTC | Real-time audio/video (Pi, phones, browsers) |
+| Device ↔ Command Center | MQTT | Audio streaming (ESP32, simple devices) |
+| Device ↔ Command Center | MQTT | WebRTC signaling (SDP, ICE) |
+| Command Center ↔ AI Server | gRPC | Filtered audio/video, responses |
+| AI Server ↔ Devices | MQTT | Commands, alerts, text chat |
+
+## Supported Device Types
+
+| Device | Audio | Video | Protocol | Notes |
+|--------|-------|-------|----------|-------|
+| Raspberry Pi | Yes | Yes | WebRTC | Full capability |
+| ESP32 | Yes | Yes | MQTT | Audio chunks, JPEG frames |
+| Mobile App | Yes | Yes | WebRTC | iOS/Android |
+| Web Browser | Yes | Optional | WebRTC | Desktop/mobile browsers |
+| Smart Speaker | Yes | No | WebRTC/MQTT | Audio only |
+
+## Data Flows
+
+### Voice Conversation
+
 ```
-IDLE → [wake word] → LISTENING → [silence] → PROCESSING → [first TTS] → SPEAKING → [complete/timeout] → IDLE
-                          ↑                                     │
-                          └────────── [barge-in] ───────────────┘
-```
-
-**States:**
-- `IDLE` - Waiting for wake word, audio not streaming to server
-- `LISTENING` - Active listening, streaming audio chunks to server
-- `PROCESSING` - STT complete, LLM generating response
-- `SPEAKING` - TTS audio playing back to user
-
----
-
-## WebSocket Protocol
-
-### Gateway → AI Server Messages
-
-```python
-# Audio chunk (streaming input)
-{
-    "type": "audio_chunk",
-    "session_id": "sess_abc123",
-    "device_id": "pi-mic-01",
-    "timestamp": 1705600000.123,
-    "payload": {
-        "audio_b64": "<base64 PCM int16>",
-        "sample_rate": 16000,
-        "sequence": 42,
-        "is_speech": true
-    }
-}
-
-# Session control
-{
-    "type": "session_control",
-    "session_id": "sess_abc123",
-    "payload": {
-        "action": "start" | "end" | "interrupt" | "cancel",
-        "reason": "wake_word" | "vad_timeout" | "user_interrupt" | "error"
-    }
-}
-```
-
-### AI Server → Gateway Messages
-
-```python
-# STT partial result
-{
-    "type": "stt_partial",
-    "session_id": "sess_abc123",
-    "payload": {
-        "text": "Hello, how are",
-        "is_final": false,
-        "confidence": 0.85
-    }
-}
-
-# STT final result
-{
-    "type": "stt_final",
-    "session_id": "sess_abc123",
-    "payload": {
-        "text": "Hello, how are you today?",
-        "confidence": 0.92,
-        "language": "en"
-    }
-}
-
-# LLM token (streaming)
-{
-    "type": "llm_token",
-    "session_id": "sess_abc123",
-    "payload": {
-        "token": "Hello",
-        "is_first": true,
-        "is_last": false
-    }
-}
-
-# TTS audio chunk (streaming)
-{
-    "type": "tts_chunk",
-    "session_id": "sess_abc123",
-    "payload": {
-        "audio_b64": "<base64 PCM int16>",
-        "sample_rate": 22050,
-        "sequence": 0,
-        "is_last": false
-    }
-}
-
-# State change notification
-{
-    "type": "state_change",
-    "session_id": "sess_abc123",
-    "payload": {
-        "new_state": "speaking",
-        "previous_state": "processing"
-    }
-}
-
-# Error
-{
-    "type": "error",
-    "session_id": "sess_abc123",
-    "payload": {
-        "code": "stt_failed",
-        "message": "Transcription failed",
-        "recoverable": true
-    }
-}
+User speaks (Room A)
+    │
+    ▼
+Device captures audio (WebRTC)
+    │
+    ▼
+Command Center receives audio stream
+    │
+    ▼
+Command Center VAD detects speech ──────► Silence discarded
+    │
+    ▼ (speech detected)
+Command Center streams to AI Server (gRPC)
+    │
+    ▼
+AI Server: STT → Context → LLM → TTS
+    │
+    ▼
+AI Server streams TTS audio (gRPC)
+    │
+    ▼
+Command Center routes to Room A speaker
+    │
+    ▼
+User hears response
 ```
 
----
+### Context Awareness
+
+```
+User says "I need to eat" (Room A)
+    │
+    ▼
+AI Server stores context: {user: A, intent: eat, location: Room A, time: T}
+    │
+    ▼
+User moves to Room B, starts doing something else
+    │
+    ▼
+Camera detects user in Room B
+    │
+    ▼
+AI Server checks context: "User A mentioned eating 10 minutes ago"
+    │
+    ▼
+AI Server triggers reminder via Room B speaker
+```
+
+### Text Chat
+
+```
+User sends text (web/app)
+    │
+    ▼
+MQTT → AI Server
+    │
+    ▼
+AI Server processes (no Command Center involvement)
+    │
+    ▼
+AI Server responds via MQTT
+```
+
+## Component Details
+
+### Command Center (Rust)
+
+The Command Center handles all device connections, media processing, and coordination between devices and the AI server. This document focuses on the streaming capabilities; additional Command Center responsibilities will be added:
+
+- Status tracking & reporting
+- Sequencing & coordination
+- Device command management
+- Translation & dispatching
+
+**Current Responsibilities (Streaming):**
+- Manage WebRTC connections (Pi, phones, browsers)
+- Manage MQTT audio streams (ESP32, simple devices)
+- Perform VAD to filter silence/noise
+- Detect motion in video streams
+- Route audio/video to correct rooms
+- Stream relevant data to AI server via gRPC
+- Receive TTS responses and route to correct devices
+
+**Technology:**
+- Language: Rust
+- WebRTC: webrtc-rs
+- gRPC: tonic + prost
+- MQTT: rumqttc
+- VAD: webrtc-vad
+
+### AI Server (Python)
+
+The AI server focuses exclusively on AI processing.
+
+**Responsibilities:**
+- Receive filtered audio/video via gRPC
+- Speech-to-text transcription
+- Context and memory management
+- LLM response generation
+- Text-to-speech synthesis
+- Vision analysis
+- Send commands via MQTT
+
+**Technology:**
+- Language: Python
+- gRPC: grpcio
+- STT: faster-whisper
+- LLM: llama-cpp-python
+- TTS: OuteTTS/Piper
+- Vision: YOLOv8
+- Orchestration: LangGraph
+
+### Device Clients
+
+Lightweight clients running on each device, adapted to device capabilities.
+
+**Responsibilities:**
+- Capture audio from microphone
+- Capture video from camera (if available)
+- Stream to Command Center (WebRTC or MQTT depending on device)
+- Play TTS audio from Command Center
+- Handle signaling via MQTT
+
+**Implementations:**
+
+| Platform | Language | Audio/Video | Transport |
+|----------|----------|-------------|-----------|
+| Raspberry Pi | Python | aiortc, sounddevice | WebRTC |
+| ESP32 | C++ | I2S, camera driver | MQTT |
+| Mobile App | Swift/Kotlin | Native WebRTC | WebRTC |
+| Web Browser | JavaScript | Browser WebRTC API | WebRTC |
+
+## gRPC Service Definition
+
+```protobuf
+syntax = "proto3";
+package naila;
+
+service NailaAI {
+  // Bidirectional audio streaming for voice conversations
+  rpc StreamConversation(stream AudioInput) returns (stream AudioOutput);
+
+  // Video frame analysis
+  rpc AnalyzeFrame(FrameInput) returns (FrameAnalysis);
+
+  // Context updates from Command Center
+  rpc UpdateContext(ContextEvent) returns (Ack);
+}
+
+message AudioInput {
+  string device_id = 1;
+  string room_id = 2;
+  bytes audio_pcm = 3;
+  uint32 sample_rate = 4;
+  uint64 timestamp_ms = 5;
+  SpeechEvent event = 6;
+}
+
+enum SpeechEvent {
+  CONTINUE = 0;
+  START = 1;
+  END = 2;
+}
+
+message AudioOutput {
+  string device_id = 1;
+  string room_id = 2;
+  bytes audio_pcm = 3;
+  uint32 sample_rate = 4;
+  bool is_final = 5;
+}
+
+message FrameInput {
+  string device_id = 1;
+  string room_id = 2;
+  bytes frame_jpeg = 3;
+  uint64 timestamp_ms = 4;
+}
+
+message FrameAnalysis {
+  repeated string users_detected = 1;
+  string scene_description = 2;
+}
+
+message ContextEvent {
+  string room_id = 1;
+  string user_id = 2;
+  string event_type = 3;
+  string details = 4;
+  uint64 timestamp_ms = 5;
+}
+
+message Ack {
+  bool success = 1;
+}
+```
+
+## Directory Structure
+
+```
+robo-naila/
+├── command-center/                # Rust Command Center
+│   ├── Cargo.toml
+│   ├── build.rs
+│   ├── proto/
+│   │   └── naila.proto
+│   └── src/
+│       ├── main.rs
+│       ├── config.rs
+│       ├── grpc/                  # gRPC client to AI server
+│       ├── webrtc/                # WebRTC connections
+│       ├── mqtt/                  # MQTT connections (ESP32, signaling)
+│       ├── media/                 # VAD, motion, routing
+│       └── devices/               # Device registry, room mapping
+│
+├── ai-server/
+│   ├── grpc/                      # gRPC service
+│   │   ├── __init__.py
+│   │   ├── server.py
+│   │   └── service.py
+│   ├── proto/
+│   │   └── naila.proto
+│   ├── services/                  # AI services (STT, LLM, TTS, Vision)
+│   ├── agents/                    # LangGraph agents
+│   └── ...
+│
+├── clients/                       # Device client implementations
+│   ├── pi/                        # Raspberry Pi client (Python)
+│   │   ├── main.py
+│   │   ├── config.py
+│   │   └── requirements.txt
+│   ├── web/                       # Browser client (JavaScript)
+│   │   └── ...
+│   └── mobile/                    # Mobile app (future)
+│       └── ...
+│
+├── firmware/                      # ESP32 firmware (C++)
+│   └── ...
+│
+├── proto/                         # Shared protocol definitions
+│   └── naila.proto
+│
+└── docs/
+    ├── ARCHITECTURE.md
+    └── STREAMING_ARCHITECTURE.md
+```
 
 ## Implementation Phases
 
-### Phase 1: WebSocket Infrastructure
-
-**AI Server - New Files:**
-| File | Purpose |
-|------|---------|
-| `ai-server/streaming/__init__.py` | Module init |
-| `ai-server/streaming/websocket_server.py` | FastAPI WebSocket endpoint |
-| `ai-server/streaming/session.py` | Streaming session management |
-
-**AI Server - Modify:**
-| File | Changes |
-|------|---------|
-| `ai-server/main.py` | Add uvicorn/FastAPI alongside MQTT |
-| `ai-server/server/naila_server.py` | Initialize streaming services |
-
-**Gateway - New Files:**
-| File | Purpose |
-|------|---------|
-| `gateway/pi-gateway/streaming/__init__.py` | Module init |
-| `gateway/pi-gateway/streaming/ws_client.py` | WebSocket client to AI server |
-
-**Gateway - Modify:**
-| File | Changes |
-|------|---------|
-| `gateway/pi-gateway/main.py` | Replace TCP with WebSocket client |
-| `gateway/pi-gateway/config/settings.py` | Add WebSocket URL config |
-
----
-
-### Phase 2: Streaming Pipeline (AI Server)
-
-**Modify `ai-server/services/llm.py`:**
-
-Add streaming token generation:
-```python
-async def generate_chat_streaming(
-    self,
-    messages: List[Dict[str, str]],
-    max_tokens: Optional[int] = None,
-) -> AsyncGenerator[str, None]:
-    """Generate chat completion with streaming tokens."""
-    prompt = self._format_chat_prompt(messages)
-
-    for output in self.model(
-        prompt,
-        max_tokens=max_tokens or 256,
-        stream=True,  # Enable streaming
-        stop=["<|eot_id|>"]
-    ):
-        token = output["choices"][0]["text"]
-        yield token
-```
-
-**Modify `ai-server/services/tts.py`:**
-
-Add sentence-level streaming:
-```python
-async def synthesize_streaming(
-    self,
-    token_stream: AsyncGenerator[str, None]
-) -> AsyncGenerator[bytes, None]:
-    """Synthesize TTS audio incrementally as LLM tokens arrive."""
-    buffer = ""
-    delimiters = ".!?"
-
-    async for token in token_stream:
-        buffer += token
-
-        # Check for sentence boundary
-        for delim in delimiters:
-            if delim in buffer:
-                sentence, buffer = buffer.split(delim, 1)
-                sentence = sentence + delim
-
-                if sentence.strip():
-                    audio = await self.synthesize(sentence.strip(), output_format="raw")
-                    yield audio.audio_bytes
-                break
-
-    # Handle remaining text
-    if buffer.strip():
-        audio = await self.synthesize(buffer.strip(), output_format="raw")
-        yield audio.audio_bytes
-```
-
-**New `ai-server/streaming/orchestrator.py`:**
-
-Pipeline coordinator:
-```python
-class StreamingOrchestrator:
-    async def process_session(self, websocket, session):
-        # 1. Accumulate audio until speech ends
-        audio_data = await self._collect_audio(session)
-
-        # 2. Transcribe (STT)
-        transcription = await self.stt.transcribe_audio(audio_data)
-        await self._send_stt_result(websocket, transcription)
-
-        # 3. Stream LLM response
-        messages = self._build_messages(session, transcription.text)
-        full_text = ""
-
-        async for token in self.llm.generate_chat_streaming(messages):
-            if session.interrupted:
-                break
-            full_text += token
-            await self._send_llm_token(websocket, token)
-
-        # 4. Stream TTS audio
-        async for audio_chunk in self.tts.synthesize_streaming(full_text):
-            if session.interrupted:
-                break
-            await self._send_tts_chunk(websocket, audio_chunk)
-```
-
-**STT Approach:**
-- Faster-Whisper doesn't support true streaming
-- Accumulate audio chunks until VAD detects speech end
-- Transcribe accumulated audio in batches
-- Target: <500ms for typical utterances
-
----
-
-### Phase 3: State Machine (Gateway)
-
-**New `gateway/pi-gateway/streaming/state_machine.py`:**
-
-```python
-from enum import Enum, auto
-from dataclasses import dataclass
-import asyncio
-
-class ConversationState(Enum):
-    IDLE = auto()
-    LISTENING = auto()
-    PROCESSING = auto()
-    SPEAKING = auto()
-
-@dataclass
-class ConversationSession:
-    session_id: str
-    device_id: str
-    state: ConversationState = ConversationState.IDLE
-    state_entered_at: float = 0.0
-    tts_playing: bool = False
-    interrupt_requested: bool = False
-
-class ConversationStateMachine:
-    SILENCE_TIMEOUT = 10.0  # Return to IDLE after 10s silence
-    CONTINUE_TIMEOUT = 3.0  # Wait 3s for user to continue after TTS
-
-    async def handle_event(self, event: str, **kwargs) -> ConversationState:
-        """Handle state transition based on event."""
-        transitions = {
-            ConversationState.IDLE: {
-                "wake_word_detected": ConversationState.LISTENING,
-            },
-            ConversationState.LISTENING: {
-                "vad_speech_end": ConversationState.PROCESSING,
-                "timeout": ConversationState.IDLE,
-            },
-            ConversationState.PROCESSING: {
-                "first_tts_chunk": ConversationState.SPEAKING,
-                "error": ConversationState.IDLE,
-            },
-            ConversationState.SPEAKING: {
-                "user_interrupt": ConversationState.LISTENING,
-                "tts_complete": ConversationState.LISTENING,
-                "silence_timeout": ConversationState.IDLE,
-            },
-        }
-
-        current = self.session.state
-        new_state = transitions.get(current, {}).get(event, current)
-
-        if new_state != current:
-            self.session.state = new_state
-            self.session.state_entered_at = time.time()
-
-        return new_state
-```
-
-**Modify `gateway/pi-gateway/gateway/session.py`:**
-
-Add state and streaming fields:
-```python
-@dataclass
-class DeviceSession:
-    device_id: str
-    pc: RTCPeerConnection
-
-    # New streaming fields
-    session_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
-    state: ConversationState = ConversationState.IDLE
-    audio_sequence: int = 0
-
-    # Existing fields...
-```
-
-**Modify `gateway/pi-gateway/gateway/audio_gateway.py`:**
-
-Integrate streaming:
-```python
-async def _handle_audio_track(self, session: DeviceSession, track):
-    while True:
-        frame = await track.recv()
-        pcm = frame.to_ndarray().flatten().astype(np.int16)
-
-        # Check state before processing
-        if session.state == ConversationState.IDLE:
-            continue  # Ignore audio when idle (waiting for wake word)
-
-        # Check for barge-in
-        is_speech = self.vad.is_speech(pcm)
-        if is_speech and session.tts_playing:
-            await self._handle_interruption(session)
-            continue
-
-        # Stream to AI server
-        if session.state == ConversationState.LISTENING:
-            await self.ws_client.send_audio_chunk(
-                session_id=session.session_id,
-                device_id=session.device_id,
-                audio_pcm=pcm.tobytes(),
-                sample_rate=16000,
-                sequence=session.audio_sequence,
-                is_speech=is_speech
-            )
-            session.audio_sequence += 1
-```
-
----
-
-### Phase 4: Barge-In Support
-
-**New `gateway/pi-gateway/streaming/interruption.py`:**
-
-```python
-class InterruptionDetector:
-    MIN_SPEECH_FRAMES = 3  # ~60ms to trigger
-
-    def __init__(self, vad):
-        self.vad = vad
-        self.consecutive_speech = 0
-        self.tts_playing = False
-
-    def check(self, audio_frame: np.ndarray) -> bool:
-        """Returns True if user is interrupting."""
-        if not self.tts_playing:
-            return False
-
-        if self.vad.is_speech(audio_frame):
-            self.consecutive_speech += 1
-            return self.consecutive_speech >= self.MIN_SPEECH_FRAMES
-        else:
-            self.consecutive_speech = 0
-            return False
-```
-
-**Interruption handling in gateway:**
-```python
-async def _handle_interruption(self, session: DeviceSession):
-    logger.info(f"[{session.device_id}] Barge-in detected")
-
-    # Clear TTS queue
-    session.clear_tts_queue()
-    session.tts_playing = False
-
-    # Notify AI server
-    await self.ws_client.send_session_control(
-        session.session_id,
-        action="interrupt",
-        reason="user_interrupt"
-    )
-
-    # Transition to listening
-    session.state = ConversationState.LISTENING
-```
-
----
-
-### Phase 5: Wake Word Integration
-
-**New `gateway/pi-device/wake_word.py`:**
-
-```python
-import pvporcupine
-
-class WakeWordDetector:
-    def __init__(self, access_key: str, keywords: list = None):
-        self.porcupine = pvporcupine.create(
-            access_key=access_key,
-            keywords=keywords or ["jarvis"],
-            sensitivities=[0.7]
-        )
-        self.on_wake_word = None
-
-    def process_frame(self, pcm_frame: bytes) -> bool:
-        """Returns True if wake word detected."""
-        samples = struct.unpack_from("h" * self.porcupine.frame_length, pcm_frame)
-        keyword_index = self.porcupine.process(samples)
-
-        if keyword_index >= 0:
-            if self.on_wake_word:
-                self.on_wake_word(keyword_index)
-            return True
-        return False
-```
-
-**Modify `gateway/pi-device/main.py`:**
-
-```python
-class DeviceClient:
-    def __init__(self):
-        self.wake_word = WakeWordDetector(
-            access_key=settings.porcupine_access_key,
-            keywords=["naila"]
-        )
-        self.wake_word.on_wake_word = self._on_wake_word
-        self.conversation_active = False
-
-    async def _on_wake_word(self, keyword_index: int):
-        logger.info("Wake word detected!")
-        self.conversation_active = True
-
-        # Notify gateway
-        await self.mqtt.publish(
-            f"{self.prefix}/devices/{self.device_id}/wake_word",
-            json.dumps({"device_id": self.device_id, "timestamp": time.time()})
-        )
-```
-
----
-
-## File Summary
-
-### Files to Create
-
-| File | Purpose |
-|------|---------|
-| `ai-server/streaming/__init__.py` | Module init |
-| `ai-server/streaming/websocket_server.py` | WebSocket handler |
-| `ai-server/streaming/orchestrator.py` | STT→LLM→TTS pipeline |
-| `ai-server/streaming/session.py` | Streaming session state |
-| `gateway/pi-gateway/streaming/__init__.py` | Module init |
-| `gateway/pi-gateway/streaming/ws_client.py` | WebSocket client |
-| `gateway/pi-gateway/streaming/state_machine.py` | Conversation state |
-| `gateway/pi-gateway/streaming/interruption.py` | Barge-in detection |
-| `gateway/pi-device/wake_word.py` | Porcupine wake word |
-
-### Files to Modify
-
-| File | Changes |
-|------|---------|
-| `ai-server/main.py` | Add FastAPI app with WebSocket endpoint |
-| `ai-server/server/naila_server.py` | Initialize streaming services |
-| `ai-server/services/llm.py` | Add `generate_chat_streaming()` |
-| `ai-server/services/tts.py` | Add `synthesize_streaming()` |
-| `gateway/pi-gateway/main.py` | Replace TCP with WebSocket |
-| `gateway/pi-gateway/gateway/audio_gateway.py` | Streaming dispatch, state integration |
-| `gateway/pi-gateway/gateway/session.py` | Add state, session_id |
-| `gateway/pi-gateway/gateway/tracks.py` | TTS completion signaling |
-| `gateway/pi-device/main.py` | Wake word integration |
-| `gateway/pi-device/config.py` | Wake word settings |
-
-### Files to Deprecate
-
-| File | Reason |
-|------|--------|
-| `gateway/pi-gateway/tcp/ai_client.py` | Replaced by WebSocket client |
-
----
-
-## Dependencies
-
-**AI Server (`ai-server/pyproject.toml`):**
-```toml
-fastapi = ">=0.109.0"
-uvicorn = ">=0.27.0"
-websockets = ">=12.0"
-```
-
-**Gateway (`gateway/pi-gateway/requirements.txt`):**
-```
-websockets>=12.0
-```
-
-**Device (`gateway/pi-device/requirements.txt`):**
-```
-pvporcupine>=3.0.0
-```
-
----
-
-## Latency Targets
-
-| Stage | Target |
-|-------|--------|
-| Wake word detection | <100ms |
-| Audio buffering | 50-100ms |
-| STT processing | 200-500ms |
-| LLM first token | 100-300ms |
-| TTS first chunk | 100-200ms |
-| **End-to-end** | **500-1200ms** |
-
----
-
-## Testing Checklist
-
-- [ ] WebSocket connection established and maintained
-- [ ] Audio chunks stream from gateway to AI server
-- [ ] STT partial/final results received
-- [ ] LLM tokens stream incrementally
-- [ ] TTS audio chunks play with low latency
-- [ ] State transitions work correctly
-- [ ] Barge-in stops TTS and resumes listening
-- [ ] Wake word activates conversation
-- [ ] Conversation ends after timeout
-- [ ] Reconnection after disconnect
-- [ ] Full conversation loop feels natural
+### Phase 1: gRPC Infrastructure
+- Define shared .proto file
+- Implement gRPC server in AI server (Python)
+- Implement gRPC client in Command Center (Rust)
+- Test bidirectional streaming
+
+### Phase 2: Command Center Core
+- Set up Rust project structure
+- Implement WebRTC server
+- Implement VAD filtering
+- Connect to AI server via gRPC
+
+### Phase 3: Voice Pipeline
+- Stream audio from device → Command Center → AI server
+- Process STT → LLM → TTS in AI server
+- Stream TTS back: AI server → Command Center → device
+- Measure latency (target: <600ms)
+
+### Phase 4: Video/Context
+- Add video track handling in Command Center
+- Implement motion detection
+- Add frame analysis in AI server
+- Implement cross-room context tracking
+
+### Phase 5: Multi-Device
+- Device registry with room assignments
+- Room-based audio/video routing
+- Multi-user tracking
+- Stress test with 5+ devices
+
+## Performance Targets
+
+| Metric | Target |
+|--------|--------|
+| Voice response latency | <600ms to first audio |
+| Concurrent devices | 5+ without degradation |
+| Audio quality | 48kHz, Opus codec |
+| Video analysis | 1-5 FPS per camera |
+| Context recall | <100ms |
+
+## Migration Path
+
+1. Define shared .proto file in `proto/`
+2. Build Rust Command Center with gRPC client
+3. Add gRPC service to AI server
+4. Test Command Center ↔ AI server streaming
+5. Implement Pi client connecting to Command Center
+6. Update ESP32 firmware to route through Command Center
+7. Remove legacy `gateway/` Python code
