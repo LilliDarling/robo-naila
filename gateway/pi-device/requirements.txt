@@ -1,0 +1,13 @@
+# WebRTC
+aiortc>=1.6.0,<2.0.0
+aioice>=0.9.0
+av>=13.0.0
+
+# Audio capture
+sounddevice>=0.4.6
+
+# MQTT
+aiomqtt>=2.0.0
+
+# Utils
+numpy>=1.24.0
