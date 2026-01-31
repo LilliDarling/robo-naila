@@ -1,0 +1,85 @@
+// NAILA AI Streaming Protocol - Minimal
+// Version: 0.1.0
+//
+// Stripped-down version for initial pipeline implementation.
+// See naila.proto for the full specification.
+
+syntax = "proto3";
+package naila;
+
+option optimize_for = SPEED;
+
+// =============================================================================
+// Service
+// =============================================================================
+
+service NailaAI {
+  // Bidirectional streaming for voice conversations
+  rpc StreamConversation(stream AudioInput) returns (stream AudioOutput);
+}
+
+// =============================================================================
+// Messages
+// =============================================================================
+
+message AudioInput {
+  string device_id = 1;
+  string room_id = 2;
+  string conversation_id = 3;
+
+  oneof audio {
+    bytes audio_pcm = 4;
+    bytes audio_opus = 5;
+  }
+  AudioCodec codec = 6;
+  uint32 sample_rate = 7;
+  uint32 chunk_duration_ms = 8;
+
+  uint64 timestamp_ms = 9;
+  uint32 sequence_num = 10;
+
+  SpeechEvent event = 11;
+}
+
+message AudioOutput {
+  string device_id = 1;
+  string room_id = 2;
+  string conversation_id = 3;
+
+  bytes audio_pcm = 4;
+  uint32 sample_rate = 5;
+  uint32 sequence_num = 6;
+
+  bool is_final = 7;
+
+  string final_stt = 8;
+
+  ErrorCode error_code = 9;
+  string error_message = 10;
+}
+
+// =============================================================================
+// Enums
+// =============================================================================
+
+enum AudioCodec {
+  AUDIO_CODEC_UNKNOWN = 0;
+  AUDIO_CODEC_PCM_S16LE = 1;
+  AUDIO_CODEC_OPUS = 2;
+}
+
+enum SpeechEvent {
+  SPEECH_EVENT_UNKNOWN = 0;
+  SPEECH_EVENT_START = 1;
+  SPEECH_EVENT_CONTINUE = 2;
+  SPEECH_EVENT_END = 3;
+  SPEECH_EVENT_INTERRUPT = 4;
+}
+
+enum ErrorCode {
+  ERROR_NONE = 0;
+  ERROR_STT_FAILED = 1;
+  ERROR_LLM_FAILED = 2;
+  ERROR_TTS_FAILED = 3;
+  ERROR_INTERNAL = 99;
+}
