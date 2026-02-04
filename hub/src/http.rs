@@ -1,0 +1,302 @@
+use std::sync::Arc;
+
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
+use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
+use tracing::{error, info, warn};
+use webrtc::api::interceptor_registry::register_default_interceptors;
+use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_OPUS};
+use webrtc::api::APIBuilder;
+use webrtc::interceptor::registry::Registry;
+use webrtc::peer_connection::configuration::RTCConfiguration;
+use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
+use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+use webrtc::rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTPCodecType};
+use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
+use webrtc::track::track_local::TrackLocal;
+
+use crate::audio::{AudioBus, AudioFrame, AudioTransport};
+use crate::webrtc::{spawn_track_reader, WebRtcTransport};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Request / Response types for the signaling endpoint
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Pi sends this: its SDP offer and a device identifier.
+#[derive(Deserialize)]
+pub struct ConnectRequest {
+    /// Device identifier (e.g., "pi-kitchen", "pi-office").
+    pub device_id: String,
+    /// SDP offer from the Pi's WebRTC client.
+    pub sdp: String,
+}
+
+/// Server responds with its SDP answer.
+#[derive(Serialize)]
+pub struct ConnectResponse {
+    /// SDP answer with ICE candidates gathered.
+    pub sdp: String,
+}
+
+/// Error response body.
+#[derive(Serialize)]
+struct ErrorResponse {
+    error: String,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared application state injected into axum handlers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Holds everything the signaling handler needs to create peer connections
+/// and wire them into the rest of the system.
+#[derive(Clone)]
+pub struct AppState {
+    pub audio_bus: Arc<AudioBus>,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Router
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Creates the axum router with the signaling endpoint.
+///
+/// Mount this into your server:
+/// ```ignore
+/// let app = signaling::router(state);
+/// let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+/// axum::serve(listener, app).await?;
+/// ```
+pub fn router(state: AppState) -> Router {
+    Router::new()
+        .route("/connect", post(handle_connect))
+        .with_state(state)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Handler
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// POST /connect
+///
+/// Accepts an SDP offer from a Pi, negotiates a WebRTC session, and returns
+/// the SDP answer. On success, a `WebRtcTransport` is created and a device
+/// task is spawned via `run_device`.
+///
+/// Flow:
+///   1. Build a MediaEngine with Opus codec
+///   2. Create RTCPeerConnection (no ICE servers — local network)
+///   3. Add outbound audio track (server → Pi for TTS playback)
+///   4. Register on_track callback (Pi → server for mic capture)
+///   5. Set remote description (Pi's offer)
+///   6. Create answer, set as local description
+///   7. Wait for ICE gathering to complete
+///   8. Return SDP answer with candidates baked in
+async fn handle_connect(
+    State(state): State<AppState>,
+    Json(req): Json<ConnectRequest>,
+) -> impl IntoResponse {
+    info!(device_id = %req.device_id, "incoming WebRTC connection");
+
+    match negotiate_session(&state, req).await {
+        Ok(answer_sdp) => {
+            (StatusCode::OK, Json(ConnectResponse { sdp: answer_sdp })).into_response()
+        }
+        Err(e) => {
+            error!("signaling failed: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn negotiate_session(
+    state: &AppState,
+    req: ConnectRequest,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    // ── 1. Media engine with Opus ──────────────────────────────────────
+    let mut media_engine = MediaEngine::default();
+    media_engine.register_default_codecs()?;
+
+    // ── 2. Interceptors (RTCP feedback, NACK, etc.) ────────────────────
+    let mut registry = Registry::new();
+    registry = register_default_interceptors(registry, &mut media_engine)?;
+
+    // ── 3. Build the API ───────────────────────────────────────────────
+    let api = APIBuilder::new()
+        .with_media_engine(media_engine)
+        .with_interceptor_registry(registry)
+        .build();
+
+    // ── 4. Create peer connection (no ICE servers for local network) ───
+    let config = RTCConfiguration {
+        ice_servers: vec![],
+        ..Default::default()
+    };
+    let peer_connection = Arc::new(api.new_peer_connection(config).await?);
+
+    // ── 5. Add outbound audio track (server → Pi speaker) ──────────────
+    let outbound_track = Arc::new(TrackLocalStaticRTP::new(
+        RTCRtpCodecCapability {
+            mime_type: MIME_TYPE_OPUS.to_owned(),
+            ..Default::default()
+        },
+        "audio".to_owned(),      // track id
+        "tts-stream".to_owned(), // stream id
+    ));
+
+    let rtp_sender = peer_connection
+        .add_track(Arc::clone(&outbound_track) as Arc<dyn TrackLocal + Send + Sync>)
+        .await?;
+
+    // Drain RTCP packets from the sender (required for interceptors like NACK).
+    tokio::spawn(async move {
+        let mut buf = vec![0u8; 1500];
+        while let Ok((_, _)) = rtp_sender.read(&mut buf).await {}
+    });
+
+    // ── 6. on_track: wire inbound audio into the transport channel ──────
+    //
+    // The channel bridges WebRTC's callback world into our pull-based
+    // AudioTransport. spawn_track_reader decodes Opus → PCM and pushes
+    // AudioFrames into audio_tx. The transport reads from audio_rx.
+    let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(64);
+
+    let device_id_for_track = req.device_id.clone();
+    peer_connection.on_track(Box::new(move |track, _receiver, _transceiver| {
+        let audio_tx = audio_tx.clone();
+        let device_id = device_id_for_track.clone();
+
+        Box::pin(async move {
+            // Only handle audio tracks.
+            if track.kind() == RTPCodecType::Audio {
+                info!(device_id = %device_id, "audio track negotiated");
+                spawn_track_reader(track, audio_tx);
+            }
+        })
+    }));
+
+    // ── 7. Connection state monitoring ──────────────────────────────────
+    let device_id_for_state = req.device_id.clone();
+    peer_connection.on_peer_connection_state_change(Box::new(
+        move |state: RTCPeerConnectionState| {
+            let device_id = device_id_for_state.clone();
+            Box::pin(async move {
+                match state {
+                    RTCPeerConnectionState::Connected => {
+                        info!(device_id = %device_id, "peer connected");
+                    }
+                    RTCPeerConnectionState::Disconnected => {
+                        warn!(device_id = %device_id, "peer disconnected");
+                    }
+                    RTCPeerConnectionState::Failed => {
+                        error!(device_id = %device_id, "peer connection failed");
+                    }
+                    _ => {}
+                }
+            })
+        },
+    ));
+
+    // ── 8. SDP exchange ─────────────────────────────────────────────────
+    let offer = RTCSessionDescription::offer(req.sdp)?;
+    peer_connection.set_remote_description(offer).await?;
+
+    let answer = peer_connection.create_answer(None).await?;
+
+    // Set local description to start ICE gathering.
+    let mut gathering_complete = peer_connection.gathering_complete_promise().await;
+    peer_connection.set_local_description(answer).await?;
+
+    // Wait for ICE gathering to finish. On a local network this is fast
+    // (typically <100ms). The answer we return will contain all candidates
+    // baked into the SDP, so the Pi doesn't need trickle ICE.
+    let _ = gathering_complete.recv().await;
+
+    // ── 9. Extract the final SDP answer ─────────────────────────────────
+    let local_desc = peer_connection
+        .local_description()
+        .await
+        .ok_or("local description missing after ICE gathering")?;
+
+    // ── 10. Build the transport and spawn the device task ────────────────
+    let transport = WebRtcTransport::new(
+        req.device_id.clone(),
+        audio_rx,
+        outbound_track,
+        peer_connection,
+    )?;
+
+    let audio_bus = Arc::clone(&state.audio_bus);
+    tokio::spawn(async move {
+        run_device(transport, audio_bus).await;
+    });
+
+    info!(device_id = %req.device_id, "session negotiated, device task spawned");
+
+    Ok(local_desc.sdp)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Device task (placeholder — will be fleshed out in the orchestration layer)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Per-device event loop. Reads audio from the transport, applies VAD,
+/// forwards to the AudioBus, and routes TTS responses back.
+///
+/// This is a sketch — the full implementation belongs in the orchestration
+/// layer, but we need something here to close the loop.
+async fn run_device<T: AudioTransport>(mut transport: T, bus: Arc<AudioBus>) {
+    let device_id = transport.id().to_owned();
+
+    // Subscribe to TTS responses for this device.
+    let (tts_tx, mut tts_rx) = mpsc::channel(32);
+    bus.tts_sub.insert(device_id.clone(), tts_tx);
+
+    info!(device_id = %device_id, "device task started");
+
+    loop {
+        tokio::select! {
+            // Inbound: mic audio from robot → AudioBus
+            frame = transport.recv() => {
+                match frame {
+                    Some(audio_frame) => {
+                        // TODO: VAD filter goes here
+                        if bus.audio_tx.send((device_id.clone(), audio_frame)).await.is_err() {
+                            error!(device_id = %device_id, "audio bus closed");
+                            break;
+                        }
+                    }
+                    None => {
+                        info!(device_id = %device_id, "transport stream ended");
+                        break;
+                    }
+                }
+            }
+            // Outbound: TTS response → robot speaker
+            tts = tts_rx.recv() => {
+                match tts {
+                    Some(tts_frame) => {
+                        if let Err(e) = transport.send(tts_frame).await {
+                            error!(device_id = %device_id, "send TTS failed: {e:?}");
+                            break;
+                        }
+                    }
+                    None => {
+                        info!(device_id = %device_id, "TTS channel closed");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Cleanup: remove TTS subscription.
+    bus.tts_sub.remove(&device_id);
+    info!(device_id = %device_id, "device task exited");
+}

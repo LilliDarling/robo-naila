@@ -38,12 +38,24 @@ pub struct TtsFrame {
 }
 
 /// Errors that can occur during audio transport operations.
+#[derive(Debug)]
 pub enum TransportError {
     /// The connection to the robot was lost (MQTT disconnect, network failure, etc.)
     Disconnected,
     /// Audio encoding/decoding failed (invalid format, corruption, etc.)
     Codec(String),
 }
+
+impl std::fmt::Display for TransportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TransportError::Disconnected => write!(f, "transport disconnected"),
+            TransportError::Codec(msg) => write!(f, "codec error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for TransportError {}
 
 // Native `async fn` in traits has been stable since Rust 1.75. We use it here
 // with static dispatch (generics), which gives zero-overhead monomorphized code
@@ -103,6 +115,6 @@ pub trait AudioTransport: Send + 'static {
 /// `DashMap` is overkill for 3 devices — `RwLock<HashMap>` would work
 /// identically — but gives a cleaner API without explicit lock management.
 pub struct AudioBus {
-    pub audio_tx: Sender<AudioFrame>,
+    pub audio_tx: Sender<(String, AudioFrame)>,
     pub tts_sub: DashMap<String, Sender<TtsFrame>>,
 }

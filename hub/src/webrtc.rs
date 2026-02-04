@@ -3,13 +3,12 @@ use opus::{Application, Channels, Decoder as OpusDecoder, Encoder as OpusEncoder
 use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender};
 use webrtc::rtp::header::Header;
-use webrtc::rtp_transceiver::rtp_codec::RTPCodecType;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::TrackLocalWriter;
 use webrtc::track::track_remote::TrackRemote;
 use webrtc::{peer_connection::RTCPeerConnection, rtp::packet::Packet};
 
-use crate::transport::audio::{AudioFrame, AudioTransport, TransportError, TtsFrame};
+use crate::audio::{AudioFrame, AudioTransport, TransportError, TtsFrame};
 
 /// Opus operates at 48kHz. All audio entering/leaving WebRTC uses this rate.
 const OPUS_SAMPLE_RATE: u32 = 48_000;
