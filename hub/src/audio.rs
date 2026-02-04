@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
 // `Bytes` is a reference-counted, cheaply cloneable byte buffer from the `bytes` crate.
 // Unlike Vec<u8>, cloning Bytes doesn't copy the underlying data—it just increments
@@ -115,6 +116,15 @@ pub trait AudioTransport: Send + 'static {
 /// `DashMap` is overkill for 3 devices — `RwLock<HashMap>` would work
 /// identically — but gives a cleaner API without explicit lock management.
 pub struct AudioBus {
-    pub audio_tx: Sender<(String, AudioFrame)>,
-    pub tts_sub: DashMap<String, Sender<TtsFrame>>,
+    // We use `Arc<str>` instead of `String` for device IDs throughout the bus.
+    // `Arc<str>` is a reference-counted string slice — cloning just bumps an
+    // atomic counter instead of copying the string data. This is ideal when
+    // the same ID is passed through multiple channels and stored in maps.
+    //
+    // Why `Arc<str>` instead of `Arc<String>`?
+    //   - `Arc<str>` stores the string data inline (one allocation)
+    //   - `Arc<String>` has two indirections: Arc → String → str (two allocations)
+    //   - `Arc<str>` is created via `Arc::from(s)` where s: String or &str
+    pub audio_tx: Sender<(Arc<str>, AudioFrame)>,
+    pub tts_sub: DashMap<Arc<str>, Sender<TtsFrame>>,
 }

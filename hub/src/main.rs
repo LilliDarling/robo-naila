@@ -14,6 +14,12 @@ use audio::AudioBus;
 use grpc::{run_grpc_client, GrpcConfig};
 use http::{router, AppState};
 
+// `#[tokio::main]` transforms `async fn main()` into a regular `fn main()` that
+// creates a Tokio runtime and blocks on the async body. Without this, you'd need:
+//   fn main() { tokio::runtime::Runtime::new().unwrap().block_on(async { ... }) }
+//
+// The macro uses the multi-threaded runtime by default. For single-threaded:
+//   #[tokio::main(flavor = "current_thread")]
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -31,6 +37,12 @@ async fn main() {
     });
 
     // ── gRPC client ─────────────────────────────────────────────────────
+    // `tokio::spawn` schedules a task to run concurrently. Unlike calling an
+    // async function directly (which runs inline when awaited), spawn creates
+    // an independent task that runs in the background on the runtime's thread pool.
+    //
+    // The returned `JoinHandle` lets us await the task's completion later.
+    // If we drop the handle without awaiting, the task keeps running (detached).
     let grpc_cancel = cancel.clone();
     let grpc_bus = Arc::clone(&audio_bus);
     let grpc_handle = tokio::spawn(async move {
@@ -57,12 +69,22 @@ async fn main() {
     });
 
     // ── Shutdown ────────────────────────────────────────────────────────
+    // `tokio::signal::ctrl_c()` returns a future that completes when the process
+    // receives SIGINT (Ctrl+C on Unix, Ctrl+C/Ctrl+Break on Windows). This is
+    // the standard way to implement graceful shutdown in async Rust.
+    //
+    // Pattern: main awaits the signal, then cancels all child tasks, then awaits
+    // their completion. This ensures clean shutdown (connections closed, buffers
+    // flushed) rather than abrupt termination.
     tokio::signal::ctrl_c()
         .await
         .expect("failed to listen for ctrl-c");
     info!("ctrl-c received, shutting down");
     cancel.cancel();
 
+    // `tokio::join!` waits for ALL futures to complete (unlike `select!` which
+    // returns on the FIRST). The `let _ =` discards the Results since we're
+    // shutting down anyway — errors at this point aren't actionable.
     let _ = tokio::join!(grpc_handle, http_handle);
     info!("shutdown complete");
 }

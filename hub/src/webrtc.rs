@@ -2,6 +2,7 @@ use bytes::Bytes;
 use opus::{Application, Channels, Decoder as OpusDecoder, Encoder as OpusEncoder};
 use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tracing::{debug, warn};
 use webrtc::rtp::header::Header;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::TrackLocalWriter;
@@ -17,10 +18,11 @@ const OPUS_SAMPLE_RATE: u32 = 48_000;
 const OPUS_FRAME_MS: u32 = 20;
 
 /// Samples per Opus frame: 48000 * 20 / 1000 = 960.
-const OPUS_FRAME_SIZE: usize = (OPUS_SAMPLE_RATE * OPUS_FRAME_MS / 1000) as usize;
+const SAMPLES_PER_FRAME: usize = (OPUS_SAMPLE_RATE * OPUS_FRAME_MS / 1000) as usize;
 
-/// Max size of a decoded PCM frame buffer (mono, 16-bit = 2 bytes per sample).
-const PCM_BUF_SIZE: usize = OPUS_FRAME_SIZE;
+/// Maximum encoded Opus packet size in bytes. Opus typically produces much
+/// smaller packets (50-150 bytes for voice), but the spec allows up to ~4KB.
+const MAX_OPUS_PACKET: usize = 4000;
 
 /// WebRTC audio transport for Raspberry Pi connections.
 ///
@@ -30,11 +32,27 @@ const PCM_BUF_SIZE: usize = OPUS_FRAME_SIZE;
 /// Opus codec is fully encapsulated — downstream consumers only see PCM.
 /// The signaling layer constructs this after SDP/ICE negotiation completes.
 pub struct WebRtcTransport {
-    device_id: String,
+    device_id: Arc<str>,
     audio_rx: Receiver<AudioFrame>,
+
+    // `Arc` = Atomic Reference Counted pointer. Like `Rc`, it enables shared
+    // ownership — multiple handles to the same heap allocation. Unlike `Rc`,
+    // Arc uses atomic operations for the reference count, making it safe to
+    // share across threads (`Send + Sync`). The tradeoff is slightly higher
+    // overhead than Rc, but required for async code where tasks may run on
+    // different threads.
+    //
+    // WebRTC types use Arc because the same track/connection is accessed from
+    // multiple places: the signaling layer, the transport, and internal webrtc
+    // tasks that fire callbacks.
     outbound_track: Arc<TrackLocalStaticRTP>,
     opus_encoder: OpusEncoder,
     peer_connection: Arc<RTCPeerConnection>,
+
+    // Reusable buffer for Opus encoding output. Allocated once in `new()`,
+    // reused across all `send()` calls to avoid per-frame heap allocations.
+    opus_buf: Vec<u8>,
+
     rtp_sequence: u16,
     rtp_timestamp: u32,
 }
@@ -50,7 +68,7 @@ impl WebRtcTransport {
     ///   - Adding the outbound audio track to the peer connection
     ///   - Completing ICE negotiation
     pub fn new(
-        device_id: String,
+        device_id: Arc<str>,
         audio_rx: Receiver<AudioFrame>,
         outbound_track: Arc<TrackLocalStaticRTP>,
         peer_connection: Arc<RTCPeerConnection>,
@@ -64,6 +82,7 @@ impl WebRtcTransport {
             outbound_track,
             opus_encoder,
             peer_connection,
+            opus_buf: vec![0u8; MAX_OPUS_PACKET],
             rtp_sequence: 0,
             rtp_timestamp: 0,
         })
@@ -80,6 +99,23 @@ impl AudioTransport for WebRtcTransport {
     }
 
     async fn send(&mut self, frame: TtsFrame) -> Result<(), TransportError> {
+        // Validate sample rate — mismatches cause garbled audio with no other symptom.
+        if frame.sample_rate != OPUS_SAMPLE_RATE {
+            warn!(
+                expected = OPUS_SAMPLE_RATE,
+                actual = frame.sample_rate,
+                "TtsFrame sample rate mismatch — audio will be garbled"
+            );
+        }
+
+        // PCM is 16-bit (2 bytes per sample). Odd-length data means truncated sample.
+        if frame.data.len() % 2 != 0 {
+            warn!(
+                len = frame.data.len(),
+                "TtsFrame has odd byte length — last byte will be dropped"
+            );
+        }
+
         let samples: Vec<i16> = frame
             .data
             .chunks_exact(2)
@@ -87,15 +123,14 @@ impl AudioTransport for WebRtcTransport {
             .collect();
 
         // Encode PCM → Opus in frame-sized chunks.
-        for chunk in samples.chunks(PCM_BUF_SIZE) {
-            if chunk.len() < OPUS_FRAME_SIZE {
+        for chunk in samples.chunks(SAMPLES_PER_FRAME) {
+            if chunk.len() < SAMPLES_PER_FRAME {
                 break; // Drop incomplete frames.
             }
 
-            let mut opus_buf = vec![0u8; 4000]; // max Opus packet size
             let encoded_len = self
                 .opus_encoder
-                .encode(chunk, &mut opus_buf)
+                .encode(chunk, &mut self.opus_buf)
                 .map_err(|e| TransportError::Codec(format!("opus encode: {e}")))?;
 
             let packet = Packet {
@@ -106,7 +141,7 @@ impl AudioTransport for WebRtcTransport {
                     timestamp: self.rtp_timestamp,
                     ..Default::default()
                 },
-                payload: Bytes::copy_from_slice(&opus_buf[..encoded_len]),
+                payload: Bytes::copy_from_slice(&self.opus_buf[..encoded_len]),
             };
 
             self.outbound_track
@@ -114,13 +149,26 @@ impl AudioTransport for WebRtcTransport {
                 .await
                 .map_err(|_| TransportError::Disconnected)?;
 
+            // `wrapping_add` performs addition that wraps around on overflow instead
+            // of panicking (debug) or being undefined behavior (release). RTP sequence
+            // numbers and timestamps are designed to wrap — a u16 sequence goes
+            // 65534 → 65535 → 0 → 1, and receivers handle this gracefully.
             self.rtp_sequence = self.rtp_sequence.wrapping_add(1);
-            self.rtp_timestamp = self.rtp_timestamp.wrapping_add(OPUS_FRAME_SIZE as u32);
+            self.rtp_timestamp = self.rtp_timestamp.wrapping_add(SAMPLES_PER_FRAME as u32);
         }
         Ok(())
     }
 }
 
+// `Drop` is Rust's destructor trait — called automatically when a value goes
+// out of scope. This is the foundation of RAII (Resource Acquisition Is
+// Initialization): resources are tied to object lifetimes, so cleanup happens
+// deterministically without manual free() calls or garbage collection.
+//
+// Here we need to close the WebRTC peer connection, but `close()` is async
+// and Drop can't be async. The workaround: clone the Arc (cheap refcount bump)
+// and spawn a detached task to do the cleanup. The `let _ =` discards the
+// Result since we can't handle errors during drop anyway.
 impl Drop for WebRtcTransport {
     fn drop(&mut self) {
         let pc = self.peer_connection.clone();
@@ -136,20 +184,39 @@ impl Drop for WebRtcTransport {
 /// Called by the signaling layer inside the on_track callback.
 /// Returns when the track ends or the channel is dropped.
 pub fn spawn_track_reader(track: Arc<TrackRemote>, audio_tx: Sender<AudioFrame>) {
+    // `tokio::spawn` schedules an async task to run concurrently on the Tokio
+    // runtime. Unlike a regular function call, spawn returns immediately — the
+    // task runs in the background.
+    //
+    // `async move { ... }` creates an async block that takes ownership of
+    // captured variables (`track`, `audio_tx`). The `move` keyword transfers
+    // ownership into the closure; without it, the closure would try to borrow,
+    // which fails because the spawned task may outlive the current scope.
     tokio::spawn(async move {
+        // `.expect()` panics with a message if the Result is Err. Unlike `unwrap()`,
+        // it documents *why* we believe this can't fail. Here, decoder creation
+        // only fails with invalid parameters (wrong sample rate, channel count),
+        // which are compile-time constants — so failure indicates a programmer
+        // error, not a runtime condition we should handle gracefully.
         let mut decoder =
             OpusDecoder::new(OPUS_SAMPLE_RATE, Channels::Mono).expect("opus decoder init");
-        let mut pcm_buf = vec![0i16; PCM_BUF_SIZE];
+        let mut pcm_buf = vec![0i16; SAMPLES_PER_FRAME];
 
         loop {
             match track.read_rtp().await {
                 Ok((packet, _)) => {
                     let decoded = match decoder.decode(&packet.payload, &mut pcm_buf, false) {
                         Ok(n) => n,
-                        Err(_) => continue, // skip corrupted frames
+                        Err(e) => {
+                            debug!("opus decode error (skipping frame): {e}");
+                            continue;
+                        }
                     };
 
                     // Convert i16 PCM samples to bytes (little-endian).
+                    // `flat_map` yields individual bytes from each sample's 2-byte representation.
+                    // `collect()` allocates a Vec, then `Bytes::from()` takes ownership without
+                    // copying — this is more efficient than copy_from_slice with a reused buffer.
                     let byte_data: Vec<u8> = pcm_buf[..decoded]
                         .iter()
                         .flat_map(|s| s.to_le_bytes())

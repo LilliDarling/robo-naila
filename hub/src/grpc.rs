@@ -56,7 +56,12 @@ impl Default for GrpcConfig {
 pub async fn run_grpc_client(
     config: GrpcConfig,
     audio_bus: Arc<AudioBus>,
-    mut audio_rx: mpsc::Receiver<(String, AudioFrame)>,
+    mut audio_rx: mpsc::Receiver<(Arc<str>, AudioFrame)>,
+    // `CancellationToken` (from tokio-util) enables cooperative shutdown. Unlike
+    // killing a task, this lets async code check `is_cancelled()` or await
+    // `cancelled()` to exit gracefully — closing connections, flushing buffers,
+    // etc. The pattern: parent holds the token, children receive clones, parent
+    // calls `cancel()` to signal shutdown, children observe and clean up.
     cancel: CancellationToken,
 ) {
     let mut backoff = config.initial_backoff;
@@ -69,14 +74,23 @@ pub async fn run_grpc_client(
 
         info!(addr = %config.server_addr, "connecting to AI server");
 
-        match connect_and_stream(&config, &audio_bus, &mut audio_rx, &cancel).await {
+        let mut stream_established = false;
+        match connect_and_stream(&config, &audio_bus, &mut audio_rx, &cancel, &mut stream_established).await {
             Ok(()) => {
+                // Graceful shutdown (audio bus closed or cancellation).
                 info!("gRPC stream ended cleanly");
                 return;
             }
             Err(e) => {
-                error!("gRPC stream failed: {e}");
+                error!("gRPC error: {e}");
                 drain_stale(&mut audio_rx);
+
+                // Reset backoff if we had a successful stream — the server was
+                // healthy, this is likely a transient disconnect. If we never
+                // connected, keep increasing backoff to avoid hammering a down server.
+                if stream_established {
+                    backoff = config.initial_backoff;
+                }
 
                 warn!(delay_ms = backoff.as_millis(), "reconnecting after backoff");
                 tokio::select! {
@@ -84,6 +98,7 @@ pub async fn run_grpc_client(
                     _ = cancel.cancelled() => return,
                 }
 
+                // Increase backoff for next failure (capped at max).
                 backoff = (backoff * 2).min(config.max_backoff);
             }
         }
@@ -96,11 +111,24 @@ pub async fn run_grpc_client(
 
 /// One gRPC session. Opens a bidirectional stream and runs send/recv
 /// concurrently until either side fails or cancellation fires.
+///
+/// Sets `stream_established` to true once the bidirectional stream is open,
+/// allowing the caller to distinguish connection failures from stream failures.
 async fn connect_and_stream(
     config: &GrpcConfig,
     audio_bus: &Arc<AudioBus>,
-    audio_rx: &mut mpsc::Receiver<(String, AudioFrame)>,
+    audio_rx: &mut mpsc::Receiver<(Arc<str>, AudioFrame)>,
     cancel: &CancellationToken,
+    stream_established: &mut bool,
+// `Box<dyn Error + Send + Sync>` is a trait object for any error type. This
+// lets us return different error types (tonic errors, channel errors, etc.)
+// without defining a custom enum. The tradeoffs:
+//   - Flexibility: any error works with `?` and `.into()`
+//   - Cost: heap allocation + dynamic dispatch (negligible for error paths)
+//   - Downside: harder to match on specific error variants
+//
+// `Send + Sync` bounds are required because this future may be spawned on
+// Tokio, which can move tasks between threads. Errors must be safe to transfer.
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let channel = Channel::from_shared(config.server_addr.clone())?
         .connect()
@@ -115,16 +143,31 @@ async fn connect_and_stream(
     // Per-session channel: send loop copies from audio_rx into this,
     // tonic owns the receiver side.
     let (session_tx, session_rx) = mpsc::channel::<AudioInput>(128);
+
+    // `ReceiverStream` wraps an mpsc::Receiver to implement the `Stream` trait.
+    // Tonic's streaming RPCs expect `impl Stream<Item = T>`, but mpsc channels
+    // don't implement Stream directly. This adapter bridges the gap, letting us
+    // feed our channel into tonic's request stream.
     let outbound_stream = tokio_stream::wrappers::ReceiverStream::new(session_rx);
 
     let response = client.stream_conversation(outbound_stream).await?;
     let inbound = response.into_inner();
 
     info!("bidirectional stream established");
+    *stream_established = true;
 
     let send_fut = send_loop(audio_rx, session_tx, cancel);
     let recv_fut = recv_loop(inbound, audio_bus, cancel);
 
+    // `tokio::select!` races multiple futures concurrently and returns when
+    // the FIRST one completes. The others are dropped (cancelled). This is
+    // fundamental for async cancellation patterns:
+    //   - If send fails → select returns, recv is dropped
+    //   - If recv fails → select returns, send is dropped
+    //   - If cancel fires → select returns, both are dropped
+    //
+    // Unlike `tokio::join!` (waits for ALL futures), select is for "first wins"
+    // scenarios like timeouts, cancellation, or racing parallel operations.
     tokio::select! {
         r = send_fut => r,
         r = recv_fut => r,
@@ -139,7 +182,7 @@ async fn connect_and_stream(
 /// Reads (device_id, AudioFrame) tuples from the bus, wraps them in
 /// AudioInput protobufs, and pushes into the session stream.
 async fn send_loop(
-    audio_rx: &mut mpsc::Receiver<(String, AudioFrame)>,
+    audio_rx: &mut mpsc::Receiver<(Arc<str>, AudioFrame)>,
     session_tx: mpsc::Sender<AudioInput>,
     cancel: &CancellationToken,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -157,7 +200,11 @@ async fn send_loop(
                 };
 
                 let msg = AudioInput {
-                    device_id,
+                    // Convert Arc<str> to String for proto message.
+                    // This is the one place we pay for a string allocation — the proto
+                    // requires owned String. The Arc<str> lets us avoid copies everywhere
+                    // else in the pipeline.
+                    device_id: device_id.to_string(),
                     // DEFERRED: room_id and conversation_id are empty.
                     // AI server tracks conversations by device_id alone.
                     // When multi-room support is needed, the command center
@@ -207,8 +254,9 @@ async fn recv_loop(
                 let msg = match msg? {
                     Some(m) => m,
                     None => {
-                        info!("AI server closed the stream");
-                        return Ok(());
+                        // Server closed the stream — return error to trigger reconnection.
+                        // This is different from audio_bus closing (graceful shutdown).
+                        return Err("AI server closed the stream".into());
                     }
                 };
 
@@ -231,7 +279,9 @@ async fn recv_loop(
                     sample_rate: msg.sample_rate,
                 };
 
-                if let Some(tx) = audio_bus.tts_sub.get(&msg.device_id) {
+                // DashMap::get accepts &Q where Key: Borrow<Q>. Since Arc<str>: Borrow<str>,
+                // we can look up with &str. The as_str() converts &String → &str.
+                if let Some(tx) = audio_bus.tts_sub.get(msg.device_id.as_str()) {
                     if tx.send(tts_frame).await.is_err() {
                         warn!(
                             device_id = %msg.device_id,
@@ -256,7 +306,7 @@ async fn recv_loop(
 
 /// Drain all pending frames after a disconnect so we don't send stale
 /// audio on reconnect.
-fn drain_stale(rx: &mut mpsc::Receiver<(String, AudioFrame)>) {
+fn drain_stale(rx: &mut mpsc::Receiver<(Arc<str>, AudioFrame)>) {
     let mut dropped = 0u64;
     while rx.try_recv().is_ok() {
         dropped += 1;

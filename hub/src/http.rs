@@ -93,8 +93,18 @@ pub fn router(state: AppState) -> Router {
 ///   7. Wait for ICE gathering to complete
 ///   8. Return SDP answer with candidates baked in
 async fn handle_connect(
+    // Axum "extractors" pull data from the incoming request using pattern matching.
+    // `State(state)` extracts the shared AppState we registered with `.with_state()`.
+    // `Json(req)` deserializes the request body as JSON into ConnectRequest.
+    //
+    // Extractors are the core of Axum's design — they're composable, type-safe,
+    // and the order matters (body-consuming extractors like Json must come last).
     State(state): State<AppState>,
     Json(req): Json<ConnectRequest>,
+// `impl IntoResponse` lets us return different response types from the same handler.
+// Axum will call `.into_response()` on whatever we return. This is more flexible
+// than a concrete type because we can return Ok (200 + JSON) or Err (500 + JSON)
+// without wrapping in Result — both tuple types implement IntoResponse.
 ) -> impl IntoResponse {
     info!(device_id = %req.device_id, "incoming WebRTC connection");
 
@@ -119,6 +129,10 @@ async fn negotiate_session(
     state: &AppState,
     req: ConnectRequest,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    // Convert device_id to Arc<str> once, then use Arc::clone() everywhere.
+    // This avoids String clones in callbacks and the run_device loop.
+    let device_id: Arc<str> = req.device_id.into();
+
     // ── 1. Media engine with Opus ──────────────────────────────────────
     let mut media_engine = MediaEngine::default();
     media_engine.register_default_codecs()?;
@@ -167,10 +181,20 @@ async fn negotiate_session(
     // AudioFrames into audio_tx. The transport reads from audio_rx.
     let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(64);
 
-    let device_id_for_track = req.device_id.clone();
+    let device_id_for_track = Arc::clone(&device_id);
+    // WebRTC callbacks require a specific signature: Box<dyn FnMut(...) -> Pin<Box<dyn Future>>>
+    // This unusual pattern exists because:
+    //   1. The callback might be called multiple times (FnMut, not FnOnce)
+    //   2. It needs to be stored in the PeerConnection (Box<dyn ...>)
+    //   3. It returns an async block, but trait objects can't have async fn
+    //      so we manually box the future with Box::pin(async move { ... })
+    //
+    // The `move` keywords transfer ownership into each closure layer:
+    //   - Outer `move`: captures device_id_for_track, audio_tx into the FnMut
+    //   - Inner `move` (in Box::pin): moves clones into the async block
     peer_connection.on_track(Box::new(move |track, _receiver, _transceiver| {
         let audio_tx = audio_tx.clone();
-        let device_id = device_id_for_track.clone();
+        let device_id = Arc::clone(&device_id_for_track);
 
         Box::pin(async move {
             // Only handle audio tracks.
@@ -182,10 +206,10 @@ async fn negotiate_session(
     }));
 
     // ── 7. Connection state monitoring ──────────────────────────────────
-    let device_id_for_state = req.device_id.clone();
+    let device_id_for_state = Arc::clone(&device_id);
     peer_connection.on_peer_connection_state_change(Box::new(
         move |state: RTCPeerConnectionState| {
-            let device_id = device_id_for_state.clone();
+            let device_id = Arc::clone(&device_id_for_state);
             Box::pin(async move {
                 match state {
                     RTCPeerConnectionState::Connected => {
@@ -204,7 +228,7 @@ async fn negotiate_session(
     ));
 
     // ── 8. SDP exchange ─────────────────────────────────────────────────
-    let offer = RTCSessionDescription::offer(req.sdp)?;
+    let offer = RTCSessionDescription::offer(req.sdp.clone())?;
     peer_connection.set_remote_description(offer).await?;
 
     let answer = peer_connection.create_answer(None).await?;
@@ -226,7 +250,7 @@ async fn negotiate_session(
 
     // ── 10. Build the transport and spawn the device task ────────────────
     let transport = WebRtcTransport::new(
-        req.device_id.clone(),
+        Arc::clone(&device_id),
         audio_rx,
         outbound_track,
         peer_connection,
@@ -237,7 +261,7 @@ async fn negotiate_session(
         run_device(transport, audio_bus).await;
     });
 
-    info!(device_id = %req.device_id, "session negotiated, device task spawned");
+    info!(device_id = %device_id, "session negotiated, device task spawned");
 
     Ok(local_desc.sdp)
 }
@@ -251,12 +275,22 @@ async fn negotiate_session(
 ///
 /// This is a sketch — the full implementation belongs in the orchestration
 /// layer, but we need something here to close the loop.
+// `<T: AudioTransport>` is a generic type parameter with a trait bound. The compiler
+// generates a specialized version of this function for each concrete type T that
+// implements AudioTransport (monomorphization). This gives us:
+//   - Zero-cost abstraction: no vtable lookup, the concrete type is known at compile time
+//   - Inlining opportunities: the compiler can inline transport.recv()/send() calls
+//
+// Compare to `dyn AudioTransport` which would use dynamic dispatch (vtable + indirection).
 async fn run_device<T: AudioTransport>(mut transport: T, bus: Arc<AudioBus>) {
-    let device_id = transport.id().to_owned();
+    // Convert &str → Arc<str>. This is the same Arc the caller created, but we get
+    // it back via the transport's id() method. We could pass it separately, but this
+    // keeps the API clean — the transport owns its identity.
+    let device_id: Arc<str> = transport.id().into();
 
     // Subscribe to TTS responses for this device.
     let (tts_tx, mut tts_rx) = mpsc::channel(32);
-    bus.tts_sub.insert(device_id.clone(), tts_tx);
+    bus.tts_sub.insert(Arc::clone(&device_id), tts_tx);
 
     info!(device_id = %device_id, "device task started");
 
@@ -267,7 +301,9 @@ async fn run_device<T: AudioTransport>(mut transport: T, bus: Arc<AudioBus>) {
                 match frame {
                     Some(audio_frame) => {
                         // TODO: VAD filter goes here
-                        if bus.audio_tx.send((device_id.clone(), audio_frame)).await.is_err() {
+                        // Arc::clone is cheap (atomic increment), unlike String::clone
+                        // which would copy the entire string for every frame.
+                        if bus.audio_tx.send((Arc::clone(&device_id), audio_frame)).await.is_err() {
                             error!(device_id = %device_id, "audio bus closed");
                             break;
                         }
@@ -297,6 +333,6 @@ async fn run_device<T: AudioTransport>(mut transport: T, bus: Arc<AudioBus>) {
     }
 
     // Cleanup: remove TTS subscription.
-    bus.tts_sub.remove(&device_id);
+    bus.tts_sub.remove(device_id.as_ref());
     info!(device_id = %device_id, "device task exited");
 }
