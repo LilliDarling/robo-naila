@@ -1,8 +1,10 @@
+use tokio::sync::mpsc::Sender;
 // `Bytes` is a reference-counted, cheaply cloneable byte buffer from the `bytes` crate.
 // Unlike Vec<u8>, cloning Bytes doesn't copy the underlying data—it just increments
 // a reference count. This is ideal for network code where the same buffer might be
 // shared across multiple tasks.
 use bytes::Bytes;
+use dashmap::DashMap;
 
 /// A frame of audio captured from a robot's microphone.
 pub struct AudioFrame {
@@ -16,14 +18,7 @@ pub struct AudioFrame {
     /// stream produces 32,000 bytes per second.
     pub data: Bytes,
 
-    /// Samples per second (Hz). Common values:
-    /// - 8000 Hz  - Telephone quality
-    /// - 16000 Hz - Speech recognition (common for STT models like Whisper)
-    /// - 44100 Hz - CD quality
-    /// - 48000 Hz - Professional audio/video
-    ///
-    /// The ESP32-S3 in this project likely captures at 16kHz for efficient
-    /// speech-to-text processing.
+    /// Samples per second (Hz). Common values: 8000, 16000, 44100, 48000.
     pub sample_rate: u32,
 
     /// Timestamp for synchronization, likely microseconds since some epoch.
@@ -97,4 +92,17 @@ pub trait AudioTransport: Send + 'static {
 
     /// Sends a TTS audio frame to the robot for playback.
     async fn send(&mut self, frame: TtsFrame) -> Result<(), TransportError>;
+}
+
+/// Routes audio between device tasks and the processing layer.
+///
+/// Shared across all device tasks via `Arc<AudioBus>`. Each device task
+/// sends captured audio into `audio_tx` and receives TTS responses from
+/// its own channel in `tts_sub`.
+///
+/// `DashMap` is overkill for 3 devices — `RwLock<HashMap>` would work
+/// identically — but gives a cleaner API without explicit lock management.
+pub struct AudioBus {
+    pub audio_tx: Sender<AudioFrame>,
+    pub tts_sub: DashMap<String, Sender<TtsFrame>>,
 }

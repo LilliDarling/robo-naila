@@ -6,4 +6,5 @@ edition = "2024"
 [dependencies]
 async-trait = "0.1.89"
 bytes = "1.11.0"
-tokio = "1.49.0"
+dashmap = "6.1.0"
+tokio = { version = "1.49.0", features = ["full"] }
