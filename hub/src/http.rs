@@ -1,8 +1,11 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_OPUS};
@@ -15,7 +18,7 @@ use webrtc::rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTPCodecType};
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::TrackLocal;
 
-use crate::audio::{AudioBus, AudioFrame, AudioTransport};
+use crate::audio::{AudioBus, AudioFrame};
 use crate::webrtc::{spawn_track_reader, WebRtcTransport};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -53,6 +56,12 @@ struct ErrorResponse {
 #[derive(Clone)]
 pub struct AppState {
     pub audio_bus: Arc<AudioBus>,
+    /// Monotonic counter for conversation IDs. Each POST /connect bumps this;
+    /// the value becomes the conversation_id for that WebRTC session.
+    pub connection_counter: Arc<AtomicU64>,
+    /// Active device sessions. Used for reconnect dedup — if a device
+    /// reconnects, we cancel the old session before starting a new one.
+    pub device_tasks: Arc<DashMap<Arc<str>, CancellationToken>>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -101,10 +110,10 @@ async fn handle_connect(
     // and the order matters (body-consuming extractors like Json must come last).
     State(state): State<AppState>,
     Json(req): Json<ConnectRequest>,
-// `impl IntoResponse` lets us return different response types from the same handler.
-// Axum will call `.into_response()` on whatever we return. This is more flexible
-// than a concrete type because we can return Ok (200 + JSON) or Err (500 + JSON)
-// without wrapping in Result — both tuple types implement IntoResponse.
+    // `impl IntoResponse` lets us return different response types from the same handler.
+    // Axum will call `.into_response()` on whatever we return. This is more flexible
+    // than a concrete type because we can return Ok (200 + JSON) or Err (500 + JSON)
+    // without wrapping in Result — both tuple types implement IntoResponse.
 ) -> impl IntoResponse {
     info!(device_id = %req.device_id, "incoming WebRTC connection");
 
@@ -132,6 +141,25 @@ async fn negotiate_session(
     // Convert device_id to Arc<str> once, then use Arc::clone() everywhere.
     // This avoids String clones in callbacks and the run_device loop.
     let device_id: Arc<str> = req.device_id.into();
+
+    // Reconnect dedup: if this device already has an active session, cancel it.
+    if let Some((_, old_cancel)) = state.device_tasks.remove(device_id.as_ref()) {
+        warn!(device_id = %device_id, "replacing existing device session");
+        old_cancel.cancel();
+    }
+
+    // Per-device cancel token — fired on peer disconnect or reconnect dedup.
+    let device_cancel = CancellationToken::new();
+    state
+        .device_tasks
+        .insert(Arc::clone(&device_id), device_cancel.clone());
+
+    // Bump the global counter to get a unique conversation ID for this session.
+    let conversation_id: Arc<str> = state
+        .connection_counter
+        .fetch_add(1, Ordering::Relaxed)
+        .to_string()
+        .into();
 
     // ── 1. Media engine with Opus ──────────────────────────────────────
     let mut media_engine = MediaEngine::default();
@@ -205,11 +233,13 @@ async fn negotiate_session(
         })
     }));
 
-    // ── 7. Connection state monitoring ──────────────────────────────────
+    // ── 7. Connection state monitoring + cancel on peer failure ─────────
     let device_id_for_state = Arc::clone(&device_id);
+    let device_cancel_for_state = device_cancel.clone();
     peer_connection.on_peer_connection_state_change(Box::new(
         move |state: RTCPeerConnectionState| {
             let device_id = Arc::clone(&device_id_for_state);
+            let cancel = device_cancel_for_state.clone();
             Box::pin(async move {
                 match state {
                     RTCPeerConnectionState::Connected => {
@@ -218,8 +248,9 @@ async fn negotiate_session(
                     RTCPeerConnectionState::Disconnected => {
                         warn!(device_id = %device_id, "peer disconnected");
                     }
-                    RTCPeerConnectionState::Failed => {
-                        error!(device_id = %device_id, "peer connection failed");
+                    RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed => {
+                        error!(device_id = %device_id, "peer connection failed/closed");
+                        cancel.cancel();
                     }
                     _ => {}
                 }
@@ -257,82 +288,21 @@ async fn negotiate_session(
     )?;
 
     let audio_bus = Arc::clone(&state.audio_bus);
+    let conversation_id_for_device = Arc::clone(&conversation_id);
+    let device_tasks_ref = Arc::clone(&state.device_tasks);
     tokio::spawn(async move {
-        run_device(transport, audio_bus).await;
+        crate::device::run_device(
+            transport,
+            audio_bus,
+            conversation_id_for_device,
+            crate::vad::VadConfig::default(),
+            device_cancel,
+            device_tasks_ref,
+        )
+        .await;
     });
 
     info!(device_id = %device_id, "session negotiated, device task spawned");
 
     Ok(local_desc.sdp)
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Device task (placeholder — will be fleshed out in the orchestration layer)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Per-device event loop. Reads audio from the transport, applies VAD,
-/// forwards to the AudioBus, and routes TTS responses back.
-///
-/// This is a sketch — the full implementation belongs in the orchestration
-/// layer, but we need something here to close the loop.
-// `<T: AudioTransport>` is a generic type parameter with a trait bound. The compiler
-// generates a specialized version of this function for each concrete type T that
-// implements AudioTransport (monomorphization). This gives us:
-//   - Zero-cost abstraction: no vtable lookup, the concrete type is known at compile time
-//   - Inlining opportunities: the compiler can inline transport.recv()/send() calls
-//
-// Compare to `dyn AudioTransport` which would use dynamic dispatch (vtable + indirection).
-async fn run_device<T: AudioTransport>(mut transport: T, bus: Arc<AudioBus>) {
-    // Convert &str → Arc<str>. This is the same Arc the caller created, but we get
-    // it back via the transport's id() method. We could pass it separately, but this
-    // keeps the API clean — the transport owns its identity.
-    let device_id: Arc<str> = transport.id().into();
-
-    // Subscribe to TTS responses for this device.
-    let (tts_tx, mut tts_rx) = mpsc::channel(32);
-    bus.tts_sub.insert(Arc::clone(&device_id), tts_tx);
-
-    info!(device_id = %device_id, "device task started");
-
-    loop {
-        tokio::select! {
-            // Inbound: mic audio from robot → AudioBus
-            frame = transport.recv() => {
-                match frame {
-                    Some(audio_frame) => {
-                        // TODO: VAD filter goes here
-                        // Arc::clone is cheap (atomic increment), unlike String::clone
-                        // which would copy the entire string for every frame.
-                        if bus.audio_tx.send((Arc::clone(&device_id), audio_frame)).await.is_err() {
-                            error!(device_id = %device_id, "audio bus closed");
-                            break;
-                        }
-                    }
-                    None => {
-                        info!(device_id = %device_id, "transport stream ended");
-                        break;
-                    }
-                }
-            }
-            // Outbound: TTS response → robot speaker
-            tts = tts_rx.recv() => {
-                match tts {
-                    Some(tts_frame) => {
-                        if let Err(e) = transport.send(tts_frame).await {
-                            error!(device_id = %device_id, "send TTS failed: {e:?}");
-                            break;
-                        }
-                    }
-                    None => {
-                        info!(device_id = %device_id, "TTS channel closed");
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    // Cleanup: remove TTS subscription.
-    bus.tts_sub.remove(device_id.as_ref());
-    info!(device_id = %device_id, "device task exited");
 }

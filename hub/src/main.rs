@@ -1,6 +1,8 @@
 pub mod audio;
+pub mod device;
 pub mod grpc;
 pub mod http;
+pub mod vad;
 pub mod webrtc;
 
 use std::sync::Arc;
@@ -9,6 +11,8 @@ use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
+
+use std::sync::atomic::AtomicU64;
 
 use audio::AudioBus;
 use grpc::{run_grpc_client, GrpcConfig};
@@ -27,9 +31,9 @@ async fn main() {
     let cancel = CancellationToken::new();
 
     // ── AudioBus ────────────────────────────────────────────────────────
-    // The bus channel carries (device_id, AudioFrame) tuples from all
-    // device tasks to the gRPC client. 256 frames of buffer gives ~5s
-    // of audio at 20ms/frame, enough to absorb short gRPC stalls.
+    // The bus channel carries TaggedFrames from all device tasks to the
+    // gRPC client. 256 frames of buffer gives ~5s of audio at 20ms/frame,
+    // enough to absorb short gRPC stalls.
     let (audio_tx, audio_rx) = mpsc::channel(256);
     let audio_bus = Arc::new(AudioBus {
         audio_tx,
@@ -52,6 +56,8 @@ async fn main() {
     // ── HTTP signaling server ───────────────────────────────────────────
     let state = AppState {
         audio_bus: Arc::clone(&audio_bus),
+        connection_counter: Arc::new(AtomicU64::new(0)),
+        device_tasks: Arc::new(DashMap::new()),
     };
     let app = router(state);
     let bind_addr = "0.0.0.0:8080";

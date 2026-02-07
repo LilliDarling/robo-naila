@@ -27,6 +27,29 @@ pub struct AudioFrame {
     pub timestamp: u64,
 }
 
+/// Speech event tags for VAD-gated audio frames.
+///
+/// The hub's VAD filter assigns these to each frame it forwards. The AI server
+/// uses them to detect utterance boundaries without running its own VAD.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeechEvent {
+    Start,
+    Continue,
+    End,
+    Interrupt,
+}
+
+/// An audio frame tagged with routing metadata, ready for the bus.
+///
+/// Created by `run_device` after VAD processing. The gRPC send loop reads
+/// these off the bus and maps them into `AudioInput` proto messages.
+pub struct TaggedFrame {
+    pub device_id: Arc<str>,
+    pub conversation_id: Arc<str>,
+    pub frame: AudioFrame,
+    pub event: SpeechEvent,
+}
+
 /// TTS = Text-to-Speech
 ///
 /// This frame contains synthesized audio to be played back on the robot's speaker.
@@ -36,6 +59,10 @@ pub struct TtsFrame {
     /// Synthesized audio data (same PCM format as AudioFrame).
     pub data: Bytes,
     pub sample_rate: u32,
+    /// Hub-consumed signal: last frame of this response. The hub uses this
+    /// to distinguish "pause in TTS generation" from "response complete"
+    /// for barge-in vs new-utterance detection.
+    pub is_final: bool,
 }
 
 /// Errors that can occur during audio transport operations.
@@ -125,6 +152,6 @@ pub struct AudioBus {
     //   - `Arc<str>` stores the string data inline (one allocation)
     //   - `Arc<String>` has two indirections: Arc → String → str (two allocations)
     //   - `Arc<str>` is created via `Arc::from(s)` where s: String or &str
-    pub audio_tx: Sender<(Arc<str>, AudioFrame)>,
+    pub audio_tx: Sender<TaggedFrame>,
     pub tts_sub: DashMap<Arc<str>, Sender<TtsFrame>>,
 }
