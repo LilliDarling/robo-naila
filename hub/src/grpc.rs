@@ -211,7 +211,6 @@ async fn send_loop(
                     crate::audio::SpeechEvent::Start => SpeechEvent::Start,
                     crate::audio::SpeechEvent::Continue => SpeechEvent::Continue,
                     crate::audio::SpeechEvent::End => SpeechEvent::End,
-                    crate::audio::SpeechEvent::Interrupt => SpeechEvent::Interrupt,
                 };
 
                 let msg = AudioInput {

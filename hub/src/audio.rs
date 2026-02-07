@@ -36,7 +36,6 @@ pub enum SpeechEvent {
     Start,
     Continue,
     End,
-    Interrupt,
 }
 
 /// An audio frame tagged with routing metadata, ready for the bus.

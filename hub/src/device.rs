@@ -8,7 +8,6 @@ use tracing::{error, info};
 use crate::audio::{AudioBus, AudioTransport, SpeechEvent, TaggedFrame, TtsFrame};
 use crate::vad::{VadConfig, VadFilter, VadResult};
 
-
 /// Transport-level relay states. The hub tracks what's flowing in which
 /// direction — it doesn't interpret content or make conversation-level decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,14 +16,10 @@ enum RelayState {
     Idle,
     /// Confirmed speech. Inbound frames are forwarded to the audio bus.
     Streaming,
-    /// TTS response is being played to the device speaker.
-    /// Inbound audio is monitored for barge-in.
-    Playing,
 }
 
 /// Per-device relay loop. Reads audio from the transport, applies VAD gating,
-/// forwards tagged frames to the AudioBus, routes TTS responses back, and
-/// handles barge-in detection.
+/// forwards tagged frames to the AudioBus, and routes TTS responses back.
 ///
 /// Exits when the transport closes, the cancel token fires (peer disconnect
 /// or reconnect dedup), or the audio bus closes.
@@ -84,37 +79,6 @@ pub async fn run_device<T: AudioTransport>(
                             VadResult::Suppress => {}
                         }
                     }
-
-                    RelayState::Playing => {
-                        // Monitor for barge-in: user speaks during TTS playback.
-                        if let VadResult::Emit(SpeechEvent::Start, frames) = vad_result {
-                            // Send interrupt signal to AI server.
-                            let interrupt = TaggedFrame {
-                                device_id: Arc::clone(&device_id),
-                                conversation_id: Arc::clone(&conversation_id),
-                                frame: crate::audio::AudioFrame {
-                                    data: bytes::Bytes::new(),
-                                    sample_rate: 0,
-                                    timestamp: 0,
-                                },
-                                event: SpeechEvent::Interrupt,
-                            };
-                            if bus.audio_tx.send(interrupt).await.is_err() {
-                                error!(device_id = %device_id, "audio bus closed");
-                                break 'outer;
-                            }
-
-                            // Drain buffered TTS frames.
-                            while tts_rx.try_recv().is_ok() {}
-
-                            // Forward the onset frames as the new utterance.
-                            if !send_frames(&bus, &device_id, &conversation_id, frames, SpeechEvent::Start).await {
-                                break 'outer;
-                            }
-
-                            state = RelayState::Streaming;
-                        }
-                    }
                 }
             }
 
@@ -122,20 +86,9 @@ pub async fn run_device<T: AudioTransport>(
             tts = tts_rx.recv() => {
                 match tts {
                     Some(tts_frame) => {
-                        let is_final = tts_frame.is_final;
-
-                        // Transition to Playing if we weren't already.
-                        if state != RelayState::Playing {
-                            state = RelayState::Playing;
-                        }
-
                         if let Err(e) = transport.send(tts_frame).await {
                             error!(device_id = %device_id, "send TTS failed: {e:?}");
                             break 'outer;
-                        }
-
-                        if is_final {
-                            state = RelayState::Idle;
                         }
                     }
                     None => {
@@ -195,7 +148,11 @@ async fn send_frames(
     first_event: SpeechEvent,
 ) -> bool {
     for (i, f) in frames.into_iter().enumerate() {
-        let event = if i == 0 { first_event } else { SpeechEvent::Continue };
+        let event = if i == 0 {
+            first_event
+        } else {
+            SpeechEvent::Continue
+        };
         let tagged = TaggedFrame {
             device_id: Arc::clone(device_id),
             conversation_id: Arc::clone(conversation_id),
