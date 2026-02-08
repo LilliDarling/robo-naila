@@ -127,10 +127,10 @@ pub trait AudioTransport: Send + 'static {
 
     /// Receives the next audio frame from the robot.
     /// Returns `None` when the stream ends (robot disconnected).
-    async fn recv(&mut self) -> Option<AudioFrame>;
+    fn recv(&mut self) -> impl Future::<Output = Option<AudioFrame>> + Send;
 
     /// Sends a TTS audio frame to the robot for playback.
-    async fn send(&mut self, frame: TtsFrame) -> Result<(), TransportError>;
+    fn send(&mut self, frame: TtsFrame) -> impl Future<Output = Result<(), TransportError>> + Send;
 }
 
 /// Routes audio between device tasks and the processing layer.
