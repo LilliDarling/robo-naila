@@ -1,10 +1,3 @@
-pub mod audio;
-pub mod device;
-pub mod grpc;
-pub mod http;
-pub mod vad;
-pub mod webrtc;
-
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -14,9 +7,9 @@ use tracing::info;
 
 use std::sync::atomic::AtomicU64;
 
-use audio::AudioBus;
-use grpc::{run_grpc_client, GrpcConfig};
-use http::{router, AppState};
+use hub::audio::AudioBus;
+use hub::grpc::{run_grpc_client, GrpcConfig};
+use hub::http::{router, AppState};
 
 // `#[tokio::main]` transforms `async fn main()` into a regular `fn main()` that
 // creates a Tokio runtime and blocks on the async body. Without this, you'd need:
