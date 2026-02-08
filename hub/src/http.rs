@@ -71,13 +71,6 @@ pub struct AppState {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Creates the axum router with the signaling endpoint.
-///
-/// Mount this into your server:
-/// ```ignore
-/// let app = signaling::router(state);
-/// let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
-/// axum::serve(listener, app).await?;
-/// ```
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/connect", post(handle_connect))

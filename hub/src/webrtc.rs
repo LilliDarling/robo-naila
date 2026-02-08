@@ -49,9 +49,10 @@ pub struct WebRtcTransport {
     opus_encoder: OpusEncoder,
     peer_connection: Arc<RTCPeerConnection>,
 
-    // Reusable buffer for Opus encoding output. Allocated once in `new()`,
-    // reused across all `send()` calls to avoid per-frame heap allocations.
+    // Reusable buffers allocated once in `new()`, reused across all `send()`
+    // calls to avoid per-frame heap allocations.
     opus_buf: Vec<u8>,
+    samples_buf: Vec<i16>,
 
     rtp_sequence: u16,
     rtp_timestamp: u32,
@@ -83,6 +84,7 @@ impl WebRtcTransport {
             opus_encoder,
             peer_connection,
             opus_buf: vec![0u8; MAX_OPUS_PACKET],
+            samples_buf: Vec::new(),
             rtp_sequence: 0,
             rtp_timestamp: 0,
         })
@@ -116,14 +118,15 @@ impl AudioTransport for WebRtcTransport {
             );
         }
 
-        let samples: Vec<i16> = frame
-            .data
-            .chunks_exact(2)
-            .map(|c| i16::from_le_bytes([c[0], c[1]]))
-            .collect();
+        let sample_count = frame.data.len() / 2;
+        self.samples_buf.clear();
+        self.samples_buf.reserve(sample_count);
+        for c in frame.data.chunks_exact(2) {
+            self.samples_buf.push(i16::from_le_bytes([c[0], c[1]]));
+        }
 
         // Encode PCM → Opus in frame-sized chunks.
-        for chunk in samples.chunks(SAMPLES_PER_FRAME) {
+        for chunk in self.samples_buf.chunks(SAMPLES_PER_FRAME) {
             if chunk.len() < SAMPLES_PER_FRAME {
                 break; // Drop incomplete frames.
             }
