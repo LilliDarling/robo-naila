@@ -12,7 +12,7 @@ use hub::audio::{AudioBus, SpeechEvent, TtsFrame};
 use hub::device::run_device;
 use hub::metrics::HubMetrics;
 use hub::vad::VadConfig;
-use support::{speech_frame, MockTransport};
+use support::{silence_frame, speech_frame, MockTransport};
 use webrtc_vad::VadMode;
 
 /// Small thresholds so tests complete quickly.
@@ -213,4 +213,94 @@ async fn cancel_token_stops_device() {
         .await
         .expect("run_device should exit after cancellation")
         .expect("task panicked");
+}
+
+/// Drive VAD through onset → hangover → End, then verify a new utterance
+/// produces a fresh Start (not Continue).
+#[tokio::test]
+async fn vad_hangover_emits_end_and_resets() {
+    let (transport, handles) = MockTransport::new("test-device");
+    let (bus, mut audio_rx) = test_bus();
+    let device_tasks: Arc<DashMap<Arc<str>, CancellationToken>> = Arc::new(DashMap::new());
+    let cancel = CancellationToken::new();
+    let metrics = Arc::new(HubMetrics::new());
+
+    let vad_config = test_vad_config(); // onset=3, hangover=5
+    let task = tokio::spawn(run_device(
+        transport,
+        Arc::clone(&bus),
+        Arc::from("conv-1"),
+        vad_config,
+        cancel.clone(),
+        Arc::clone(&device_tasks),
+        Arc::clone(&metrics),
+    ));
+
+    let timeout = std::time::Duration::from_secs(2);
+
+    // Phase 1: trigger onset with 3 speech frames.
+    for _ in 0..3 {
+        handles.frame_tx.send(speech_frame()).await.unwrap();
+    }
+
+    // Phase 2: send plenty of silence to exhaust hangover. The C VAD may
+    // carry internal state from prior speech, so a few "silence" frames can
+    // still classify as speech and reset the hangover counter. 30 frames
+    // (~600ms) is more than enough headroom for hangover_threshold=5.
+    for _ in 0..30 {
+        handles.frame_tx.send(silence_frame()).await.unwrap();
+    }
+
+    // Drain frames until we see End (or timeout).
+    let mut received = Vec::new();
+    loop {
+        let frame = tokio::time::timeout(timeout, audio_rx.recv())
+            .await
+            .expect("timed out before receiving SpeechEvent::End")
+            .expect("bus channel closed");
+        let is_end = frame.event == SpeechEvent::End;
+        received.push(frame);
+        if is_end {
+            break;
+        }
+    }
+
+    // First frame is Start, middle frames are Continue, last is End.
+    assert!(received.len() >= 4, "expected at least onset + 1 hangover frame");
+    assert_eq!(received[0].event, SpeechEvent::Start);
+    for frame in &received[1..received.len() - 1] {
+        assert_eq!(frame.event, SpeechEvent::Continue);
+    }
+    assert_eq!(received.last().unwrap().event, SpeechEvent::End);
+
+    // Metrics should reflect one full onset+end cycle.
+    assert_eq!(metrics.vad_onsets.load(Ordering::Relaxed), 1);
+    assert_eq!(metrics.vad_ends.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        metrics.frames_forwarded.load(Ordering::Relaxed),
+        received.len() as u64
+    );
+
+    // Phase 3: new speech after End should produce a fresh Start.
+    for _ in 0..4 {
+        handles.frame_tx.send(speech_frame()).await.unwrap();
+    }
+
+    let mut second_utterance = Vec::new();
+    for _ in 0..4 {
+        let frame = tokio::time::timeout(timeout, audio_rx.recv())
+            .await
+            .expect("timed out waiting for second utterance frame")
+            .expect("bus channel closed");
+        second_utterance.push(frame);
+    }
+
+    assert_eq!(second_utterance[0].event, SpeechEvent::Start);
+    for frame in &second_utterance[1..] {
+        assert_eq!(frame.event, SpeechEvent::Continue);
+    }
+    assert_eq!(metrics.vad_onsets.load(Ordering::Relaxed), 2);
+
+    cancel.cancel();
+    let _ = task.await;
 }

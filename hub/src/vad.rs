@@ -44,12 +44,12 @@ enum VadState {
 /// 48kHz * 20ms = 960 samples per frame.
 const SAMPLES_PER_FRAME: usize = 960;
 
-// Safety: VadFilter is only ever used from within a single `run_device` task.
-// The inner `Vad` holds a `*mut Fvad` (C FFI pointer) which makes it `!Send`,
-// but we never share VadFilter across threads — we move it into one task and
-// use it exclusively there. Tokio's `spawn` requires Send to allow the runtime
-// to move the task between worker threads, but VadFilter has no thread-safety
-// issues with being moved — it just can't be shared.
+// Safety: The inner `Vad` holds a `*mut Fvad` (C FFI pointer) which makes it
+// `!Send` by Rust's conservative auto-trait rules. However, libfvad's `Fvad`
+// struct is purely instance-local data (VadInstT + rate index) with no
+// thread-local storage, no global mutable state, and no OS thread-affine
+// resources — it is safe to move between threads. The remaining VadFilter
+// fields are all plain owned types that are Send.
 unsafe impl Send for VadFilter {}
 
 pub struct VadFilter {

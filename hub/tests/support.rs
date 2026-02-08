@@ -61,6 +61,18 @@ impl AudioTransport for MockTransport {
     }
 }
 
+/// A 20ms frame of silence (all-zero samples).
+///
+/// webrtc-vad reliably classifies this as non-speech.
+pub fn silence_frame() -> AudioFrame {
+    let bytes_per_frame = SAMPLES_PER_FRAME * 2;
+    AudioFrame {
+        data: Bytes::from(vec![0u8; bytes_per_frame]),
+        sample_rate: 48_000,
+        timestamp: 0,
+    }
+}
+
 /// A 20ms frame of synthetic speech-like noise.
 ///
 /// Alternating ±16000 square wave at ~1kHz — loud and periodic enough that

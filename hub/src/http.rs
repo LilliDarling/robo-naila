@@ -151,10 +151,8 @@ async fn negotiate_session(
     }
 
     // Per-device cancel token — fired on peer disconnect or reconnect dedup.
+    // Inserted into device_tasks later, after all fallible setup succeeds.
     let device_cancel = CancellationToken::new();
-    state
-        .device_tasks
-        .insert(Arc::clone(&device_id), device_cancel.clone());
 
     // Bump the global counter to get a unique conversation ID for this session.
     let conversation_id: Arc<str> = state
@@ -288,6 +286,12 @@ async fn negotiate_session(
         outbound_track,
         peer_connection,
     )?;
+
+    // Register in device_tasks only after all fallible setup has succeeded.
+    // This avoids leaking a stale entry if negotiation fails partway through.
+    state
+        .device_tasks
+        .insert(Arc::clone(&device_id), device_cancel.clone());
 
     let audio_bus = Arc::clone(&state.audio_bus);
     let conversation_id_for_device = Arc::clone(&conversation_id);
