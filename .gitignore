@@ -61,3 +61,5 @@ coverage.xml
 .env.*.local
 
 CLAUDE.md
+
+target
