@@ -1,11 +1,13 @@
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, info_span, Instrument};
 
 use crate::audio::{AudioBus, AudioTransport, SpeechEvent, TaggedFrame, TtsFrame};
+use crate::metrics::HubMetrics;
 use crate::vad::{VadConfig, VadFilter, VadResult};
 
 /// Transport-level relay states. The hub tracks what's flowing in which
@@ -30,113 +32,126 @@ pub async fn run_device<T: AudioTransport>(
     vad_config: VadConfig,
     device_cancel: CancellationToken,
     device_tasks: Arc<DashMap<Arc<str>, CancellationToken>>,
+    metrics: Arc<HubMetrics>,
 ) {
     let device_id: Arc<str> = transport.id().into();
 
-    // Subscribe to TTS responses for this device.
-    let (tts_tx, mut tts_rx) = mpsc::channel::<TtsFrame>(32);
-    bus.tts_sub.insert(Arc::clone(&device_id), tts_tx);
+    let span = info_span!("device", %device_id, %conversation_id);
 
-    let mut vad = VadFilter::new(vad_config);
-    let mut state = RelayState::Idle;
+    async {
+        // Subscribe to TTS responses for this device.
+        let (tts_tx, mut tts_rx) = mpsc::channel::<TtsFrame>(32);
+        bus.tts_sub.insert(Arc::clone(&device_id), tts_tx);
 
-    info!(device_id = %device_id, "device task started");
+        let mut vad = VadFilter::new(vad_config);
+        let mut state = RelayState::Idle;
 
-    'outer: loop {
-        tokio::select! {
-            // Inbound: mic audio from device
-            frame = transport.recv() => {
-                let audio_frame = match frame {
-                    Some(f) => f,
-                    None => {
-                        info!(device_id = %device_id, "transport stream ended");
-                        break 'outer;
+        info!("device task started");
+
+        'outer: loop {
+            tokio::select! {
+                // Inbound: mic audio from device
+                frame = transport.recv() => {
+                    let audio_frame = match frame {
+                        Some(f) => f,
+                        None => {
+                            info!("transport stream ended");
+                            break 'outer;
+                        }
+                    };
+
+                    let vad_result = vad.process(audio_frame);
+
+                    match state {
+                        RelayState::Idle => {
+                            if let VadResult::Emit(SpeechEvent::Start, frames) = vad_result {
+                                state = RelayState::Streaming;
+                                metrics.vad_onsets.fetch_add(1, Ordering::Relaxed);
+                                let count = frames.len() as u64;
+                                if !send_frames(&bus, &device_id, &conversation_id, frames, SpeechEvent::Start).await {
+                                    break 'outer;
+                                }
+                                metrics.frames_forwarded.fetch_add(count, Ordering::Relaxed);
+                            }
+                        }
+
+                        RelayState::Streaming => {
+                            match vad_result {
+                                VadResult::Emit(event, frames) => {
+                                    if event == SpeechEvent::End {
+                                        state = RelayState::Idle;
+                                        metrics.vad_ends.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                    let count = frames.len() as u64;
+                                    if !send_frames(&bus, &device_id, &conversation_id, frames, event).await {
+                                        break 'outer;
+                                    }
+                                    metrics.frames_forwarded.fetch_add(count, Ordering::Relaxed);
+                                }
+                                VadResult::Suppress => {}
+                            }
+                        }
                     }
-                };
+                }
 
-                let vad_result = vad.process(audio_frame);
-
-                match state {
-                    RelayState::Idle => {
-                        if let VadResult::Emit(SpeechEvent::Start, frames) = vad_result {
-                            state = RelayState::Streaming;
-                            if !send_frames(&bus, &device_id, &conversation_id, frames, SpeechEvent::Start).await {
+                // Outbound: TTS response → device speaker
+                tts = tts_rx.recv() => {
+                    match tts {
+                        Some(tts_frame) => {
+                            if let Err(e) = transport.send(tts_frame).await {
+                                error!("send TTS failed: {e:?}");
                                 break 'outer;
                             }
                         }
-                    }
-
-                    RelayState::Streaming => {
-                        match vad_result {
-                            VadResult::Emit(event, frames) => {
-                                if event == SpeechEvent::End {
-                                    state = RelayState::Idle;
-                                }
-                                if !send_frames(&bus, &device_id, &conversation_id, frames, event).await {
-                                    break 'outer;
-                                }
-                            }
-                            VadResult::Suppress => {}
-                        }
-                    }
-                }
-            }
-
-            // Outbound: TTS response → device speaker
-            tts = tts_rx.recv() => {
-                match tts {
-                    Some(tts_frame) => {
-                        if let Err(e) = transport.send(tts_frame).await {
-                            error!(device_id = %device_id, "send TTS failed: {e:?}");
+                        None => {
+                            info!("TTS channel closed");
                             break 'outer;
                         }
                     }
-                    None => {
-                        info!(device_id = %device_id, "TTS channel closed");
-                        break 'outer;
-                    }
+                }
+
+                // Peer disconnect or reconnect dedup — exit promptly.
+                _ = device_cancel.cancelled() => {
+                    info!("device cancelled");
+                    break 'outer;
                 }
             }
-
-            // Peer disconnect or reconnect dedup — exit promptly.
-            _ = device_cancel.cancelled() => {
-                info!(device_id = %device_id, "device cancelled");
-                break 'outer;
-            }
         }
+
+        // Notify AI server that this device session is over.
+        let _ = bus
+            .audio_tx
+            .send(TaggedFrame {
+                device_id: Arc::clone(&device_id),
+                conversation_id: Arc::clone(&conversation_id),
+                frame: crate::audio::AudioFrame {
+                    data: bytes::Bytes::new(),
+                    sample_rate: 0,
+                    timestamp: 0,
+                },
+                event: SpeechEvent::End,
+            })
+            .await;
+
+        // Mark our token as cancelled so cleanup can identify our entries.
+        // Idempotent — no-op if already cancelled by reconnect dedup or peer failure.
+        // Without this, normal exits (transport closed) leave uncancelled entries.
+        device_cancel.cancel();
+
+        // Cleanup: only remove entries that belong to THIS session.
+        // If a reconnect replaced us, device_tasks will have a new non-cancelled
+        // token — leave tts_sub alone so the new session keeps receiving TTS.
+        if device_tasks
+            .get(device_id.as_ref())
+            .map_or(true, |entry| entry.value().is_cancelled())
+        {
+            bus.tts_sub.remove(device_id.as_ref());
+        }
+        device_tasks.remove_if(device_id.as_ref(), |_, token| token.is_cancelled());
+        info!("device session cleaned up");
     }
-
-    // Notify AI server that this device session is over.
-    let _ = bus
-        .audio_tx
-        .send(TaggedFrame {
-            device_id: Arc::clone(&device_id),
-            conversation_id: Arc::clone(&conversation_id),
-            frame: crate::audio::AudioFrame {
-                data: bytes::Bytes::new(),
-                sample_rate: 0,
-                timestamp: 0,
-            },
-            event: SpeechEvent::End,
-        })
-        .await;
-
-    // Mark our token as cancelled so cleanup can identify our entries.
-    // Idempotent — no-op if already cancelled by reconnect dedup or peer failure.
-    // Without this, normal exits (transport closed) leave uncancelled entries.
-    device_cancel.cancel();
-
-    // Cleanup: only remove entries that belong to THIS session.
-    // If a reconnect replaced us, device_tasks will have a new non-cancelled
-    // token — leave tts_sub alone so the new session keeps receiving TTS.
-    if device_tasks
-        .get(device_id.as_ref())
-        .map_or(true, |entry| entry.value().is_cancelled())
-    {
-        bus.tts_sub.remove(device_id.as_ref());
-    }
-    device_tasks.remove_if(device_id.as_ref(), |_, token| token.is_cancelled());
-    info!(device_id = %device_id, "device session cleaned up");
+    .instrument(span)
+    .await
 }
 
 /// Send tagged frames to the bus. Returns false if the bus is closed.
@@ -160,7 +175,7 @@ async fn send_frames(
             event,
         };
         if bus.audio_tx.send(tagged).await.is_err() {
-            error!(device_id = %device_id, "audio bus closed");
+            error!("audio bus closed");
             return false;
         }
     }

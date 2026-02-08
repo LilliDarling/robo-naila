@@ -10,6 +10,7 @@ use std::sync::atomic::AtomicU64;
 use hub::audio::AudioBus;
 use hub::grpc::{run_grpc_client, GrpcConfig};
 use hub::http::{router, AppState};
+use hub::metrics::HubMetrics;
 
 // `#[tokio::main]` transforms `async fn main()` into a regular `fn main()` that
 // creates a Tokio runtime and blocks on the async body. Without this, you'd need:
@@ -33,17 +34,15 @@ async fn main() {
         tts_sub: DashMap::new(),
     });
 
+    // ── Metrics ────────────────────────────────────────────────────────
+    let metrics = Arc::new(HubMetrics::new());
+
     // ── gRPC client ─────────────────────────────────────────────────────
-    // `tokio::spawn` schedules a task to run concurrently. Unlike calling an
-    // async function directly (which runs inline when awaited), spawn creates
-    // an independent task that runs in the background on the runtime's thread pool.
-    //
-    // The returned `JoinHandle` lets us await the task's completion later.
-    // If we drop the handle without awaiting, the task keeps running (detached).
     let grpc_cancel = cancel.clone();
     let grpc_bus = Arc::clone(&audio_bus);
+    let grpc_metrics = Arc::clone(&metrics);
     let grpc_handle = tokio::spawn(async move {
-        run_grpc_client(GrpcConfig::default(), grpc_bus, audio_rx, grpc_cancel).await;
+        run_grpc_client(GrpcConfig::default(), grpc_bus, audio_rx, grpc_cancel, grpc_metrics).await;
     });
 
     // ── HTTP signaling server ───────────────────────────────────────────
@@ -51,6 +50,7 @@ async fn main() {
         audio_bus: Arc::clone(&audio_bus),
         connection_counter: Arc::new(AtomicU64::new(0)),
         device_tasks: Arc::new(DashMap::new()),
+        metrics,
     };
     let app = router(state);
     let bind_addr = "0.0.0.0:8080";

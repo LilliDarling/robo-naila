@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::{get, post}, Json, Router};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -19,6 +19,7 @@ use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::TrackLocal;
 
 use crate::audio::{AudioBus, AudioFrame};
+use crate::metrics::HubMetrics;
 use crate::webrtc::{spawn_track_reader, WebRtcTransport};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -62,6 +63,7 @@ pub struct AppState {
     /// Active device sessions. Used for reconnect dedup — if a device
     /// reconnects, we cancel the old session before starting a new one.
     pub device_tasks: Arc<DashMap<Arc<str>, CancellationToken>>,
+    pub metrics: Arc<HubMetrics>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -79,12 +81,19 @@ pub struct AppState {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/connect", post(handle_connect))
+        .route("/health", get(handle_health))
         .with_state(state)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Handler
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// GET /health
+async fn handle_health(State(state): State<AppState>) -> impl IntoResponse {
+    let snapshot = state.metrics.snapshot(state.device_tasks.len());
+    Json(snapshot)
+}
 
 /// POST /connect
 ///
@@ -290,6 +299,7 @@ async fn negotiate_session(
     let audio_bus = Arc::clone(&state.audio_bus);
     let conversation_id_for_device = Arc::clone(&conversation_id);
     let device_tasks_ref = Arc::clone(&state.device_tasks);
+    let metrics = Arc::clone(&state.metrics);
     tokio::spawn(async move {
         crate::device::run_device(
             transport,
@@ -298,6 +308,7 @@ async fn negotiate_session(
             crate::vad::VadConfig::default(),
             device_cancel,
             device_tasks_ref,
+            metrics,
         )
         .await;
     });

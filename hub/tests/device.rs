@@ -1,5 +1,6 @@
 mod support;
 
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -9,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use hub::audio::{AudioBus, SpeechEvent, TtsFrame};
 use hub::device::run_device;
+use hub::metrics::HubMetrics;
 use hub::vad::VadConfig;
 use support::{speech_frame, MockTransport};
 use webrtc_vad::VadMode;
@@ -41,6 +43,7 @@ async fn frames_reach_bus_after_vad_onset() {
     let device_tasks: Arc<DashMap<Arc<str>, CancellationToken>> = Arc::new(DashMap::new());
     let cancel = CancellationToken::new();
 
+    let metrics = Arc::new(HubMetrics::new());
     let task = tokio::spawn(run_device(
         transport,
         Arc::clone(&bus),
@@ -48,6 +51,7 @@ async fn frames_reach_bus_after_vad_onset() {
         test_vad_config(),
         cancel.clone(),
         Arc::clone(&device_tasks),
+        Arc::clone(&metrics),
     ));
 
     // Send 3 speech frames to trigger onset, then a 4th to get a Continue.
@@ -75,6 +79,10 @@ async fn frames_reach_bus_after_vad_onset() {
         assert_eq!(frame.event, SpeechEvent::Continue);
     }
 
+    // Metrics should reflect the activity.
+    assert!(metrics.vad_onsets.load(Ordering::Relaxed) >= 1);
+    assert!(metrics.frames_forwarded.load(Ordering::Relaxed) >= 4);
+
     // Clean up.
     cancel.cancel();
     let _ = task.await;
@@ -89,6 +97,7 @@ async fn tts_routed_back_to_transport() {
     let device_tasks: Arc<DashMap<Arc<str>, CancellationToken>> = Arc::new(DashMap::new());
     let cancel = CancellationToken::new();
 
+    let metrics = Arc::new(HubMetrics::new());
     let task = tokio::spawn(run_device(
         transport,
         Arc::clone(&bus),
@@ -96,6 +105,7 @@ async fn tts_routed_back_to_transport() {
         test_vad_config(),
         cancel.clone(),
         Arc::clone(&device_tasks),
+        metrics,
     ));
 
     // Give the device task a moment to register its tts_sub entry.
@@ -137,6 +147,7 @@ async fn transport_close_triggers_cleanup() {
     let device_tasks: Arc<DashMap<Arc<str>, CancellationToken>> = Arc::new(DashMap::new());
     let cancel = CancellationToken::new();
 
+    let metrics = Arc::new(HubMetrics::new());
     let task = tokio::spawn(run_device(
         transport,
         Arc::clone(&bus),
@@ -144,6 +155,7 @@ async fn transport_close_triggers_cleanup() {
         test_vad_config(),
         cancel.clone(),
         Arc::clone(&device_tasks),
+        metrics,
     ));
 
     // Wait for device task to register.
@@ -179,6 +191,7 @@ async fn cancel_token_stops_device() {
     let device_tasks: Arc<DashMap<Arc<str>, CancellationToken>> = Arc::new(DashMap::new());
     let cancel = CancellationToken::new();
 
+    let metrics = Arc::new(HubMetrics::new());
     let task = tokio::spawn(run_device(
         transport,
         Arc::clone(&bus),
@@ -186,6 +199,7 @@ async fn cancel_token_stops_device() {
         test_vad_config(),
         cancel.clone(),
         Arc::clone(&device_tasks),
+        metrics,
     ));
 
     // Wait for task to start.
