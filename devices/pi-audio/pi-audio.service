@@ -1,0 +1,17 @@
+[Unit]
+Description=Pi Audio Device Client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/pi-audio
+ExecStart=/home/pi/pi-audio/.venv/bin/python -m pi_audio
+Restart=on-failure
+RestartSec=5
+
+EnvironmentFile=/home/pi/pi-audio/.env
+
+[Install]
+WantedBy=multi-user.target
