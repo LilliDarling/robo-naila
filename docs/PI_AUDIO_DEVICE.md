@@ -14,14 +14,15 @@ devices/
     │   ├── __init__.py
     │   ├── main.py            # Entry point, reconnect loop, signal handling
     │   ├── config.py           # DeviceConfig dataclass from env/args
-    │   ├── signaling.py        # POST /connect SDP exchange
+    │   ├── http.py             # POST /connect SDP exchange
     │   ├── aec.py              # SpeexDSP echo cancellation wrapper
-    │   ├── audio_io.py         # sounddevice full-duplex capture + playback + AEC
-    │   └── webrtc_client.py    # aiortc peer connection, MicTrack, TTS receive
+    │   ├── audio.py            # sounddevice full-duplex capture + playback + AEC
+    │   ├── webrtc.py           # aiortc peer connection, MicTrack, TTS receive
+    │   └── metrics.py          # Counters, gauges, periodic logging
     └── tests/
         ├── __init__.py
         ├── test_aec.py
-        ├── test_signaling.py
+        ├── test_http.py
         └── test_audio_pipeline.py
 ```
 
@@ -57,7 +58,7 @@ The `sounddevice.Stream` full-duplex callback handles both directions in one cal
 - `DeviceConfig` dataclass with: `hub_url`, `device_id`, `input_device`, `output_device`, `sample_rate` (48000), `frame_duration_ms` (20), `channels` (1), `reconnect_delay`, `max_reconnect_delay`, `log_level`
 - Loaded from env vars (`NAILA_HUB_URL`, `NAILA_DEVICE_ID`, etc.) with argparse override
 
-### `signaling.py`
+### `http.py`
 - Single async function: `exchange_sdp(hub_url, device_id, offer_sdp) -> answer_sdp`
 - POSTs `{"device_id": "...", "sdp": "..."}` to `{hub_url}/connect`
 - Returns the SDP answer string
@@ -69,7 +70,7 @@ The `sounddevice.Stream` full-duplex callback handles both directions in one cal
 - Filter tail: 100ms (4800 samples) — covers desk robot acoustic path
 - Reference signal = what the speaker just played, or silence when no TTS active
 
-### `audio_io.py`
+### `audio.py`
 - `AudioPipeline` class managing `sounddevice.Stream` in full-duplex mode
 - PortAudio callback (runs on audio thread):
   1. Dequeue speaker samples (or silence) → write to `outdata`
@@ -79,14 +80,61 @@ The `sounddevice.Stream` full-duplex callback handles both directions in one cal
 - `read_mic_frame()`: async bridge via `loop.run_in_executor`
 - `queue_playback(samples)`: non-blocking put
 
-### `webrtc_client.py`
+### `webrtc.py`
 - `MicTrack(MediaStreamTrack)`: subclass that reads from `AudioPipeline.read_mic_frame()`, converts to `av.AudioFrame` (s16, mono, 48kHz), returns from `recv()`
 - `WebRTCClient`:
   - Creates `RTCPeerConnection` with no ICE servers (local network)
   - Adds `MicTrack` as outbound track
   - Handles inbound `"track"` event → decodes TTS frames → `pipeline.queue_playback()`
-  - Creates SDP offer, waits for ICE gathering, calls `signaling.exchange_sdp()`, applies answer
+  - Creates SDP offer, waits for ICE gathering, calls `http.exchange_sdp()`, applies answer
   - Hub expects Opus at 48kHz mono, 20ms frames — aiortc handles this automatically via SDP negotiation
+
+### `metrics.py`
+- `DeviceMetrics` class with atomic counters and gauges, thread-safe (accessed from both audio and asyncio threads)
+- Counters (monotonically increasing):
+  - `mic_frames_captured` — frames read from mic
+  - `mic_frames_sent` — frames delivered to MicTrack.recv()
+  - `mic_frames_dropped` — mic_queue overflow (queue full, frame discarded)
+  - `tts_frames_received` — frames decoded from inbound RTP
+  - `tts_frames_played` — frames written to speaker
+  - `tts_frames_dropped` — speaker_queue overflow
+  - `aec_frames_processed` — frames through echo canceller
+  - `connections` — total WebRTC connections established
+  - `connection_failures` — failed connection attempts
+- Gauges (point-in-time):
+  - `mic_queue_depth` — current mic_queue size
+  - `speaker_queue_depth` — current speaker_queue size
+  - `connected` — bool, WebRTC connection is active
+  - `audio_callback_duration_ms` — last PortAudio callback execution time (detects overruns)
+  - `uptime_seconds` — time since process start
+- Health endpoint:
+  - `GET :8081/health` — aiohttp server started in `main.py` alongside the event loop
+  - Returns 200 when connected to hub, 503 when disconnected
+  - Response body is the full metrics snapshot as JSON:
+    ```json
+    {
+      "connected": true,
+      "uptime_seconds": 3421,
+      "mic_frames_sent": 124000,
+      "mic_frames_dropped": 0,
+      "tts_frames_received": 82000,
+      "tts_frames_played": 82000,
+      "mic_queue_depth": 1,
+      "speaker_queue_depth": 3,
+      "audio_callback_duration_ms": 0.4,
+      "connections": 3,
+      "connection_failures": 2
+    }
+    ```
+  - Same JSON body regardless of status code — 503 just signals "not ready" to external health checks
+  - Port 8081 hardcoded default, no config needed
+- Periodic log dump: every 10s, log all counters/gauges at INFO level as a single structured line
+  - Format: `metrics | mic_sent=12400 mic_dropped=0 tts_received=8200 tts_played=8200 mic_q=1 spk_q=3 cb_ms=0.4 connected=true`
+  - Reset delta counters each interval so the log shows rates, keep absolute counters on the object for total lifetime stats
+- Integration points:
+  - `audio.py` callback: increment mic/tts/aec counters, measure callback duration
+  - `webrtc.py`: increment connection/frame counters, update connected gauge
+  - `main.py`: start health server and periodic log task on startup, stop on shutdown
 
 ### `main.py`
 - `run(config)`: reconnect loop with exponential backoff (3s initial, 2x, 30s cap)
@@ -108,11 +156,12 @@ Must match these constants from `hub/src/webrtc.rs`:
 ## Implementation Order
 
 1. `config.py` — parse config
-2. `signaling.py` — HTTP SDP exchange
+2. `http.py` — HTTP SDP exchange
 3. `aec.py` — echo cancellation wrapper
-4. `audio_io.py` — full-duplex audio with AEC
-5. `webrtc_client.py` — aiortc connection + tracks
-6. `main.py` — reconnect loop + shutdown
+4. `audio.py` — full-duplex audio with AEC
+5. `webrtc.py` — aiortc connection + tracks
+6. `metrics.py` — counters, gauges, periodic logging
+7. `main.py` — reconnect loop + shutdown, wire metrics
 
 Each step is independently testable.
 
@@ -122,5 +171,6 @@ Each step is independently testable.
 2. Run `python -m pi_audio --hub-url http://localhost:8080 --device-id pi-test`
 3. Check hub `/health` endpoint shows `active_devices: 1`
 4. Speak into mic → verify hub logs show `frames_forwarded` incrementing
-5. If AI server is running: verify full loop (speak → STT → response → TTS → speaker)
-6. Kill hub → verify device logs reconnection attempts → restart hub → verify reconnects
+5. Check device logs for periodic metrics lines with non-zero `mic_sent` and zero `mic_dropped`
+6. If AI server is running: verify full loop (speak → STT → response → TTS → speaker), check `tts_received` / `tts_played` counts match
+7. Kill hub → verify device logs reconnection attempts and `connection_failures` incrementing → restart hub → verify reconnects
