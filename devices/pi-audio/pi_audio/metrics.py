@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import threading
 import time
 
 from aiohttp import web
@@ -14,14 +13,15 @@ _HEALTH_PORT = 8081
 
 
 class DeviceMetrics:
-    """Thread-safe counters and gauges for the pi-audio device.
+    """Best-effort counters and gauges for the pi-audio device.
 
     Accessed from both the PortAudio audio thread and the asyncio thread.
-    Uses simple locking; at 50 fps the contention is negligible.
+    No locking — the audio callback must never block.  Each counter has a
+    single writer so values are consistent per-field; cross-field snapshots
+    may reflect slightly different moments.
     """
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
         self._start = time.monotonic()
 
         # Counters (lifetime totals).
