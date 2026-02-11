@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/pi-audio
-ExecStart=/home/pi/pi-audio/.venv/bin/python -m pi_audio
+ExecStart=/home/pi/.local/bin/uv run python -m pi_audio
 Restart=on-failure
 RestartSec=5
 

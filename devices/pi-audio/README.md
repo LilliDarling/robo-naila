@@ -22,10 +22,12 @@ sudo apt install libportaudio2 libspeexdsp-dev libopus0 \
 
 ### Install
 
+Requires [uv](https://docs.astral.sh/uv/getting-started/installation/).
+
 ```bash
-python -m venv .venv
+uv venv
 source .venv/bin/activate
-pip install -e .
+uv sync
 ```
 
 ### Configure
@@ -40,13 +42,13 @@ cp .env.example .env
 ### Direct
 
 ```bash
-python -m pi_audio
+uv run python -m pi_audio
 ```
 
 Or with CLI overrides:
 
 ```bash
-python -m pi_audio --hub-url http://192.168.1.10:8080 --device-id pi-kitchen
+uv run python -m pi_audio --hub-url http://192.168.1.10:8080 --device-id pi-kitchen
 ```
 
 ### systemd
@@ -62,8 +64,7 @@ Logs: `journalctl -u pi-audio -f`
 ## Tests
 
 ```bash
-pip install pytest pytest-asyncio pytest-aiohttp
-pytest tests/
+uv run pytest tests/
 ```
 
 ## Health
