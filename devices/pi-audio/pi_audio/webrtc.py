@@ -78,6 +78,7 @@ class WebRTCClient:
         self._metrics = metrics
         self._pc: RTCPeerConnection | None = None
         self._closed = asyncio.Event()
+        self._recv_task: asyncio.Task[None] | None = None
 
     async def connect(self) -> None:
         """Create offer, exchange SDP with hub, start streaming."""
@@ -93,7 +94,7 @@ class WebRTCClient:
         def on_track(track: MediaStreamTrack) -> None:
             log.info("received remote track: kind=%s", track.kind)
             if track.kind == "audio":
-                asyncio.ensure_future(self._recv_tts(track))
+                self._recv_task = asyncio.create_task(self._recv_tts(track))
 
         # Connection state monitoring.
         @self._pc.on("connectionstatechange")
@@ -160,6 +161,13 @@ class WebRTCClient:
     async def close(self) -> None:
         if self._metrics:
             self._metrics.connected = False
+        if self._recv_task is not None:
+            self._recv_task.cancel()
+            try:
+                await self._recv_task
+            except asyncio.CancelledError:
+                pass
+            self._recv_task = None
         if self._pc is not None:
             await self._pc.close()
             self._pc = None
