@@ -13,6 +13,7 @@ from aiortc import (
 )
 from aiortc.mediastreams import MediaStreamError
 
+from .audio import StoppedError
 from .http import exchange_sdp
 
 if TYPE_CHECKING:
@@ -45,7 +46,10 @@ class MicTrack(MediaStreamTrack):
         if self.readyState != "live":
             raise MediaStreamError
 
-        samples = await self._pipeline.read_mic_frame()
+        try:
+            samples = await self._pipeline.read_mic_frame()
+        except StoppedError:
+            raise MediaStreamError
 
         # Build av.AudioFrame: s16 mono 48kHz, 960 samples.
         frame = av.AudioFrame.from_ndarray(

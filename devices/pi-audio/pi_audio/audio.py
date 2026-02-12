@@ -21,6 +21,10 @@ _MIC_QUEUE_MAX = 50
 _SPEAKER_QUEUE_MAX = 50
 
 
+class StoppedError(Exception):
+    """Raised when a read is attempted on a stopped pipeline."""
+
+
 class AudioPipeline:
     """Full-duplex audio via sounddevice.Stream + AEC.
 
@@ -48,7 +52,7 @@ class AudioPipeline:
         self._aec = EchoCanceller(sample_rate, frame_size)
 
         # Thread-safe queues bridging PortAudio thread ↔ asyncio thread.
-        self._mic_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=_MIC_QUEUE_MAX)
+        self._mic_queue: queue.Queue[np.ndarray | None] = queue.Queue(maxsize=_MIC_QUEUE_MAX)
         self._speaker_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=_SPEAKER_QUEUE_MAX)
 
         self._stream: sd.Stream | None = None
@@ -134,12 +138,17 @@ class AudioPipeline:
             self._stream.stop()
             self._stream.close()
             self._stream = None
+            # Unblock any executor thread waiting in read_mic_frame().
+            self._mic_queue.put(None)
             log.info("audio pipeline stopped")
 
     async def read_mic_frame(self) -> np.ndarray:
         """Async bridge: block in executor until a mic frame is available."""
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._mic_queue.get)
+        frame = await loop.run_in_executor(None, self._mic_queue.get)
+        if frame is None:
+            raise StoppedError
+        return frame
 
     def queue_playback(self, samples: np.ndarray) -> None:
         """Non-blocking enqueue of TTS samples for playback."""
