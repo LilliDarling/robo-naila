@@ -50,13 +50,19 @@ async def run(config: DeviceConfig) -> None:
                 await client.connect()
                 delay = config.reconnect_delay  # Reset backoff on success.
                 # Wait for disconnect or shutdown.
-                done, _ = await asyncio.wait(
+                done, pending = await asyncio.wait(
                     [
                         asyncio.create_task(client.wait_closed()),
                         asyncio.create_task(shutdown.wait()),
                     ],
                     return_when=asyncio.FIRST_COMPLETED,
                 )
+                for task in pending:
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
             except Exception:
                 metrics.connection_failures += 1
                 log.exception("connection failed")
