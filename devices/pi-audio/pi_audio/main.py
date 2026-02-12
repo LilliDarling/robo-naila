@@ -5,6 +5,8 @@ import logging
 import signal
 import sys
 
+import aiohttp
+
 from .audio import AudioPipeline
 from .config import DeviceConfig
 from .metrics import DeviceMetrics, periodic_log, start_health_server
@@ -38,52 +40,54 @@ async def run(config: DeviceConfig) -> None:
     pipeline.start()
     delay = config.reconnect_delay
 
-    try:
-        while not shutdown.is_set():
-            client = WebRTCClient(
-                hub_url=config.hub_url,
-                device_id=config.device_id,
-                pipeline=pipeline,
-                metrics=metrics,
-            )
-            try:
-                await client.connect()
-                delay = config.reconnect_delay  # Reset backoff on success.
-                # Wait for disconnect or shutdown.
-                done, pending = await asyncio.wait(
-                    [
-                        asyncio.create_task(client.wait_closed()),
-                        asyncio.create_task(shutdown.wait()),
-                    ],
-                    return_when=asyncio.FIRST_COMPLETED,
+    async with aiohttp.ClientSession() as session:
+        try:
+            while not shutdown.is_set():
+                client = WebRTCClient(
+                    hub_url=config.hub_url,
+                    device_id=config.device_id,
+                    pipeline=pipeline,
+                    session=session,
+                    metrics=metrics,
                 )
-                for task in pending:
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
-            except Exception:
-                metrics.connection_failures += 1
-                log.exception("connection failed")
-            finally:
-                await client.close()
+                try:
+                    await client.connect()
+                    delay = config.reconnect_delay  # Reset backoff on success.
+                    # Wait for disconnect or shutdown.
+                    done, pending = await asyncio.wait(
+                        [
+                            asyncio.create_task(client.wait_closed()),
+                            asyncio.create_task(shutdown.wait()),
+                        ],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for task in pending:
+                        task.cancel()
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+                except Exception:
+                    metrics.connection_failures += 1
+                    log.exception("connection failed")
+                finally:
+                    await client.close()
 
-            if shutdown.is_set():
-                break
+                if shutdown.is_set():
+                    break
 
-            log.info("reconnecting in %.1fs", delay)
-            try:
-                await asyncio.wait_for(shutdown.wait(), timeout=delay)
-                break  # Shutdown signalled during backoff.
-            except asyncio.TimeoutError:
-                pass  # Backoff elapsed, retry.
-            delay = min(delay * 2, config.max_reconnect_delay)
-    finally:
-        pipeline.stop()
-        log_task.cancel()
-        await health_runner.cleanup()
-        log.info("shutdown complete")
+                log.info("reconnecting in %.1fs", delay)
+                try:
+                    await asyncio.wait_for(shutdown.wait(), timeout=delay)
+                    break  # Shutdown signalled during backoff.
+                except asyncio.TimeoutError:
+                    pass  # Backoff elapsed, retry.
+                delay = min(delay * 2, config.max_reconnect_delay)
+        finally:
+            pipeline.stop()
+            log_task.cancel()
+            await health_runner.cleanup()
+            log.info("shutdown complete")
 
 
 def cli() -> None:

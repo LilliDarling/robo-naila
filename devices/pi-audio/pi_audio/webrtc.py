@@ -4,6 +4,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+import aiohttp
 import av
 import numpy as np
 from aiortc import (
@@ -74,11 +75,13 @@ class WebRTCClient:
         hub_url: str,
         device_id: str,
         pipeline: AudioPipeline,
+        session: aiohttp.ClientSession,
         metrics: DeviceMetrics | None = None,
     ) -> None:
         self._hub_url = hub_url
         self._device_id = device_id
         self._pipeline = pipeline
+        self._session = session
         self._metrics = metrics
         self._pc: RTCPeerConnection | None = None
         self._closed = asyncio.Event()
@@ -116,7 +119,7 @@ class WebRTCClient:
         await self._wait_ice_gathering()
 
         answer_sdp = await exchange_sdp(
-            self._hub_url, self._device_id, self._pc.localDescription.sdp
+            self._session, self._hub_url, self._device_id, self._pc.localDescription.sdp
         )
         answer = RTCSessionDescription(sdp=answer_sdp, type="answer")
         await self._pc.setRemoteDescription(answer)
