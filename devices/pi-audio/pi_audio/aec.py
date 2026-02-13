@@ -25,8 +25,8 @@ class EchoCanceller:
         try:
             import speexdsp
 
-            self._echo = speexdsp.EchoState.create(
-                self._frame_size, self._filter_tail
+            self._echo = speexdsp.EchoCanceller.create(
+                self._frame_size, self._filter_tail, self._sample_rate
             )
             log.info(
                 "AEC initialised: frame=%d tail=%d",

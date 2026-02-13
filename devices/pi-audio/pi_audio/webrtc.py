@@ -9,6 +9,7 @@ import av
 import numpy as np
 from aiortc import (
     MediaStreamTrack,
+    RTCConfiguration,
     RTCPeerConnection,
     RTCSessionDescription,
 )
@@ -90,7 +91,7 @@ class WebRTCClient:
     async def connect(self) -> None:
         """Create offer, exchange SDP with hub, start streaming."""
         # No ICE servers — local network only, matching hub RTCConfiguration.
-        self._pc = RTCPeerConnection(configuration={"iceServers": []})
+        self._pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=[]))
 
         # Outbound: mic → hub.
         mic_track = MicTrack(self._pipeline, self._metrics)
