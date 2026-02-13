@@ -15,7 +15,7 @@ WebRTC audio client for Raspberry Pi. Captures mic audio, runs acoustic echo can
 ### System dependencies
 
 ```bash
-sudo apt install libportaudio2 libspeexdsp-dev libopus0 \
+sudo apt install swig portaudio19-dev libspeexdsp-dev libopus0 \
   libavformat-dev libavcodec-dev libavdevice-dev \
   libavutil-dev libswscale-dev libswresample-dev
 ```

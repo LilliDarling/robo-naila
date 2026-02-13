@@ -1,4 +1,5 @@
 import pytest
+import aiohttp
 from aiohttp import web
 
 from pi_audio.http import exchange_sdp
@@ -23,7 +24,8 @@ def hub_server(aiohttp_server):
 async def test_exchange_sdp_success(hub_server):
     server = await hub_server
     url = f"http://{server.host}:{server.port}"
-    answer = await exchange_sdp(url, "pi-test", "offer-sdp-data")
+    async with aiohttp.ClientSession() as session:
+        answer = await exchange_sdp(session, url, "pi-test", "offer-sdp-data")
     assert answer == "answer:offer-sdp-data"
 
 
@@ -41,5 +43,6 @@ def hub_server_error(aiohttp_server):
 async def test_exchange_sdp_error(hub_server_error):
     server = await hub_server_error
     url = f"http://{server.host}:{server.port}"
-    with pytest.raises(RuntimeError, match="500"):
-        await exchange_sdp(url, "pi-test", "offer")
+    async with aiohttp.ClientSession() as session:
+        with pytest.raises(RuntimeError, match="500"):
+            await exchange_sdp(session, url, "pi-test", "offer")
