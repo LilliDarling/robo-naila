@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from fractions import Fraction
 from typing import TYPE_CHECKING
 
 import aiohttp
@@ -59,7 +60,7 @@ class MicTrack(MediaStreamTrack):
         )
         frame.sample_rate = OPUS_SAMPLE_RATE
         frame.pts = self._pts
-        frame.time_base = f"1/{OPUS_SAMPLE_RATE}"
+        frame.time_base = Fraction(1, OPUS_SAMPLE_RATE)
         self._pts += SAMPLES_PER_FRAME
 
         if self._metrics:
