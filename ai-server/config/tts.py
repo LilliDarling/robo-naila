@@ -50,8 +50,8 @@ MP3_BITRATE = int(os.getenv("TTS_MP3_BITRATE", "128"))  # kbps
 OGG_QUALITY = int(os.getenv("TTS_OGG_QUALITY", "6"))  # 0-10
 
 # Performance
-ENABLE_GPU = os.getenv("TTS_ENABLE_GPU", "false").lower() == "true"
-THREADS = int(os.getenv("TTS_THREADS", "2"))
+ENABLE_GPU = os.getenv("TTS_ENABLE_GPU", "true").lower() == "true"  # Enable GPU acceleration when available
+THREADS = int(os.getenv("TTS_THREADS", "4"))  # Increased for better parallelism
 CACHE_COMMON_PHRASES = os.getenv("TTS_CACHE_COMMON_PHRASES", "true").lower() == "true"
 CACHE_INCLUDES_PARAMETERS = os.getenv("TTS_CACHE_INCLUDES_PARAMETERS", "true").lower() == "true"
 MAX_CACHED_PHRASES = int(os.getenv("TTS_MAX_CACHED_PHRASES", "256"))

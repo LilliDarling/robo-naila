@@ -9,8 +9,9 @@ MODEL_PATH = os.getenv("LLM_MODEL_PATH", "models/llm/Meta-Llama-3.1-8B-Instruct-
 MODEL_TYPE = "llama"  # Model architecture type
 
 # Context and Token Limits
-CONTEXT_SIZE = int(os.getenv("LLM_CONTEXT_SIZE", "4096"))
-MAX_TOKENS_PER_RESPONSE = int(os.getenv("LLM_MAX_TOKENS", "512"))
+# Llama 3.1 8B supports up to 131k context, but using 32k for better performance/memory balance
+CONTEXT_SIZE = int(os.getenv("LLM_CONTEXT_SIZE", "32768"))
+MAX_TOKENS_PER_RESPONSE = int(os.getenv("LLM_MAX_TOKENS", "2048"))
 CONTEXT_HISTORY_LIMIT = int(os.getenv("LLM_CONTEXT_HISTORY_LIMIT", "5"))
 TOKEN_BUDGET_FOR_HISTORY = int(os.getenv("LLM_TOKEN_BUDGET_HISTORY", "2000"))
 
@@ -23,7 +24,7 @@ REPEAT_PENALTY = float(os.getenv("LLM_REPEAT_PENALTY", "1.1"))
 # Hardware Configuration
 GPU_LAYERS = int(os.getenv("LLM_GPU_LAYERS", "-1"))  # 0 = CPU only, -1 = auto (use GPU if available), N = specific layers
 THREADS = int(os.getenv("LLM_THREADS", "0"))  # 0 = auto-detect
-BATCH_SIZE = int(os.getenv("LLM_BATCH_SIZE", "512"))
+BATCH_SIZE = int(os.getenv("LLM_BATCH_SIZE", "2048"))  # Increased for better throughput with larger context
 USE_MMAP = os.getenv("LLM_USE_MMAP", "true").lower() == "true"
 USE_MLOCK = os.getenv("LLM_USE_MLOCK", "false").lower() == "true"
 

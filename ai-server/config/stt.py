@@ -19,7 +19,8 @@ TEMPERATURE = float(os.getenv("STT_TEMPERATURE", "0.0"))  # 0 = deterministic
 PATIENCE = float(os.getenv("STT_PATIENCE", "1.0"))
 
 # Hardware Configuration
-COMPUTE_TYPE = os.getenv("STT_COMPUTE_TYPE", "int8")  # float16, int8, float32
+# Use float16 for better accuracy on Metal/GPU, int8 for CPU
+COMPUTE_TYPE = os.getenv("STT_COMPUTE_TYPE", "float16")  # float16, int8, float32
 DEVICE = os.getenv("STT_DEVICE", "auto")  # cpu, cuda, auto
 THREADS = int(os.getenv("STT_THREADS", "0"))  # 0 = auto-detect
 GPU_LAYERS = int(os.getenv("STT_GPU_LAYERS", "-1"))  # -1 = auto
