@@ -5,9 +5,12 @@ from pathlib import Path
 
 
 # Model Configuration
-MODEL_PATH = os.getenv("STT_MODEL_PATH", "models/stt/ggml-small.en.bin")
+# MODEL_PATH accepts either a model size string (e.g. "small.en") which downloads
+# the CTranslate2 model from HuggingFace, or a path to a local CTranslate2 model
+# directory. GGML format files (whisper.cpp) are NOT supported by faster_whisper.
+MODEL_PATH = os.getenv("STT_MODEL_PATH", "small.en")
+MODEL_DOWNLOAD_ROOT = os.getenv("STT_MODEL_DOWNLOAD_ROOT", "models/stt")
 LANGUAGE = os.getenv("STT_LANGUAGE", "en")
-MODEL_SIZE = "small.en"  # Whisper model size
 
 # Transcription Parameters
 BEAM_SIZE = int(os.getenv("STT_BEAM_SIZE", "5"))

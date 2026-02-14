@@ -50,6 +50,15 @@ class STTService(BaseAIService):
         """Get the model type name for logging"""
         return "STT"
 
+    def _validate_model_path(self) -> bool:
+        """Accept both local directories and model size strings like 'small.en'."""
+        if self.model_path.exists():
+            return True
+        # faster_whisper accepts model size strings (e.g. "small.en") that it
+        # downloads from HuggingFace — these aren't filesystem paths.
+        model_str = str(self.model_path)
+        return "/" not in model_str and "\\" not in model_str
+
     def _log_configuration(self):
         """Log model-specific configuration after successful load"""
         device = self._get_device()
@@ -73,6 +82,9 @@ class STTService(BaseAIService):
             compute_type = self._get_compute_type()
             cpu_threads = self._get_thread_count(stt_config.THREADS)
 
+            # Resolve download root for HuggingFace model caching
+            download_root = str(Path(stt_config.MODEL_DOWNLOAD_ROOT).resolve())
+
             # Load model (this is blocking, so run in executor)
             loop = asyncio.get_event_loop()
             try:
@@ -84,6 +96,7 @@ class STTService(BaseAIService):
                         compute_type=compute_type,
                         cpu_threads=cpu_threads,
                         num_workers=1,
+                        download_root=download_root,
                     )
                 )
             except MemoryError as e:
