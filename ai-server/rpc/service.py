@@ -61,79 +61,119 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         Receives AudioInput messages from the Hub, buffers speech audio,
         and processes complete utterances through the STT -> LLM -> TTS pipeline.
         Streams TTS audio back as AudioOutput chunks.
+
+        Input reading and utterance processing run concurrently so that
+        SPEECH_EVENT_INTERRUPT can cancel an in-flight processing task.
         """
         audio_buffer = bytearray()
         device_id = ""
         conversation_id = ""
         input_sample_rate = 48000
         processing_task: Optional[asyncio.Task] = None
+        output_queue: asyncio.Queue = asyncio.Queue()
+        _SENTINEL = object()
 
         peer = context.peer()
         logger.info("stream_opened", peer=peer)
 
+        async def _read_inputs():
+            """Read the input stream and dispatch speech events."""
+            nonlocal audio_buffer, device_id, conversation_id
+            nonlocal input_sample_rate, processing_task
+
+            try:
+                async for audio_input in request_iterator:
+                    device_id = audio_input.device_id
+                    conversation_id = audio_input.conversation_id
+                    input_sample_rate = audio_input.sample_rate or 48000
+
+                    pcm_data = self._extract_audio(audio_input)
+                    event = audio_input.event
+
+                    if event == naila_pb2.SPEECH_EVENT_START:
+                        audio_buffer.clear()
+                        if pcm_data:
+                            audio_buffer.extend(pcm_data)
+                        logger.debug(
+                            "speech_start",
+                            device_id=device_id,
+                            conversation_id=conversation_id,
+                        )
+
+                    elif event == naila_pb2.SPEECH_EVENT_CONTINUE:
+                        if pcm_data:
+                            audio_buffer.extend(pcm_data)
+
+                    elif event == naila_pb2.SPEECH_EVENT_END:
+                        if pcm_data:
+                            audio_buffer.extend(pcm_data)
+
+                        duration_ms = _pcm_duration_ms(
+                            len(audio_buffer), input_sample_rate
+                        )
+                        logger.info(
+                            "speech_end",
+                            device_id=device_id,
+                            conversation_id=conversation_id,
+                            audio_bytes=len(audio_buffer),
+                            duration_ms=duration_ms,
+                        )
+
+                        # Cancel any prior processing before starting a new one
+                        if processing_task and not processing_task.done():
+                            processing_task.cancel()
+                            try:
+                                await processing_task
+                            except (asyncio.CancelledError, Exception):
+                                pass
+
+                        frozen_audio = bytes(audio_buffer)
+                        audio_buffer.clear()
+
+                        processing_task = asyncio.create_task(
+                            self._enqueue_utterance(
+                                output_queue,
+                                frozen_audio,
+                                input_sample_rate,
+                                device_id,
+                                conversation_id,
+                            )
+                        )
+
+                    elif event == naila_pb2.SPEECH_EVENT_INTERRUPT:
+                        logger.info(
+                            "speech_interrupt",
+                            device_id=device_id,
+                            conversation_id=conversation_id,
+                        )
+                        if processing_task and not processing_task.done():
+                            processing_task.cancel()
+                            try:
+                                await processing_task
+                            except (asyncio.CancelledError, Exception):
+                                pass
+                            processing_task = None
+                        audio_buffer.clear()
+            finally:
+                # Wait for any in-flight processing to finish before closing
+                if processing_task and not processing_task.done():
+                    try:
+                        await processing_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                await output_queue.put(_SENTINEL)
+
+        reader_task = asyncio.create_task(_read_inputs())
+
         try:
-            async for audio_input in request_iterator:
-                device_id = audio_input.device_id
-                conversation_id = audio_input.conversation_id
-                input_sample_rate = audio_input.sample_rate or 48000
-
-                # Extract PCM audio from oneof
-                pcm_data = self._extract_audio(audio_input)
-
-                event = audio_input.event
-
-                if event == naila_pb2.SPEECH_EVENT_START:
-                    audio_buffer.clear()
-                    if pcm_data:
-                        audio_buffer.extend(pcm_data)
-                    logger.debug(
-                        "speech_start",
-                        device_id=device_id,
-                        conversation_id=conversation_id,
-                    )
-
-                elif event == naila_pb2.SPEECH_EVENT_CONTINUE:
-                    if pcm_data:
-                        audio_buffer.extend(pcm_data)
-
-                elif event == naila_pb2.SPEECH_EVENT_END:
-                    if pcm_data:
-                        audio_buffer.extend(pcm_data)
-
-                    duration_ms = _pcm_duration_ms(
-                        len(audio_buffer), input_sample_rate
-                    )
-                    logger.info(
-                        "speech_end",
-                        device_id=device_id,
-                        conversation_id=conversation_id,
-                        audio_bytes=len(audio_buffer),
-                        duration_ms=duration_ms,
-                    )
-
-                    # Process the complete utterance
-                    async for output in self._process_utterance(
-                        bytes(audio_buffer),
-                        input_sample_rate,
-                        device_id,
-                        conversation_id,
-                    ):
-                        yield output
-
-                    audio_buffer.clear()
-
-                elif event == naila_pb2.SPEECH_EVENT_INTERRUPT:
-                    logger.info(
-                        "speech_interrupt",
-                        device_id=device_id,
-                        conversation_id=conversation_id,
-                    )
-                    if processing_task and not processing_task.done():
-                        processing_task.cancel()
-                    audio_buffer.clear()
-
+            while True:
+                item = await output_queue.get()
+                if item is _SENTINEL:
+                    break
+                yield item
         except asyncio.CancelledError:
             logger.info("stream_cancelled", device_id=device_id)
+            reader_task.cancel()
         except Exception as e:
             logger.error(
                 "stream_error",
@@ -141,12 +181,36 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                 error=str(e),
                 error_type=type(e).__name__,
             )
+            reader_task.cancel()
         finally:
+            if not reader_task.done():
+                reader_task.cancel()
+                try:
+                    await reader_task
+                except (asyncio.CancelledError, Exception):
+                    pass
             logger.info(
                 "stream_closed",
                 device_id=device_id,
                 conversation_id=conversation_id,
             )
+
+    async def _enqueue_utterance(
+        self,
+        queue: asyncio.Queue,
+        pcm_bytes: bytes,
+        sample_rate: int,
+        device_id: str,
+        conversation_id: str,
+    ):
+        """Run the utterance pipeline and push results onto *queue*.
+
+        Designed to run as an asyncio.Task so it can be cancelled on interrupt.
+        """
+        async for output in self._process_utterance(
+            pcm_bytes, sample_rate, device_id, conversation_id,
+        ):
+            await queue.put(output)
 
     async def _process_utterance(
         self,

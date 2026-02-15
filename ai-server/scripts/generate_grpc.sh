@@ -23,7 +23,17 @@ python -m grpc_tools.protoc \
 
 # Fix generated import: naila_pb2_grpc.py imports naila_pb2 absolutely,
 # but we need a relative import since it's inside a package.
-sed -i 's/^import naila_pb2 as naila__pb2$/from . import naila_pb2 as naila__pb2/' "$OUT_DIR/naila_pb2_grpc.py"
+# Uses Python instead of sed -i for macOS/Linux portability.
+python -c "
+import pathlib, re
+p = pathlib.Path('$OUT_DIR/naila_pb2_grpc.py')
+p.write_text(re.sub(
+    r'^import naila_pb2 as naila__pb2$',
+    'from . import naila_pb2 as naila__pb2',
+    p.read_text(),
+    flags=re.MULTILINE,
+))
+"
 
 echo "Done. Generated files:"
 ls -la "$OUT_DIR"/naila_pb2*.py

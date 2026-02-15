@@ -33,7 +33,7 @@ class GRPCServer:
             logger.warning("grpc_server_already_running")
             return
 
-        self._server = grpc.aio.server()
+        self._server = grpc.aio.server(maximum_concurrent_rpcs=self.config.max_workers)
         naila_pb2_grpc.add_NailaAIServicer_to_server(self.servicer, self._server)
         self._server.add_insecure_port(self.config.address)
 
