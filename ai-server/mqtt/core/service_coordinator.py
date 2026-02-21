@@ -193,8 +193,8 @@ class NailaMQTTService:
             
             # Performance
             "handlers_registered": routing_stats["handlers_registered"],
-            "cache_size": routing_stats["cache_size"],
-            "cache_hit_rate": routing_stats["cache_hit_rate"],
+            "cache_size": routing_stats["handler_cache_size"],
+            "cache_hit_rate": routing_stats["handler_cache_hit_rate"],
             
             # Publishing
             "publish_count": publish_stats["publish_count"],

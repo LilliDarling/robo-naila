@@ -5,9 +5,12 @@ from pathlib import Path
 
 
 # Model Configuration
-MODEL_PATH = os.getenv("STT_MODEL_PATH", "models/stt/ggml-small.en.bin")
+# MODEL_PATH accepts either a model size string (e.g. "small.en") which downloads
+# the CTranslate2 model from HuggingFace, or a path to a local CTranslate2 model
+# directory. GGML format files (whisper.cpp) are NOT supported by faster_whisper.
+MODEL_PATH = os.getenv("STT_MODEL_PATH", "small.en")
+MODEL_DOWNLOAD_ROOT = os.getenv("STT_MODEL_DOWNLOAD_ROOT", "models/stt")
 LANGUAGE = os.getenv("STT_LANGUAGE", "en")
-MODEL_SIZE = "small.en"  # Whisper model size
 
 # Transcription Parameters
 BEAM_SIZE = int(os.getenv("STT_BEAM_SIZE", "5"))
@@ -16,7 +19,8 @@ TEMPERATURE = float(os.getenv("STT_TEMPERATURE", "0.0"))  # 0 = deterministic
 PATIENCE = float(os.getenv("STT_PATIENCE", "1.0"))
 
 # Hardware Configuration
-COMPUTE_TYPE = os.getenv("STT_COMPUTE_TYPE", "int8")  # float16, int8, float32
+# Use float16 for better accuracy on Metal/GPU, int8 for CPU
+COMPUTE_TYPE = os.getenv("STT_COMPUTE_TYPE", "float16")  # float16, int8, float32
 DEVICE = os.getenv("STT_DEVICE", "auto")  # cpu, cuda, auto
 THREADS = int(os.getenv("STT_THREADS", "0"))  # 0 = auto-detect
 GPU_LAYERS = int(os.getenv("STT_GPU_LAYERS", "-1"))  # -1 = auto

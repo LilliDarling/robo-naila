@@ -49,8 +49,8 @@ class BaseAIService(ABC):
             return True
 
         try:
-            # Verify model file exists
-            if not self.model_path.exists():
+            # Verify model path is valid
+            if not self._validate_model_path():
                 logger.error("model_file_not_found", model_path=str(self.model_path))
                 return False
 
@@ -112,6 +112,14 @@ class BaseAIService(ABC):
     def _log_configuration(self):
         """Log model-specific configuration after successful load"""
         pass
+
+    def _validate_model_path(self) -> bool:
+        """Check whether the model path is valid.
+
+        Subclasses can override this for models that accept non-filesystem
+        identifiers (e.g. HuggingFace model size strings).
+        """
+        return self.model_path.exists()
 
     def _detect_hardware(self) -> Dict:
         """Detect hardware capabilities

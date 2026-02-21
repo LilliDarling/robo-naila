@@ -1,6 +1,9 @@
 from config.mqtt import MQTTConfig
+from config.grpc import GRPCConfig
 from mqtt.core.service_coordinator import NailaMQTTService
 from mqtt.handlers.coordinator import ProtocolHandler
+from rpc.server import GRPCServer
+from rpc.service import NailaAIServicer
 from services.llm import LLMService
 from services.stt import STTService
 from services.tts import TTSService
@@ -21,6 +24,11 @@ class NailaAIServer:
         self.mqtt_service = NailaMQTTService(self.config)
         self.protocol_handlers = ProtocolHandler(self.mqtt_service)
 
+        # Initialize gRPC components
+        self.grpc_config = GRPCConfig.from_env()
+        self.grpc_servicer = NailaAIServicer()
+        self.grpc_server = GRPCServer(self.grpc_config, self.grpc_servicer)
+
         # Initialize AI services
         self.llm_service = LLMService()
         self.stt_service = STTService()
@@ -34,7 +42,9 @@ class NailaAIServer:
             self.llm_service,
             self.stt_service,
             self.tts_service,
-            self.vision_service
+            self.vision_service,
+            grpc_server=self.grpc_server,
+            grpc_servicer=self.grpc_servicer,
         )
     
     async def start(self):

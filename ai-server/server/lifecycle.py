@@ -18,6 +18,7 @@ class StartupStage(Enum):
     LOAD_AI_MODELS = "Loading AI models"
     REGISTER_HANDLERS = "Registering protocol handlers"
     START_MQTT = "Starting MQTT service"
+    START_GRPC = "Starting gRPC server"
     START_HEALTH_MONITORING = "Starting health monitoring"
     PUBLISH_STATUS = "Publishing initial system status"
 
@@ -25,6 +26,7 @@ class StartupStage(Enum):
 class ShutdownStage(Enum):
     """Descriptive shutdown stages for graceful termination"""
     STOP_HEALTH_MONITORING = "Stopping health monitoring"
+    STOP_GRPC = "Stopping gRPC server"
     STOP_MQTT = "Stopping MQTT service"
     UNLOAD_AI_MODELS = "Unloading AI models"
 
@@ -32,9 +34,11 @@ class ShutdownStage(Enum):
 class ServerLifecycleManager:
     """Manages server startup, shutdown, and lifecycle events"""
 
-    def __init__(self, mqtt_service, protocol_handlers, llm_service=None, stt_service=None, tts_service=None, vision_service=None):
+    def __init__(self, mqtt_service, protocol_handlers, llm_service=None, stt_service=None, tts_service=None, vision_service=None, grpc_server=None, grpc_servicer=None):
         self.mqtt_service = mqtt_service
         self.protocol_handlers = protocol_handlers
+        self.grpc_server = grpc_server
+        self.grpc_servicer = grpc_servicer
         self.ai_model_manager = AIModelManager(llm_service, stt_service, tts_service, vision_service)
         self.health_monitor = HealthMonitor(mqtt_service, protocol_handlers, self.ai_model_manager)
 
@@ -70,12 +74,18 @@ class ServerLifecycleManager:
 
             if llm_service := self.ai_model_manager.get_llm_service():
                 self.protocol_handlers.set_llm_service(llm_service)
+                if self.grpc_servicer:
+                    self.grpc_servicer.set_llm_service(llm_service)
 
             if stt_service := self.ai_model_manager.get_stt_service():
                 self.protocol_handlers.set_stt_service(stt_service)
+                if self.grpc_servicer:
+                    self.grpc_servicer.set_stt_service(stt_service)
 
             if tts_service := self.ai_model_manager.get_tts_service():
                 self.protocol_handlers.set_tts_service(tts_service)
+                if self.grpc_servicer:
+                    self.grpc_servicer.set_tts_service(tts_service)
 
             if vision_service := self.ai_model_manager.get_vision_service():
                 self.protocol_handlers.set_vision_service(vision_service)
@@ -89,6 +99,12 @@ class ServerLifecycleManager:
             logger.info("startup_stage", stage=StartupStage.START_MQTT.value)
             await self.mqtt_service.start()
             logger.info("mqtt_service_ready")
+
+            # Stage: Start gRPC server
+            if self.grpc_server:
+                logger.info("startup_stage", stage=StartupStage.START_GRPC.value)
+                await self.grpc_server.start()
+                logger.info("grpc_server_ready", address=self.grpc_server.config.address)
 
             # Stage: Start health monitoring
             logger.info("startup_stage", stage=StartupStage.START_HEALTH_MONITORING.value)
@@ -106,6 +122,8 @@ class ServerLifecycleManager:
             logger.info("server_online_banner", separator="=" * 60)
             logger.info("server_online")
             logger.info("mqtt_connected", broker_host=self.mqtt_service.config.broker_host, broker_port=self.mqtt_service.config.broker_port)
+            if self.grpc_server and self.grpc_server.is_running():
+                logger.info("grpc_listening", address=self.grpc_server.config.address)
             logger.info("handlers_ready", topic_count=len(self.mqtt_service.event_handlers))
             logger.info("ready_for_connections")
             logger.info("server_online_banner_end", separator="=" * 60)
@@ -220,6 +238,11 @@ class ServerLifecycleManager:
             logger.info("shutdown_stage", stage=ShutdownStage.STOP_HEALTH_MONITORING.value)
             await self.health_monitor.stop_monitoring()
 
+            # Stage: Stop gRPC server
+            if self.grpc_server and self.grpc_server.is_running():
+                logger.info("shutdown_stage", stage=ShutdownStage.STOP_GRPC.value)
+                await self.grpc_server.stop()
+
             # Stage: Stop MQTT service
             logger.info("shutdown_stage", stage=ShutdownStage.STOP_MQTT.value)
             await self.mqtt_service.stop()
@@ -259,6 +282,9 @@ class ServerLifecycleManager:
 
         # Force stop everything
         self._running = False
+        if self.grpc_server:
+            with contextlib.suppress(Exception):
+                await self.grpc_server.stop()
         with contextlib.suppress(Exception):
             await self.mqtt_service.stop()
     

@@ -139,7 +139,8 @@ class LLMService(BaseAIService):
         if llm_config.GPU_LAYERS != -1:
             return llm_config.GPU_LAYERS
         # Auto-detect: offload layers based on VRAM or device capabilities
-        if self.hardware_info and self.hardware_info.get('acceleration') in ['cuda', 'metal']:
+        # Check for both 'metal' and 'mps' as Apple Silicon reports as 'mps'
+        if self.hardware_info and self.hardware_info.get('acceleration') in ['cuda', 'metal', 'mps']:
             vram_gb = self.hardware_info.get('vram_gb')
             if vram_gb is not None:
                 # Heuristic: offload more layers for higher VRAM
