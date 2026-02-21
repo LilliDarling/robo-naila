@@ -70,7 +70,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         conversation_id = ""
         input_sample_rate = 48000
         processing_task: Optional[asyncio.Task] = None
-        output_queue: asyncio.Queue = asyncio.Queue()
+        output_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
         _SENTINEL = object()
 
         peer = context.peer()
@@ -137,6 +137,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                                 input_sample_rate,
                                 device_id,
                                 conversation_id,
+                                context,
                             )
                         )
 
@@ -202,14 +203,20 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         sample_rate: int,
         device_id: str,
         conversation_id: str,
+        context=None,
     ):
         """Run the utterance pipeline and push results onto *queue*.
 
         Designed to run as an asyncio.Task so it can be cancelled on interrupt.
+        Checks context.is_active() before each stage to avoid wasting compute
+        after a client disconnect.
         """
         async for output in self._process_utterance(
-            pcm_bytes, sample_rate, device_id, conversation_id,
+            pcm_bytes, sample_rate, device_id, conversation_id, context,
         ):
+            if context and not context.is_active():
+                logger.info("client_disconnected_during_enqueue", device_id=device_id)
+                return
             await queue.put(output)
 
     async def _process_utterance(
@@ -218,10 +225,13 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         sample_rate: int,
         device_id: str,
         conversation_id: str,
+        context=None,
     ):
         """Run the STT -> LLM -> TTS pipeline on a complete utterance.
 
         Yields AudioOutput messages as an async generator.
+        Checks context.is_active() between pipeline stages to bail out
+        early if the client has disconnected.
         """
         # ── STT ──────────────────────────────────────────────────────────
         if not self.stt_service or not self.stt_service.is_ready:
@@ -263,6 +273,10 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
             duration_ms=stt_result.transcription_time_ms,
         )
 
+        if context and not context.is_active():
+            logger.info("client_disconnected_after_stt", device_id=device_id)
+            return
+
         # ── LLM ──────────────────────────────────────────────────────────
         if not self.llm_service or not self.llm_service.is_ready:
             logger.error("llm_service_not_available")
@@ -298,6 +312,10 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
             device_id=device_id,
             response_length=len(response_text),
         )
+
+        if context and not context.is_active():
+            logger.info("client_disconnected_after_llm", device_id=device_id)
+            return
 
         # ── TTS ──────────────────────────────────────────────────────────
         if not self.tts_service or not self.tts_service.is_ready:
@@ -338,10 +356,17 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
             duration_ms=tts_result.duration_ms,
         )
 
+        if context and not context.is_active():
+            logger.info("client_disconnected_after_tts", device_id=device_id)
+            return
+
         # ── Stream TTS audio back in chunks ──────────────────────────────
         audio_bytes = tts_result.audio_bytes
         tts_sample_rate = tts_result.sample_rate
         for sequence, offset in enumerate(range(0, len(audio_bytes), TTS_CHUNK_BYTES)):
+            if context and not context.is_active():
+                logger.info("client_disconnected_during_tts_stream", device_id=device_id)
+                return
             chunk = audio_bytes[offset : offset + TTS_CHUNK_BYTES]
             is_last = offset + TTS_CHUNK_BYTES >= len(audio_bytes)
 

@@ -33,9 +33,11 @@ class GRPCServer:
             logger.warning("grpc_server_already_running")
             return
 
-        self._server = grpc.aio.server(maximum_concurrent_rpcs=self.config.max_workers)
+        self._server = grpc.aio.server(maximum_concurrent_rpcs=self.config.max_concurrent_streams)
         naila_pb2_grpc.add_NailaAIServicer_to_server(self.servicer, self._server)
-        self._server.add_insecure_port(self.config.address)
+        port = self._server.add_insecure_port(self.config.address)
+        if port == 0:
+            raise RuntimeError(f"Failed to bind gRPC server to {self.config.address}")
 
         await self._server.start()
         self._running = True

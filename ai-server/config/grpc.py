@@ -8,7 +8,7 @@ from dataclasses import dataclass
 class GRPCConfig:
     host: str = "0.0.0.0"
     port: int = 50051
-    max_workers: int = 4
+    max_concurrent_streams: int = 4
 
     @classmethod
     def from_env(cls):
@@ -18,8 +18,8 @@ class GRPCConfig:
             kwargs["host"] = host
         if port := os.getenv("GRPC_PORT"):
             kwargs["port"] = int(port)
-        if max_workers := os.getenv("GRPC_MAX_WORKERS"):
-            kwargs["max_workers"] = int(max_workers)
+        if max_concurrent_streams := os.getenv("GRPC_MAX_CONCURRENT_STREAMS"):
+            kwargs["max_concurrent_streams"] = int(max_concurrent_streams)
 
         return cls(**kwargs)
 
