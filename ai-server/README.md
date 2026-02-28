@@ -60,16 +60,36 @@ These instructions assume you have `uv` installed. If not, follow the `uv` insta
     cd robo_naila/ai-server
     ```
 
-2.  **Create and activate a Python virtual environment:**
-    It's highly recommended to use a virtual environment to manage dependencies for the server.
+2.  **Install system dependencies:**
+    The TTS service requires `ffmpeg` for audio format conversion:
     ```bash
-    uv venv
+    # macOS
+    brew install ffmpeg
+
+    # Ubuntu/Debian
+    sudo apt install ffmpeg
+    ```
+
+3.  **Create and activate a Python virtual environment:**
+    It's highly recommended to use a virtual environment to manage dependencies for the server.
+
+    > **Note:** Python 3.13 has known compatibility issues with `llama-cpp-python` (no prebuilt wheels, build failures on macOS). Use Python 3.12 for a smooth setup:
+
+    ```bash
+    uv venv --python 3.12
     source .venv/bin/activate # On Linux/macOS
     # Or for Windows: .\.venv\Scripts\activate
     ```
 
-3.  **Install Python dependencies:**
-    The default installation includes all hardware support and will auto-detect your setup:
+4.  **Install Python dependencies:**
+    The default installation includes all hardware support and will auto-detect your setup.
+
+    On macOS with Apple Silicon, enable Metal acceleration:
+    ```bash
+    CMAKE_ARGS="-DGGML_METAL=on" uv sync
+    ```
+
+    On other platforms:
     ```bash
     uv sync
     ```
@@ -89,7 +109,7 @@ uv run pip install torch torchvision --index-url https://download.pytorch.org/wh
 
 **Note:** The server will work without this step - CUDA optimization is optional for maximum performance.
 
-4.  **Download AI Models:**
+5.  **Download AI Models:**
     The AI services rely on large pre-trained models. You will need to manually download these into the `models/` subdirectory.
 
     * **Whisper (STT) - via `faster-whisper`:**
@@ -119,7 +139,7 @@ uv run pip install torch torchvision --index-url https://download.pytorch.org/wh
 
     * **Important:** Update `config.py` to correctly point to the paths of your downloaded models.
 
-5.  **Configure `config.py`:**
+6.  **Configure `config.py`:**
     Open `config.py` and adjust any settings as needed, such as:
     * `MQTT_BROKER_HOST`: The IP address of the MQTT broker (often `localhost` if running on the same machine as the server, or the server's LAN IP).
     * `MQTT_BROKER_PORT`: The port for the MQTT broker (default is usually `1883`).
