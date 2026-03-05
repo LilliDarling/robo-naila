@@ -82,34 +82,48 @@ These instructions assume you have `uv` installed. If not, follow the `uv` insta
     ```
 
 4.  **Install Python dependencies:**
-    The default installation includes all hardware support and will auto-detect your setup.
-
-    On macOS with Apple Silicon, enable Metal acceleration:
-    ```bash
-    CMAKE_ARGS="-DGGML_METAL=on" uv sync
-    ```
-
-    On other platforms:
     ```bash
     uv sync
     ```
 
-### **Optional: CUDA GPU Optimization**
+5.  **Enable GPU acceleration for LLM inference:**
 
-For **maximum GPU performance**, CUDA users can optionally install CUDA-optimized PyTorch:
+    The `llama-cpp-python` pip wheel ships **CPU-only** by default. Without this step the LLM will run on CPU (~2 tok/s instead of 20-40+ tok/s on GPU). You **must** rebuild it with the correct backend for your hardware.
 
-```bash
-# After basic installation, upgrade to CUDA-optimized version
-uv run pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+    **Verify current status:**
+    ```bash
+    uv run python -c "import llama_cpp; print(llama_cpp.llama_supports_gpu_offload())"
+    ```
+    If this prints `False`, follow the steps below for your platform.
 
-# Or for different CUDA versions:
-# CUDA 11.8: https://download.pytorch.org/whl/cu118
-# CUDA 12.1: https://download.pytorch.org/whl/cu121
-```
+    **Linux / WSL with NVIDIA GPU (CUDA):**
+    ```bash
+    # Prerequisite: CUDA Toolkit must be installed (check with: nvcc --version)
+    # Install: https://developer.nvidia.com/cuda-toolkit
+    CMAKE_ARGS="-DGGML_CUDA=on" uv pip install llama-cpp-python --no-binary llama-cpp-python --force-reinstall --no-cache-dir
+    ```
 
-**Note:** The server will work without this step - CUDA optimization is optional for maximum performance.
+    **macOS with Apple Silicon (Metal):**
+    ```bash
+    CMAKE_ARGS="-DGGML_METAL=on" uv pip install llama-cpp-python --no-binary llama-cpp-python --force-reinstall --no-cache-dir
+    ```
 
-5.  **Download AI Models:**
+    **Windows with NVIDIA GPU (CUDA):**
+    ```bash
+    # Prerequisite: CUDA Toolkit + Visual Studio Build Tools must be installed
+    set CMAKE_ARGS=-DGGML_CUDA=on
+    uv pip install llama-cpp-python --no-binary llama-cpp-python --force-reinstall --no-cache-dir
+    ```
+
+    The build takes a few minutes (compiling from source). After installation, re-run the verify command above — it should print `True`.
+
+    **Optional: CUDA-optimized PyTorch** (for STT/Vision GPU acceleration):
+    ```bash
+    uv run pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+    # CUDA 11.8: use cu118 instead of cu121
+    ```
+
+6.  **Download AI Models:**
     The AI services rely on large pre-trained models. You will need to manually download these into the `models/` subdirectory.
 
     * **Whisper (STT) - via `faster-whisper`:**
@@ -139,7 +153,7 @@ uv run pip install torch torchvision --index-url https://download.pytorch.org/wh
 
     * **Important:** Update `config.py` to correctly point to the paths of your downloaded models.
 
-6.  **Configure `config.py`:**
+7.  **Configure `config.py`:**
     Open `config.py` and adjust any settings as needed, such as:
     * `MQTT_BROKER_HOST`: The IP address of the MQTT broker (often `localhost` if running on the same machine as the server, or the server's LAN IP).
     * `MQTT_BROKER_PORT`: The port for the MQTT broker (default is usually `1883`).

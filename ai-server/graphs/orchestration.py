@@ -1,8 +1,9 @@
 """Main orchestration graph for NAILA using LangGraph"""
 
 from datetime import datetime
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 from langgraph.graph import StateGraph, END
+from langchain_core.runnables import RunnableConfig
 from graphs.states import NAILAState
 from agents.input_processor import InputProcessor
 from agents.response_generator import ResponseGenerator
@@ -57,15 +58,14 @@ class NAILAOrchestrationGraph:
             return state
 
         try:
-            # Extract and immediately remove image data from state to free memory
-            image_data = state.pop("image_data")
+            image_data = state.get("image_data")
             query = state.get("processed_text")
 
             # Analyze scene once (this performs the expensive YOLOv8 inference)
             scene = await self.vision_service.analyze_scene(image_data, query=query)
 
-            # Release image bytes immediately after processing
-            del image_data
+            # Clear image data from state to free memory
+            state["image_data"] = None
 
             # Serialize scene to visual context
             state["visual_context"] = scene.to_dict()
@@ -79,8 +79,7 @@ class NAILAOrchestrationGraph:
         except Exception as e:
             logger.error("vision_processing_error", error=str(e), error_type=type(e).__name__)
             state.setdefault("errors", []).append(f"Vision processing failed: {str(e)}")
-            # Ensure image data is removed even on error
-            state.pop("image_data", None)
+            state["image_data"] = None
         return state
 
     async def _retrieve_context(self, state: Dict[str, Any]) -> Dict[str, Any]:
@@ -123,10 +122,10 @@ class NAILAOrchestrationGraph:
             state.setdefault("errors", []).append(str(e))
             return state
 
-    async def _generate_response(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate response node"""
+    async def _generate_response(self, state: Dict[str, Any], config: RunnableConfig = None) -> Dict[str, Any]:
+        """Generate response node — passes LangGraph config through for transport callbacks"""
         try:
-            return await self.response_generator.process(state)
+            return await self.response_generator.process(state, config=config)
         except Exception as e:
             logger.error("response_generation_error", error=str(e), error_type=type(e).__name__)
             state.setdefault("errors", []).append(str(e))
@@ -139,8 +138,8 @@ class NAILAOrchestrationGraph:
 
         return state
     
-    async def run(self, initial_state: Dict[str, Any]) -> Dict[str, Any]:
-        """Run the orchestration graph"""
+    async def run(self, initial_state: Dict[str, Any], config: Optional[dict] = None) -> Dict[str, Any]:
+        """Run the orchestration graph with optional transport config"""
         logger.info("starting_orchestration", task_id=initial_state.get('task_id'))
 
         # Ensure required fields
@@ -149,8 +148,8 @@ class NAILAOrchestrationGraph:
         initial_state.setdefault("errors", [])
         initial_state.setdefault("confidence", 1.0)
 
-        # Run the graph
-        result = await self.app.ainvoke(initial_state)
+        # Run the graph — config carries transport callbacks (e.g. audio_delivery for gRPC)
+        result = await self.app.ainvoke(initial_state, config=config)
 
         if result.get("errors"):
             logger.warning("orchestration_completed_with_errors", errors=result['errors'])

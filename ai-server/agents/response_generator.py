@@ -17,10 +17,19 @@ class ResponseGenerator(BaseAgent):
         self.llm_service = llm_service
         self.tts_service = tts_service
     
-    async def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate context-aware response"""
+    async def process(self, state: Dict[str, Any], config: dict = None) -> Dict[str, Any]:
+        """Generate context-aware response
+
+        Args:
+            state: LangGraph state dict
+            config: Optional LangGraph RunnableConfig. May contain
+                config["configurable"]["audio_delivery"] callback and
+                config["configurable"]["transport"] ("grpc" or "mqtt").
+        """
         start_time = time.time()
         self.log_state(state, "generating")
+
+        configurable = config.get("configurable", {}) if config else {}
 
         intent = state.get("intent", "general")
         processed_text = state.get("processed_text", "")
@@ -62,10 +71,24 @@ class ResponseGenerator(BaseAgent):
         state["conversation_history"] = conversation_history[-10:]  # Keep last 10
         state["response_metadata"] = response_metadata
 
-        # Synthesize audio response if TTS is available
-        if self.tts_service and self.tts_service.is_ready:
+        # Synthesize audio only when needed:
+        # - gRPC transport: always (audio is the primary output)
+        # - MQTT with audio input: yes (device sent audio, expects audio back)
+        # - MQTT with text input: skip (text-only round trip, no need to wait for TTS)
+        needs_audio = (
+            configurable.get("transport") == "grpc"
+            or state.get("input_type") == "audio"
+        )
+
+        if needs_audio and self.tts_service and self.tts_service.is_ready:
             try:
-                audio_data = await self.tts_service.synthesize(response)
+                output_format = "raw" if configurable.get("transport") == "grpc" else None
+                audio_data = await self.tts_service.synthesize(response, output_format=output_format)
+
+                audio_delivery = configurable.get("audio_delivery")
+                if audio_delivery:
+                    await audio_delivery(audio_data, response, is_final=True)
+
                 state["response_audio"] = audio_data
                 self.logger.debug(
                     "audio_synthesized",
@@ -143,11 +166,18 @@ class ResponseGenerator(BaseAgent):
         self,
         query: str,
         history: List[Dict],
-        timeout: float = 10.0,
-        max_retries: int = 3,
+        timeout: float = 120.0,
+        max_retries: int = 2,
         visual_context: Optional[Dict[str, Any]] = None
     ) -> str:
-        """Generate response using LLM with timeout and retry logic"""
+        """Generate response using LLM with timeout and retry logic.
+
+        NOTE: Timeouts are NOT retried. asyncio.wait_for cannot cancel a
+        run_in_executor call — the C++ inference keeps running on the
+        thread pool. Retrying would start a second concurrent call to
+        the same non-thread-safe Llama model, causing GGML assertion
+        crashes. Only non-timeout errors (e.g. OOM) are retried.
+        """
         if not self.llm_service or not self.llm_service.is_ready:
             return ""
 
@@ -169,9 +199,11 @@ class ResponseGenerator(BaseAgent):
                     self.llm_service.generate_chat(messages),
                     timeout=timeout,
                 )
-            except asyncio.TimeoutError as e:
-                last_exception = e
-                self.logger.warning("llm_timeout", attempt=attempt, max_retries=max_retries)
+            except asyncio.TimeoutError:
+                # Do NOT retry — the executor thread is still running
+                # inference. A retry would cause concurrent model access.
+                self.logger.error("llm_timeout", timeout_seconds=timeout)
+                return ""
             except Exception as e:
                 last_exception = e
                 self.logger.warning(
@@ -181,7 +213,6 @@ class ResponseGenerator(BaseAgent):
                     error=str(last_exception),
                     error_type=type(last_exception).__name__
                 )
-        # If all retries fail, log the final failure
         self.logger.error("llm_failed_all_retries", max_retries=max_retries, error=str(last_exception), error_type=type(last_exception).__name__)
         return ""
 

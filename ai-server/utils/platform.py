@@ -11,57 +11,44 @@ logger = get_logger(__name__)
 
 
 class CrossPlatformSignalHandler:
-    """Cross-platform signal handling for graceful shutdown"""
-    
-    def __init__(self, shutdown_callback: Callable):
-        self.shutdown_callback = shutdown_callback
+    """Cross-platform signal handling for graceful shutdown.
+
+    Sets an asyncio.Event when a termination signal is received so the
+    main coroutine can perform an orderly shutdown.  Does NOT create a
+    background task — the caller awaits the event and runs cleanup
+    sequentially, avoiding races with asyncio.run() cancellation.
+    """
+
+    def __init__(self):
+        self.shutdown_event = asyncio.Event()
         self._shutdown_initiated = False
-        
+
     def setup_signals(self):
         """Setup signal handlers with platform-specific support"""
         try:
-            if sys.platform == 'win32':
-                # Windows support
-                signal.signal(signal.SIGINT, self._signal_handler)
-                signal.signal(signal.SIGTERM, self._signal_handler)
-                logger.debug("signal_handlers_configured", platform="windows", signals="SIGINT, SIGTERM")
-            else:
-                # Unix-like systems (Linux, macOS)
-                signal.signal(signal.SIGINT, self._signal_handler)
-                signal.signal(signal.SIGTERM, self._signal_handler)
-                if hasattr(signal, 'SIGHUP'):
-                    signal.signal(signal.SIGHUP, self._signal_handler)
-                logger.debug("signal_handlers_configured", platform="unix", signals="SIGINT, SIGTERM, SIGHUP")
-
+            signals = [signal.SIGINT, signal.SIGTERM]
+            if hasattr(signal, 'SIGHUP'):
+                signals.append(signal.SIGHUP)
+            for sig in signals:
+                signal.signal(sig, self._signal_handler)
+            logger.debug("signal_handlers_configured", signals=[s.name for s in signals])
         except Exception as e:
             logger.warning("signal_handler_setup_failed", error=str(e), error_type=type(e).__name__)
-    
+
     def _signal_handler(self, signum: int, frame):
         """Handle shutdown signals across platforms"""
         if self._shutdown_initiated:
-            logger.warning("Force shutdown signal received")
+            logger.warning("force_shutdown_signal_received")
             sys.exit(1)
-        
-        signal_names = {
-            signal.SIGINT: "SIGINT",
-            signal.SIGTERM: "SIGTERM",
-        }
+
+        signal_names = {signal.SIGINT: "SIGINT", signal.SIGTERM: "SIGTERM"}
         if hasattr(signal, 'SIGHUP'):
             signal_names[signal.SIGHUP] = "SIGHUP"
-        
+
         signal_name = signal_names.get(signum, f"Signal {signum}")
         logger.info("shutdown_signal_received", signal=signal_name, action="graceful_shutdown")
-
         self._shutdown_initiated = True
-        
-        # Schedule shutdown in the event loop
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self.shutdown_callback())
-        except RuntimeError:
-            # No running loop, exit immediately
-            logger.info("No event loop available, exiting immediately")
-            sys.exit(0)
+        self.shutdown_event.set()
 
 
 def get_platform_info() -> dict:
