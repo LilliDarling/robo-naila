@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from mqtt.core.service_coordinator import NailaMQTTService
 from .device_handlers import DeviceHandlers
 from .ai_handlers import AIHandlers
@@ -8,12 +8,12 @@ from .system_handlers import SystemHandlers
 class ProtocolHandler:
     """Coordinates all MQTT protocol handlers - clean, focused entry point"""
 
-    def __init__(self, mqtt_service: NailaMQTTService):
+    def __init__(self, mqtt_service: NailaMQTTService, orchestrator=None):
         self.mqtt_service = mqtt_service
 
         # Initialize specialized handler modules
         self.device_handlers = DeviceHandlers(mqtt_service)
-        self.ai_handlers = AIHandlers(mqtt_service)
+        self.ai_handlers = AIHandlers(mqtt_service, orchestrator=orchestrator)
         self.system_handlers = SystemHandlers(mqtt_service)
 
     def set_llm_service(self, llm_service):

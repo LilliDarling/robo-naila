@@ -22,11 +22,14 @@ async def main():
     try:
         server = NailaAIServer()
 
-        # Setup cross-platform signal handling
-        signal_handler = CrossPlatformSignalHandler(server.stop)
+        # Setup cross-platform signal handling — sets an event on SIGINT/SIGTERM
+        signal_handler = CrossPlatformSignalHandler()
         signal_handler.setup_signals()
 
-        # Start server
+        # Wire signal event into the server's lifecycle so _main_loop breaks
+        server.lifecycle._shutdown_event = signal_handler.shutdown_event
+
+        # Start server (blocks in _main_loop until shutdown_event is set)
         await server.start()
 
     except KeyboardInterrupt:
@@ -35,8 +38,8 @@ async def main():
         logger.error("critical_server_error", error=str(e), error_type=type(e).__name__)
         sys.exit(1)
     finally:
-        # Ensure cleanup
-        if server and server.is_running():
+        # Run shutdown sequentially — no background task race
+        if server:
             try:
                 await server.stop()
             except Exception as e:

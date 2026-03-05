@@ -14,16 +14,17 @@ class NailaMQTTService:
     def __init__(self, config: MQTTConfig):
         self.config = config
         self.logger = get_logger(__name__)
-        
+
         # Core components
         self.connection = MQTTConnectionManager(config)
         self.router = MessageRouter()
         self.publisher = MQTTPublisher(self.connection)
-        
+
         # Service state
         self._running = False
         self._shutdown_event = asyncio.Event()
-        
+        self._loop: asyncio.AbstractEventLoop | None = None
+
         # Setup message callback
         self.connection.set_message_callback(self._handle_message)
     
@@ -60,20 +61,20 @@ class NailaMQTTService:
         return self.register_handler([topic], handler)
     
     def _handle_message(self, topic: str, payload: str):
-        """Internal message handler - delegates to router"""
+        """Internal message handler - delegates to router.
+
+        Called from paho-mqtt's network thread, so we bridge into the
+        asyncio event loop with call_soon_threadsafe.
+        """
         try:
-            # Parse message using router
             message = self.router.parse_message(topic, payload)
             message.qos = self.config.qos
 
-            try:
-                loop = asyncio.get_running_loop()
-                if loop.is_running():
-                    loop.create_task(self.router.route_message(message))
-                else:
-                    self.logger.debug("event_loop_not_running", topic=topic, action="skipping_routing")
-            except RuntimeError:
-                # No event loop available - this can happen during startup/shutdown
+            if self._loop is not None and self._loop.is_running():
+                self._loop.call_soon_threadsafe(
+                    self._loop.create_task, self.router.route_message(message)
+                )
+            else:
                 self.logger.debug("no_event_loop", topic=topic, action="skipping_routing")
 
         except Exception as e:
@@ -110,6 +111,9 @@ class NailaMQTTService:
             return
 
         self.logger.info("mqtt_service_starting")
+
+        # Capture the asyncio event loop so paho-mqtt's thread can schedule work
+        self._loop = asyncio.get_running_loop()
 
         # Connect with retry logic
         await self.connection.connect()

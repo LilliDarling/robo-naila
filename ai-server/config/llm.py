@@ -9,9 +9,10 @@ MODEL_PATH = os.getenv("LLM_MODEL_PATH", "models/llm/Meta-Llama-3.1-8B-Instruct-
 MODEL_TYPE = "llama"  # Model architecture type
 
 # Context and Token Limits
-# Llama 3.1 8B supports up to 131k context, but using 32k for better performance/memory balance
-CONTEXT_SIZE = int(os.getenv("LLM_CONTEXT_SIZE", "32768"))
-MAX_TOKENS_PER_RESPONSE = int(os.getenv("LLM_MAX_TOKENS", "2048"))
+# 4096 is plenty for a conversational robot assistant (system prompt + history + response).
+# Larger contexts waste VRAM on KV cache and slow down inference significantly.
+CONTEXT_SIZE = int(os.getenv("LLM_CONTEXT_SIZE", "4096"))
+MAX_TOKENS_PER_RESPONSE = int(os.getenv("LLM_MAX_TOKENS", "256"))
 CONTEXT_HISTORY_LIMIT = int(os.getenv("LLM_CONTEXT_HISTORY_LIMIT", "5"))
 TOKEN_BUDGET_FOR_HISTORY = int(os.getenv("LLM_TOKEN_BUDGET_HISTORY", "2000"))
 

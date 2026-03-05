@@ -18,8 +18,9 @@ class NailaMQTTClient:
   def setup(self):
     """Initialize the MQTT Client"""
     self.client = mqtt.Client(
+      mqtt.CallbackAPIVersion.VERSION1,
       client_id=self.config.client_id,
-      clean_session=self.config.clean_session
+      clean_session=self.config.clean_session,
     )
 
     if self.config.username and self.config.password:

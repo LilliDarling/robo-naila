@@ -143,24 +143,26 @@ class LLMService(BaseAIService):
         if self.hardware_info and self.hardware_info.get('acceleration') in ['cuda', 'metal', 'mps']:
             vram_gb = self.hardware_info.get('vram_gb')
             if vram_gb is not None:
-                # Heuristic: offload more layers for higher VRAM
-                # Model-specific: Llama 3.1 8B typically has 32 layers
-                # For other models, this should be adjusted
-                estimated_layers = 32  # Default for Llama 3.1 8B
+                # Heuristic: offload layers based on VRAM.
+                # Q4_K_M 8B model ~4.6GB weights. With 4k context the KV
+                # cache is small (~256MB), so 8GB cards can fit all layers.
+                # Use rounded thresholds to avoid float precision issues
+                # (e.g. 8GB cards reporting 7.999GB).
+                vram_rounded = round(vram_gb)
 
-                if vram_gb >= 16:
+                if vram_rounded >= 8:
                     logger.info("gpu_acceleration_enabled", vram_gb=round(vram_gb, 1), mode="full", layers="all")
                     return -1  # All layers
-                elif vram_gb >= 8:
-                    layers = int(estimated_layers * 0.75)
+                elif vram_rounded >= 6:
+                    layers = 24
                     logger.info("gpu_acceleration_enabled", vram_gb=round(vram_gb, 1), mode="partial", layers=layers, percentage=75)
                     return layers
-                elif vram_gb >= 4:
-                    layers = int(estimated_layers * 0.5)
+                elif vram_rounded >= 4:
+                    layers = 16
                     logger.info("gpu_acceleration_enabled", vram_gb=round(vram_gb, 1), mode="partial", layers=layers, percentage=50)
                     return layers
                 else:
-                    layers = int(estimated_layers * 0.25)
+                    layers = 8
                     logger.info("gpu_acceleration_enabled", vram_gb=round(vram_gb, 1), mode="minimal", layers=layers, percentage=25)
                     return layers
             else:
