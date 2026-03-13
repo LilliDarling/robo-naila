@@ -48,7 +48,11 @@ class CrossPlatformSignalHandler:
         signal_name = signal_names.get(signum, f"Signal {signum}")
         logger.info("shutdown_signal_received", signal=signal_name, action="graceful_shutdown")
         self._shutdown_initiated = True
-        self.shutdown_event.set()
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon_threadsafe(self.shutdown_event.set)
+        except RuntimeError:
+            self.shutdown_event.set()
 
 
 def get_platform_info() -> dict:

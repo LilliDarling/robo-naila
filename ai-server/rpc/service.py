@@ -23,6 +23,9 @@ logger = get_logger(__name__)
 # TTS output chunking: ~100ms at 22050 Hz, 16-bit mono = 4410 bytes
 TTS_CHUNK_BYTES = 4410
 
+# Max audio buffer: ~60s of 16-bit mono at 48kHz = ~5.76 MB
+MAX_AUDIO_BUFFER_BYTES = 6 * 1024 * 1024
+
 
 def _pcm_to_wav(pcm_bytes: bytes, sample_rate: int, channels: int = 1, sample_width: int = 2) -> bytes:
     """Wrap raw PCM S16LE bytes in a WAV header for soundfile compatibility.
@@ -112,6 +115,14 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
 
                     elif event == naila_pb2.SPEECH_EVENT_CONTINUE:
                         if pcm_data:
+                            if len(audio_buffer) + len(pcm_data) > MAX_AUDIO_BUFFER_BYTES:
+                                logger.warning(
+                                    "audio_buffer_overflow",
+                                    device_id=device_id,
+                                    buffer_size=len(audio_buffer),
+                                )
+                                audio_buffer.clear()
+                                continue
                             audio_buffer.extend(pcm_data)
 
                     elif event == naila_pb2.SPEECH_EVENT_END:
@@ -326,7 +337,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         task_data = {
             "task_id": f"grpc_{conversation_id}_{int(time.time() * 1000)}",
             "device_id": device_id,
-            "input_type": "text",
+            "input_type": "audio",
             "transcription": transcription,
             "confidence": stt_result.confidence,
         }
