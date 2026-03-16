@@ -14,8 +14,13 @@ import time
 import wave
 from typing import Optional
 
+from typing import TYPE_CHECKING
+
 from rpc.generated import naila_pb2, naila_pb2_grpc
 from utils import get_logger
+
+if TYPE_CHECKING:
+    from agents.orchestrator import NAILAOrchestrator
 
 
 logger = get_logger(__name__)
@@ -60,7 +65,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
 
     def __init__(self):
         self.stt_service = None
-        self.orchestrator = None
+        self.orchestrator: Optional[NAILAOrchestrator] = None
 
     def set_stt_service(self, stt_service):
         self.stt_service = stt_service
@@ -119,9 +124,21 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                                 logger.warning(
                                     "audio_buffer_overflow",
                                     device_id=device_id,
+                                    conversation_id=conversation_id,
                                     buffer_size=len(audio_buffer),
+                                    incoming_size=len(pcm_data),
+                                    max_buffer_bytes=MAX_AUDIO_BUFFER_BYTES,
+                                    buffer_duration_ms=_pcm_duration_ms(
+                                        len(audio_buffer), input_sample_rate
+                                    ),
+                                    reason="buffer_limit_exceeded",
                                 )
                                 audio_buffer.clear()
+                                await output_queue.put(self._error_output(
+                                    device_id, conversation_id,
+                                    naila_pb2.ERROR_INTERNAL,
+                                    "Audio buffer limit exceeded, utterance discarded",
+                                ))
                                 continue
                             audio_buffer.extend(pcm_data)
 
@@ -309,13 +326,17 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
             )
             return
 
-        # Collect audio chunks produced by the graph's TTS delivery callback
-        audio_chunks: list[naila_pb2.AudioOutput] = []
+        # Stream TTS chunks to the client as they are produced instead of
+        # buffering the full response in memory.
+        _DONE = object()
+        tts_queue: asyncio.Queue = asyncio.Queue(maxsize=32)
+        audio_produced = False
 
         async def _grpc_audio_delivery(audio_data, text: str, is_final: bool = True):
             """Callback invoked by ResponseGenerator when TTS audio is ready.
 
-            Chunks the raw PCM into ~100ms AudioOutput messages for streaming.
+            Chunks the raw PCM into ~100ms AudioOutput messages and streams
+            them into an asyncio.Queue for immediate delivery to the client.
             """
             if not audio_data or not audio_data.audio_bytes:
                 return
@@ -324,7 +345,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
             for seq, offset in enumerate(range(0, len(raw_bytes), TTS_CHUNK_BYTES)):
                 chunk = raw_bytes[offset : offset + TTS_CHUNK_BYTES]
                 is_last = offset + TTS_CHUNK_BYTES >= len(raw_bytes)
-                audio_chunks.append(naila_pb2.AudioOutput(
+                await tts_queue.put(naila_pb2.AudioOutput(
                     device_id=device_id,
                     conversation_id=conversation_id,
                     audio_pcm=chunk,
@@ -342,29 +363,41 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
             "confidence": stt_result.confidence,
         }
 
-        try:
-            result = await self.orchestrator.process_task_with_callback(
-                task_data,
-                audio_delivery=_grpc_audio_delivery,
-                transport="grpc",
-            )
-        except Exception as e:
-            logger.error("orchestration_failed", error=str(e), error_type=type(e).__name__)
-            yield self._error_output(
-                device_id, conversation_id,
-                naila_pb2.ERROR_INTERNAL, str(e),
-            )
-            return
+        async def _run_orchestration():
+            try:
+                await self.orchestrator.process_task_with_callback(
+                    task_data,
+                    audio_delivery=_grpc_audio_delivery,
+                    transport="grpc",
+                )
+            except Exception as e:
+                logger.error("orchestration_failed", error=str(e), error_type=type(e).__name__)
+                await tts_queue.put(self._error_output(
+                    device_id, conversation_id,
+                    naila_pb2.ERROR_INTERNAL, str(e),
+                ))
+            finally:
+                await tts_queue.put(_DONE)
 
-        # Yield collected audio chunks
-        for chunk_msg in audio_chunks:
-            if context and not context.is_active():
-                logger.info("client_disconnected_during_tts_stream", device_id=device_id)
-                return
-            yield chunk_msg
+        orchestration_task = asyncio.create_task(_run_orchestration())
+
+        try:
+            while True:
+                item = await tts_queue.get()
+                if item is _DONE:
+                    break
+                if context and not context.is_active():
+                    logger.info("client_disconnected_during_tts_stream", device_id=device_id)
+                    orchestration_task.cancel()
+                    return
+                audio_produced = True
+                yield item
+        except asyncio.CancelledError:
+            orchestration_task.cancel()
+            raise
 
         # If no audio was produced (TTS unavailable), send text-only final
-        if not audio_chunks:
+        if not audio_produced:
             yield naila_pb2.AudioOutput(
                 device_id=device_id,
                 conversation_id=conversation_id,

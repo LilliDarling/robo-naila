@@ -25,15 +25,24 @@ class CrossPlatformSignalHandler:
 
     def setup_signals(self):
         """Setup signal handlers with platform-specific support"""
-        try:
-            signals = [signal.SIGINT, signal.SIGTERM]
-            if hasattr(signal, 'SIGHUP'):
-                signals.append(signal.SIGHUP)
-            for sig in signals:
+        signals = [signal.SIGINT, signal.SIGTERM]
+        if hasattr(signal, 'SIGHUP'):
+            signals.append(signal.SIGHUP)
+
+        registered = []
+        for sig in signals:
+            try:
                 signal.signal(sig, self._signal_handler)
-            logger.debug("signal_handlers_configured", signals=[s.name for s in signals])
-        except Exception as e:
-            logger.warning("signal_handler_setup_failed", error=str(e), error_type=type(e).__name__)
+                registered.append(sig)
+            except Exception as e:
+                logger.warning(
+                    "signal_registration_failed",
+                    signal=sig.name,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+        if registered:
+            logger.debug("signal_handlers_configured", signals=[s.name for s in registered])
 
     def _signal_handler(self, signum: int, frame):
         """Handle shutdown signals across platforms"""
