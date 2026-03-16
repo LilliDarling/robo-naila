@@ -1,7 +1,9 @@
 """Unit tests for ResponseGenerator agent"""
 
+import asyncio
+
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from freezegun import freeze_time
 from agents.response_generator import ResponseGenerator
 
@@ -259,6 +261,147 @@ class TestResponseGenerator:
         for i in range(250):
             cache_key = f"test:{i}"
             generator._cache_response(cache_key, f"response {i}")
-        
+
         # Cache should be limited
         assert len(generator._response_cache) <= 200
+
+
+class TestTransportAudio:
+    """Test transport-specific TTS behavior in ResponseGenerator.process()."""
+
+    @pytest.fixture
+    def mock_tts(self):
+        tts = Mock()
+        tts.is_ready = True
+        audio_data = Mock()
+        audio_data.duration_ms = 100
+        audio_data.format = "raw"
+        audio_data.audio_bytes = b"\x00" * 4410
+        audio_data.sample_rate = 22050
+        tts.synthesize = AsyncMock(return_value=audio_data)
+        return tts
+
+    @pytest.fixture
+    def base_state(self):
+        return {
+            "intent": "greeting",
+            "processed_text": "Hello",
+            "context": {},
+            "conversation_history": [],
+            "confidence": 0.9,
+            "device_id": "test",
+        }
+
+    @pytest.mark.asyncio
+    async def test_grpc_transport_synthesizes_raw_audio(self, mock_tts, base_state):
+        """gRPC transport always synthesizes audio with output_format='raw'."""
+        audio_delivery = AsyncMock()
+        generator = ResponseGenerator(tts_service=mock_tts)
+        config = {"configurable": {"transport": "grpc", "audio_delivery": audio_delivery}}
+
+        result = await generator.process(base_state, config=config)
+
+        mock_tts.synthesize.assert_called_once()
+        _, kwargs = mock_tts.synthesize.call_args
+        assert kwargs.get("output_format") == "raw"
+        audio_delivery.assert_called_once()
+        call_args = audio_delivery.call_args
+        assert call_args[1].get("is_final") is True or call_args[0][2] is True
+        assert "response_audio" in result
+
+    @pytest.mark.asyncio
+    async def test_mqtt_text_input_skips_tts(self, mock_tts, base_state):
+        """MQTT with text input should not call TTS."""
+        base_state["input_type"] = "text"
+        generator = ResponseGenerator(tts_service=mock_tts)
+        config = {"configurable": {"transport": "mqtt"}}
+
+        result = await generator.process(base_state, config=config)
+
+        mock_tts.synthesize.assert_not_called()
+        assert "response_audio" not in result
+
+    @pytest.mark.asyncio
+    async def test_mqtt_audio_input_synthesizes_audio(self, mock_tts, base_state):
+        """MQTT with audio input should call TTS without raw format."""
+        base_state["input_type"] = "audio"
+        generator = ResponseGenerator(tts_service=mock_tts)
+        config = {"configurable": {"transport": "mqtt"}}
+
+        result = await generator.process(base_state, config=config)
+
+        mock_tts.synthesize.assert_called_once()
+        _, kwargs = mock_tts.synthesize.call_args
+        assert kwargs.get("output_format") is None
+        assert "response_audio" in result
+
+    @pytest.mark.asyncio
+    async def test_tts_failure_still_returns_text(self, mock_tts, base_state):
+        """TTS failure should not prevent text response from being returned."""
+        mock_tts.synthesize = AsyncMock(side_effect=RuntimeError("TTS crashed"))
+        generator = ResponseGenerator(tts_service=mock_tts)
+        config = {"configurable": {"transport": "grpc"}}
+
+        result = await generator.process(base_state, config=config)
+
+        assert result["response_text"]
+        assert "response_audio" not in result
+
+
+class TestLLMTimeout:
+    """Test LLM timeout and retry semantics in _generate_llm_response."""
+
+    @pytest.fixture
+    def mock_llm(self):
+        llm = Mock()
+        llm.is_ready = True
+        llm.build_chat_messages = Mock(return_value=[{"role": "user", "content": "hi"}])
+        llm.generate_chat = AsyncMock(return_value="LLM response")
+        return llm
+
+    @pytest.mark.asyncio
+    async def test_timeout_returns_empty_no_retry(self, mock_llm):
+        """TimeoutError should return '' immediately without retrying."""
+        mock_llm.generate_chat = AsyncMock(side_effect=asyncio.TimeoutError)
+        generator = ResponseGenerator(llm_service=mock_llm)
+
+        result = await generator._generate_llm_response("hello", [])
+
+        assert result == ""
+        # Should be called exactly once — no retry after timeout
+        mock_llm.generate_chat.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_non_timeout_error_retries(self, mock_llm):
+        """Non-timeout errors should be retried up to max_retries."""
+        mock_llm.generate_chat = AsyncMock(side_effect=RuntimeError("OOM"))
+        generator = ResponseGenerator(llm_service=mock_llm)
+
+        result = await generator._generate_llm_response("hello", [], max_retries=2)
+
+        assert result == ""
+        assert mock_llm.generate_chat.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_succeeds_on_second_attempt(self, mock_llm):
+        """Should return successful response if retry succeeds."""
+        mock_llm.generate_chat = AsyncMock(
+            side_effect=[RuntimeError("transient"), "recovered response"]
+        )
+        generator = ResponseGenerator(llm_service=mock_llm)
+
+        result = await generator._generate_llm_response("hello", [], max_retries=2)
+
+        assert result == "recovered response"
+        assert mock_llm.generate_chat.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_llm_not_ready_returns_empty(self):
+        """Should return '' when LLM service is not ready."""
+        llm = Mock()
+        llm.is_ready = False
+        generator = ResponseGenerator(llm_service=llm)
+
+        result = await generator._generate_llm_response("hello", [])
+
+        assert result == ""

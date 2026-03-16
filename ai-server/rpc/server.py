@@ -50,6 +50,8 @@ class GRPCServer:
 
         logger.info("grpc_server_stopping", grace_seconds=SHUTDOWN_GRACE_SECONDS)
         await self._server.stop(grace=SHUTDOWN_GRACE_SECONDS)
+        await self._server.wait_for_termination()
+        self._server = None
         self._running = False
         logger.info("grpc_server_stopped")
 

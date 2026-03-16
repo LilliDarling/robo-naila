@@ -1,22 +1,35 @@
 """gRPC NailaAI service implementation — voice conversation pipeline.
 
 Handles bidirectional streaming between the Hub and AI processing services.
-Audio flows: Hub -> STT -> LLM -> TTS -> Hub
+Audio flows: Hub -> STT -> Orchestration Graph (intent, context, LLM, TTS) -> Hub
+
+The gRPC servicer handles transport-specific concerns (audio buffering, speech
+events, PCM chunking) while delegating AI logic to the shared orchestrator,
+which runs the same LangGraph pipeline used by MQTT.
 """
 
 import asyncio
 import io
+import time
 import wave
 from typing import Optional
 
+from typing import TYPE_CHECKING
+
 from rpc.generated import naila_pb2, naila_pb2_grpc
 from utils import get_logger
+
+if TYPE_CHECKING:
+    from agents.orchestrator import NAILAOrchestrator
 
 
 logger = get_logger(__name__)
 
 # TTS output chunking: ~100ms at 22050 Hz, 16-bit mono = 4410 bytes
 TTS_CHUNK_BYTES = 4410
+
+# Max audio buffer: ~60s of 16-bit mono at 48kHz = ~5.76 MB
+MAX_AUDIO_BUFFER_BYTES = 6 * 1024 * 1024
 
 
 def _pcm_to_wav(pcm_bytes: bytes, sample_rate: int, channels: int = 1, sample_width: int = 2) -> bytes:
@@ -34,33 +47,38 @@ def _pcm_to_wav(pcm_bytes: bytes, sample_rate: int, channels: int = 1, sample_wi
     return wav_buffer.getvalue()
 
 
+def _pcm_duration_ms(byte_count: int, sample_rate: int, channels: int = 1, sample_width: int = 2) -> int:
+    """Calculate duration in ms from PCM byte count."""
+    if sample_rate == 0:
+        return 0
+    samples = byte_count // (channels * sample_width)
+    return int((samples / sample_rate) * 1000)
+
+
 class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
     """Implements the NailaAI gRPC service.
 
-    Services are injected after model loading via set_*_service() methods,
-    matching the pattern used by MQTT ProtocolHandler.
+    STT is called directly (transport-specific audio buffering). All other
+    AI logic (intent detection, context, LLM, TTS) goes through the shared
+    orchestrator which runs the LangGraph pipeline.
     """
 
     def __init__(self):
         self.stt_service = None
-        self.llm_service = None
-        self.tts_service = None
+        self.orchestrator: Optional[NAILAOrchestrator] = None
 
     def set_stt_service(self, stt_service):
         self.stt_service = stt_service
 
-    def set_llm_service(self, llm_service):
-        self.llm_service = llm_service
-
-    def set_tts_service(self, tts_service):
-        self.tts_service = tts_service
+    def set_orchestrator(self, orchestrator):
+        self.orchestrator = orchestrator
 
     async def StreamConversation(self, request_iterator, context):
         """Bidirectional streaming voice conversation.
 
         Receives AudioInput messages from the Hub, buffers speech audio,
-        and processes complete utterances through the STT -> LLM -> TTS pipeline.
-        Streams TTS audio back as AudioOutput chunks.
+        and processes complete utterances through STT then the orchestration
+        graph. Streams TTS audio back as AudioOutput chunks.
 
         Input reading and utterance processing run concurrently so that
         SPEECH_EVENT_INTERRUPT can cancel an in-flight processing task.
@@ -102,6 +120,26 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
 
                     elif event == naila_pb2.SPEECH_EVENT_CONTINUE:
                         if pcm_data:
+                            if len(audio_buffer) + len(pcm_data) > MAX_AUDIO_BUFFER_BYTES:
+                                logger.warning(
+                                    "audio_buffer_overflow",
+                                    device_id=device_id,
+                                    conversation_id=conversation_id,
+                                    buffer_size=len(audio_buffer),
+                                    incoming_size=len(pcm_data),
+                                    max_buffer_bytes=MAX_AUDIO_BUFFER_BYTES,
+                                    buffer_duration_ms=_pcm_duration_ms(
+                                        len(audio_buffer), input_sample_rate
+                                    ),
+                                    reason="buffer_limit_exceeded",
+                                )
+                                audio_buffer.clear()
+                                await output_queue.put(self._error_output(
+                                    device_id, conversation_id,
+                                    naila_pb2.ERROR_INTERNAL,
+                                    "Audio buffer limit exceeded, utterance discarded",
+                                ))
+                                continue
                             audio_buffer.extend(pcm_data)
 
                     elif event == naila_pb2.SPEECH_EVENT_END:
@@ -227,13 +265,15 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         conversation_id: str,
         context=None,
     ):
-        """Run the STT -> LLM -> TTS pipeline on a complete utterance.
+        """Run STT then delegate to the orchestration graph.
+
+        STT is transport-specific (gRPC buffers raw PCM chunks with speech
+        events). Everything after transcription goes through the shared
+        LangGraph pipeline via the orchestrator.
 
         Yields AudioOutput messages as an async generator.
-        Checks context.is_active() between pipeline stages to bail out
-        early if the client has disconnected.
         """
-        # ── STT ──────────────────────────────────────────────────────────
+        # ── STT (transport-specific) ─────────────────────────────────────
         if not self.stt_service or not self.stt_service.is_ready:
             logger.error("stt_service_not_available")
             yield self._error_output(
@@ -277,107 +317,92 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
             logger.info("client_disconnected_after_stt", device_id=device_id)
             return
 
-        # ── LLM ──────────────────────────────────────────────────────────
-        if not self.llm_service or not self.llm_service.is_ready:
-            logger.error("llm_service_not_available")
+        # ── Orchestration (shared graph) ─────────────────────────────────
+        if not self.orchestrator:
+            logger.error("orchestrator_not_available")
             yield self._error_output(
                 device_id, conversation_id,
-                naila_pb2.ERROR_LLM_FAILED, "LLM service not available",
+                naila_pb2.ERROR_INTERNAL, "Orchestrator not available",
             )
             return
 
-        try:
-            messages = self.llm_service.build_chat_messages(transcription)
-            response_text = await self.llm_service.generate_chat(messages)
-        except Exception as e:
-            logger.error("llm_failed", error=str(e), error_type=type(e).__name__)
-            yield self._error_output(
-                device_id, conversation_id,
-                naila_pb2.ERROR_LLM_FAILED, str(e),
-            )
-            return
+        # Stream TTS chunks to the client as they are produced instead of
+        # buffering the full response in memory.
+        _DONE = object()
+        tts_queue: asyncio.Queue = asyncio.Queue(maxsize=32)
+        audio_produced = False
 
-        if not response_text.strip():
-            logger.warning("llm_empty_response", device_id=device_id)
-            yield naila_pb2.AudioOutput(
-                device_id=device_id,
-                conversation_id=conversation_id,
-                is_final=True,
-                final_stt=transcription,
-            )
-            return
+        async def _grpc_audio_delivery(audio_data, text: str, is_final: bool = True):
+            """Callback invoked by ResponseGenerator when TTS audio is ready.
 
-        logger.info(
-            "llm_result",
-            device_id=device_id,
-            response_length=len(response_text),
-        )
-
-        if context and not context.is_active():
-            logger.info("client_disconnected_after_llm", device_id=device_id)
-            return
-
-        # ── TTS ──────────────────────────────────────────────────────────
-        if not self.tts_service or not self.tts_service.is_ready:
-            logger.error("tts_service_not_available")
-            yield self._error_output(
-                device_id, conversation_id,
-                naila_pb2.ERROR_TTS_FAILED, "TTS service not available",
-            )
-            return
-
-        try:
-            tts_result = await self.tts_service.synthesize(
-                response_text, output_format="raw"
-            )
-        except Exception as e:
-            logger.error("tts_failed", error=str(e), error_type=type(e).__name__)
-            yield self._error_output(
-                device_id, conversation_id,
-                naila_pb2.ERROR_TTS_FAILED, str(e),
-            )
-            return
-
-        if not tts_result.audio_bytes:
-            logger.warning("tts_empty_audio", device_id=device_id)
-            yield naila_pb2.AudioOutput(
-                device_id=device_id,
-                conversation_id=conversation_id,
-                is_final=True,
-                final_stt=transcription,
-            )
-            return
-
-        logger.info(
-            "tts_result",
-            device_id=device_id,
-            audio_bytes=len(tts_result.audio_bytes),
-            sample_rate=tts_result.sample_rate,
-            duration_ms=tts_result.duration_ms,
-        )
-
-        if context and not context.is_active():
-            logger.info("client_disconnected_after_tts", device_id=device_id)
-            return
-
-        # ── Stream TTS audio back in chunks ──────────────────────────────
-        audio_bytes = tts_result.audio_bytes
-        tts_sample_rate = tts_result.sample_rate
-        for sequence, offset in enumerate(range(0, len(audio_bytes), TTS_CHUNK_BYTES)):
-            if context and not context.is_active():
-                logger.info("client_disconnected_during_tts_stream", device_id=device_id)
+            Chunks the raw PCM into ~100ms AudioOutput messages and streams
+            them into an asyncio.Queue for immediate delivery to the client.
+            """
+            if not audio_data or not audio_data.audio_bytes:
                 return
-            chunk = audio_bytes[offset : offset + TTS_CHUNK_BYTES]
-            is_last = offset + TTS_CHUNK_BYTES >= len(audio_bytes)
+            raw_bytes = audio_data.audio_bytes
+            tts_sample_rate = audio_data.sample_rate
+            for seq, offset in enumerate(range(0, len(raw_bytes), TTS_CHUNK_BYTES)):
+                chunk = raw_bytes[offset : offset + TTS_CHUNK_BYTES]
+                is_last = offset + TTS_CHUNK_BYTES >= len(raw_bytes)
+                await tts_queue.put(naila_pb2.AudioOutput(
+                    device_id=device_id,
+                    conversation_id=conversation_id,
+                    audio_pcm=chunk,
+                    sample_rate=tts_sample_rate,
+                    sequence_num=seq,
+                    is_final=is_last and is_final,
+                    final_stt=transcription if seq == 0 else "",
+                ))
 
+        task_data = {
+            "task_id": f"grpc_{conversation_id}_{int(time.time() * 1000)}",
+            "device_id": device_id,
+            "input_type": "audio",
+            "transcription": transcription,
+            "confidence": stt_result.confidence,
+        }
+
+        async def _run_orchestration():
+            try:
+                await self.orchestrator.process_task_with_callback(
+                    task_data,
+                    audio_delivery=_grpc_audio_delivery,
+                    transport="grpc",
+                )
+            except Exception as e:
+                logger.error("orchestration_failed", error=str(e), error_type=type(e).__name__)
+                await tts_queue.put(self._error_output(
+                    device_id, conversation_id,
+                    naila_pb2.ERROR_INTERNAL, str(e),
+                ))
+            finally:
+                await tts_queue.put(_DONE)
+
+        orchestration_task = asyncio.create_task(_run_orchestration())
+
+        try:
+            while True:
+                item = await tts_queue.get()
+                if item is _DONE:
+                    break
+                if context and not context.is_active():
+                    logger.info("client_disconnected_during_tts_stream", device_id=device_id)
+                    orchestration_task.cancel()
+                    return
+                audio_produced = True
+                yield item
+        except asyncio.CancelledError:
+            orchestration_task.cancel()
+            raise
+
+        # If no audio was produced (TTS unavailable), send text-only final
+        if not audio_produced:
             yield naila_pb2.AudioOutput(
                 device_id=device_id,
                 conversation_id=conversation_id,
-                audio_pcm=chunk,
-                sample_rate=tts_sample_rate,
-                sequence_num=sequence,
-                is_final=is_last,
-                final_stt=transcription if sequence == 0 else "",
+                is_final=True,
+                final_stt=transcription,
             )
 
     @staticmethod
@@ -406,11 +431,3 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
             error_message=error_message,
             is_final=True,
         )
-
-
-def _pcm_duration_ms(byte_count: int, sample_rate: int, channels: int = 1, sample_width: int = 2) -> int:
-    """Calculate duration in ms from PCM byte count."""
-    if sample_rate == 0:
-        return 0
-    samples = byte_count // (channels * sample_width)
-    return int((samples / sample_rate) * 1000)

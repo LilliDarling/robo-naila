@@ -30,25 +30,42 @@ async def _async_iter(items):
         yield item
 
 
-def _make_servicer(stt_text="hello", llm_text="hi there", tts_bytes=b"\x00" * 100):
-    """Return a NailaAIServicer with mocked sub-services."""
+def _make_orchestrator_result(response_text="hi there", intent="greeting"):
+    """Build a mock orchestrator.process_task_with_callback result."""
+    return {
+        "response_text": response_text,
+        "intent": intent,
+        "confidence": 0.95,
+        "processed_text": "hello",
+    }
+
+
+def _make_servicer(stt_text="hello", response_text="hi there", tts_bytes=b"\x00" * 100):
+    """Return a NailaAIServicer with mocked STT service and orchestrator.
+
+    The orchestrator mock simulates the real flow: when process_task_with_callback
+    is called with an audio_delivery callback, it invokes the callback with TTS
+    audio data (as the graph's ResponseGenerator would).
+    """
     stt_result = SimpleNamespace(text=stt_text, confidence=0.95, transcription_time_ms=42)
-    tts_result = SimpleNamespace(audio_bytes=tts_bytes, sample_rate=22050, duration_ms=100)
+    tts_audio = SimpleNamespace(audio_bytes=tts_bytes, sample_rate=22050, duration_ms=100)
 
     stt = MagicMock(is_ready=True)
     stt.transcribe_audio = AsyncMock(return_value=stt_result)
 
-    llm = MagicMock(is_ready=True)
-    llm.build_chat_messages = MagicMock(return_value=[{"role": "user", "content": stt_text}])
-    llm.generate_chat = AsyncMock(return_value=llm_text)
+    async def mock_process_task_with_callback(message_data, audio_delivery=None, transport="mqtt"):
+        """Simulate the orchestrator running the graph and calling the audio delivery callback."""
+        result = _make_orchestrator_result(response_text=response_text)
+        if audio_delivery and tts_bytes:
+            await audio_delivery(tts_audio, response_text, is_final=True)
+        return result
 
-    tts = MagicMock(is_ready=True)
-    tts.synthesize = AsyncMock(return_value=tts_result)
+    orchestrator = MagicMock()
+    orchestrator.process_task_with_callback = AsyncMock(side_effect=mock_process_task_with_callback)
 
     servicer = NailaAIServicer()
     servicer.set_stt_service(stt)
-    servicer.set_llm_service(llm)
-    servicer.set_tts_service(tts)
+    servicer.set_orchestrator(orchestrator)
     return servicer
 
 
@@ -79,7 +96,7 @@ class TestPcmHelpers:
 class TestStreamConversation:
     @pytest.mark.asyncio
     async def test_full_utterance_produces_output(self):
-        """START -> CONTINUE -> END should yield TTS audio output."""
+        """START -> CONTINUE -> END should yield TTS audio output via orchestrator."""
         servicer = _make_servicer()
         inputs = [
             _audio_input(naila_pb2.SPEECH_EVENT_START, pcm=b"\x00" * 100),
@@ -92,6 +109,27 @@ class TestStreamConversation:
 
         assert len(outputs) >= 1
         assert outputs[-1].is_final is True
+        # Verify orchestrator was called (not direct LLM/TTS)
+        servicer.orchestrator.process_task_with_callback.assert_called_once()
+        call_kwargs = servicer.orchestrator.process_task_with_callback.call_args
+        assert call_kwargs.kwargs["transport"] == "grpc"
+        assert call_kwargs.kwargs["audio_delivery"] is not None
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_receives_transcription(self):
+        """Orchestrator should receive the STT transcription in task data."""
+        servicer = _make_servicer(stt_text="what time is it")
+        inputs = [
+            _audio_input(naila_pb2.SPEECH_EVENT_START, pcm=b"\x00" * 100),
+            _audio_input(naila_pb2.SPEECH_EVENT_END, pcm=b"\x00" * 100),
+        ]
+        async for _ in servicer.StreamConversation(_async_iter(inputs), _grpc_context()):
+            pass
+
+        call_args = servicer.orchestrator.process_task_with_callback.call_args
+        task_data = call_args.args[0] if call_args.args else call_args.kwargs.get("message_data", {})
+        assert task_data["transcription"] == "what time is it"
+        assert task_data["device_id"] == "dev1"
 
     @pytest.mark.asyncio
     async def test_empty_stream_yields_nothing(self):
@@ -100,6 +138,22 @@ class TestStreamConversation:
         async for out in servicer.StreamConversation(_async_iter([]), _grpc_context()):
             outputs.append(out)
         assert outputs == []
+
+    @pytest.mark.asyncio
+    async def test_no_tts_audio_yields_text_only_final(self):
+        """When TTS produces no audio, a text-only final message should be sent."""
+        servicer = _make_servicer(tts_bytes=b"")
+        inputs = [
+            _audio_input(naila_pb2.SPEECH_EVENT_START, pcm=b"\x00" * 100),
+            _audio_input(naila_pb2.SPEECH_EVENT_END, pcm=b"\x00" * 100),
+        ]
+        outputs = []
+        async for out in servicer.StreamConversation(_async_iter(inputs), _grpc_context()):
+            outputs.append(out)
+
+        assert len(outputs) == 1
+        assert outputs[0].is_final is True
+        assert outputs[0].final_stt == "hello"
 
 
 # ── Interrupt cancellation ───────────────────────────────────────────────────
@@ -113,7 +167,7 @@ class TestInterruptCancellation:
 
         original_enqueue = NailaAIServicer._enqueue_utterance
 
-        async def slow_enqueue(self, queue, pcm_bytes, sample_rate, device_id, conversation_id):
+        async def slow_enqueue(self, queue, pcm_bytes, sample_rate, device_id, conversation_id, context=None):
             processing_started.set()
             try:
                 # Simulate long processing
@@ -156,7 +210,7 @@ class TestInterruptCancellation:
         servicer = _make_servicer()
         processing_started = asyncio.Event()
 
-        async def slow_enqueue(self, queue, pcm_bytes, sample_rate, device_id, conversation_id):
+        async def slow_enqueue(self, queue, pcm_bytes, sample_rate, device_id, conversation_id, context=None):
             processing_started.set()
             try:
                 await asyncio.sleep(10)
@@ -179,7 +233,7 @@ class TestInterruptCancellation:
         original_enqueue = NailaAIServicer._enqueue_utterance
         call_count = 0
 
-        async def tracking_enqueue(self, queue, pcm_bytes, sample_rate, device_id, conversation_id):
+        async def tracking_enqueue(self, queue, pcm_bytes, sample_rate, device_id, conversation_id, context=None):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -192,7 +246,7 @@ class TestInterruptCancellation:
             else:
                 # Second call: run normally
                 captured_pcm.append(pcm_bytes)
-                await original_enqueue(self, queue, pcm_bytes, sample_rate, device_id, conversation_id)
+                await original_enqueue(self, queue, pcm_bytes, sample_rate, device_id, conversation_id, context)
 
         with patch.object(NailaAIServicer, "_enqueue_utterance", tracking_enqueue):
             outputs = []
@@ -225,9 +279,10 @@ class TestServiceErrors:
         assert outputs[0].is_final is True
 
     @pytest.mark.asyncio
-    async def test_llm_not_ready_yields_error(self):
+    async def test_orchestrator_not_available_yields_error(self):
+        """When orchestrator is not set, should yield an internal error."""
         servicer = _make_servicer()
-        servicer.llm_service.is_ready = False
+        servicer.orchestrator = None
         inputs = [
             _audio_input(naila_pb2.SPEECH_EVENT_START, pcm=b"\x00" * 100),
             _audio_input(naila_pb2.SPEECH_EVENT_END, pcm=b"\x00" * 100),
@@ -237,12 +292,15 @@ class TestServiceErrors:
             outputs.append(out)
 
         assert len(outputs) == 1
-        assert outputs[0].error_code == naila_pb2.ERROR_LLM_FAILED
+        assert outputs[0].error_code == naila_pb2.ERROR_INTERNAL
 
     @pytest.mark.asyncio
-    async def test_tts_not_ready_yields_error(self):
+    async def test_orchestrator_exception_yields_error(self):
+        """When orchestrator raises, should yield an internal error."""
         servicer = _make_servicer()
-        servicer.tts_service.is_ready = False
+        servicer.orchestrator.process_task_with_callback = AsyncMock(
+            side_effect=RuntimeError("graph failed")
+        )
         inputs = [
             _audio_input(naila_pb2.SPEECH_EVENT_START, pcm=b"\x00" * 100),
             _audio_input(naila_pb2.SPEECH_EVENT_END, pcm=b"\x00" * 100),
@@ -252,7 +310,24 @@ class TestServiceErrors:
             outputs.append(out)
 
         assert len(outputs) == 1
-        assert outputs[0].error_code == naila_pb2.ERROR_TTS_FAILED
+        assert outputs[0].error_code == naila_pb2.ERROR_INTERNAL
+
+    @pytest.mark.asyncio
+    async def test_empty_transcription_yields_final(self):
+        """Empty STT result should yield a final-only message."""
+        servicer = _make_servicer(stt_text="")
+        inputs = [
+            _audio_input(naila_pb2.SPEECH_EVENT_START, pcm=b"\x00" * 100),
+            _audio_input(naila_pb2.SPEECH_EVENT_END, pcm=b"\x00" * 100),
+        ]
+        outputs = []
+        async for out in servicer.StreamConversation(_async_iter(inputs), _grpc_context()):
+            outputs.append(out)
+
+        assert len(outputs) == 1
+        assert outputs[0].is_final is True
+        # Orchestrator should NOT be called for empty transcriptions
+        servicer.orchestrator.process_task_with_callback.assert_not_called()
 
 
 # ── _extract_audio ───────────────────────────────────────────────────────────

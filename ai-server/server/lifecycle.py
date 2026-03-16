@@ -34,11 +34,12 @@ class ShutdownStage(Enum):
 class ServerLifecycleManager:
     """Manages server startup, shutdown, and lifecycle events"""
 
-    def __init__(self, mqtt_service, protocol_handlers, llm_service=None, stt_service=None, tts_service=None, vision_service=None, grpc_server=None, grpc_servicer=None):
+    def __init__(self, mqtt_service, protocol_handlers, llm_service=None, stt_service=None, tts_service=None, vision_service=None, grpc_server=None, grpc_servicer=None, orchestrator=None):
         self.mqtt_service = mqtt_service
         self.protocol_handlers = protocol_handlers
         self.grpc_server = grpc_server
         self.grpc_servicer = grpc_servicer
+        self.orchestrator = orchestrator
         self.ai_model_manager = AIModelManager(llm_service, stt_service, tts_service, vision_service)
         self.health_monitor = HealthMonitor(mqtt_service, protocol_handlers, self.ai_model_manager)
 
@@ -74,21 +75,28 @@ class ServerLifecycleManager:
 
             if llm_service := self.ai_model_manager.get_llm_service():
                 self.protocol_handlers.set_llm_service(llm_service)
-                if self.grpc_servicer:
-                    self.grpc_servicer.set_llm_service(llm_service)
+                if self.orchestrator:
+                    self.orchestrator.set_llm_service(llm_service)
 
             if stt_service := self.ai_model_manager.get_stt_service():
                 self.protocol_handlers.set_stt_service(stt_service)
+                # gRPC needs STT directly (transport-specific audio buffering)
                 if self.grpc_servicer:
                     self.grpc_servicer.set_stt_service(stt_service)
 
             if tts_service := self.ai_model_manager.get_tts_service():
                 self.protocol_handlers.set_tts_service(tts_service)
-                if self.grpc_servicer:
-                    self.grpc_servicer.set_tts_service(tts_service)
+                if self.orchestrator:
+                    self.orchestrator.set_tts_service(tts_service)
 
             if vision_service := self.ai_model_manager.get_vision_service():
                 self.protocol_handlers.set_vision_service(vision_service)
+                if self.orchestrator:
+                    self.orchestrator.set_vision_service(vision_service)
+
+            # Wire shared orchestrator into gRPC servicer
+            if self.grpc_servicer and self.orchestrator:
+                self.grpc_servicer.set_orchestrator(self.orchestrator)
 
             # Stage: Register protocol handlers
             logger.info("startup_stage", stage=StartupStage.REGISTER_HANDLERS.value)
@@ -214,10 +222,9 @@ class ServerLifecycleManager:
     
     async def stop_server(self):
         """Graceful server shutdown with proper cleanup"""
-        if not self._running:
-            logger.info("Server already stopped")
+        if self._shutdown_requested:
             return
-        
+
         logger.info("Initiating graceful shutdown...")
         self._shutdown_requested = True
         self._shutdown_event.set()

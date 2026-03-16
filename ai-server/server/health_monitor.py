@@ -73,7 +73,7 @@ class HealthMonitor:
                 },
                 "protocol_handlers": {
                     "status": "healthy",
-                    "active_devices": handler_stats["active_devices"],
+                    "active_devices": handler_stats.get("total_active_devices", handler_stats.get("active_devices", 0)),
                     "device_states": handler_stats["device_states"],
                     "conversation_contexts": handler_stats["conversation_contexts"],
                     "task_queue_utilization": handler_stats.get("task_queue_size", 0) / max(handler_stats.get("task_queue_max", 1), 1)

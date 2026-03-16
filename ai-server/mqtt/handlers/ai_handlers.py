@@ -16,9 +16,9 @@ TOPIC_AI_PERSONALITY_RESPONSE = "naila/ai/orchestration/personality/response"
 class AIHandlers(BaseHandler):
     """Handlers for AI processing and orchestration messages"""
 
-    def __init__(self, mqtt_service):
+    def __init__(self, mqtt_service, orchestrator=None):
         super().__init__(mqtt_service)
-        self.orchestrator = NAILAOrchestrator(mqtt_service)
+        self.orchestrator = orchestrator or NAILAOrchestrator(mqtt_service)
         self.stt_service = None
         self.tts_service = None
         self.vision_service = None
@@ -65,7 +65,7 @@ class AIHandlers(BaseHandler):
         if not self.stt_service or not self.stt_service.is_ready:
             self.logger.warning(f"STT service not available, cannot process audio from {message.device_id}")
             # Publish error message to MQTT topic for the device
-            error_topic = f"devices/{message.device_id}/audio/error"
+            error_topic = f"naila/device/{message.device_id}/audio/error"
             error_payload = {
                 "error": "stt_unavailable",
                 "message": "Speech-to-text service is currently unavailable. Please try again later.",

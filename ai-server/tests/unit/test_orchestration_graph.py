@@ -140,18 +140,18 @@ class TestNAILAOrchestrationGraph:
             "processed_text": "hello",
             "context": {}
         }
-        
+
         # Mock response generator
         orchestrator.response_generator.process.return_value = {
             **test_state,
             "response_text": "Hello! How can I help you?",
             "response_metadata": {"intent": "greeting"}
         }
-        
+
         result = await orchestrator._generate_response(test_state)
-        
+
         assert result["response_text"] == "Hello! How can I help you?"
-        orchestrator.response_generator.process.assert_called_once_with(test_state)
+        orchestrator.response_generator.process.assert_called_once_with(test_state, config=None)
 
     @pytest.mark.asyncio
     async def test_generate_response_error_handling(self, orchestrator):
@@ -302,17 +302,81 @@ class TestNAILAOrchestrationGraph:
     async def test_workflow_with_empty_state(self, orchestrator):
         """Test workflow handles empty/minimal state gracefully"""
         empty_state = {}
-        
+
         # Mock processors to handle empty state
         orchestrator.input_processor.process.return_value = {"processed": True}
         orchestrator.response_generator.process.return_value = {
             "processed": True,
             "response_text": "Empty state handled"
         }
-        
+
         result = await orchestrator.run(empty_state)
-        
+
         # Should complete without errors
         assert result["response_text"] == "Empty state handled"
         assert "errors" in result
         assert len(result.get("errors", [])) == 0
+
+
+class TestConfigPassthrough:
+    """Test that LangGraph config (transport callbacks) passes through to nodes."""
+
+    @pytest.fixture
+    def mock_processors(self):
+        input_processor = Mock()
+        response_generator = Mock()
+        input_processor.process = AsyncMock()
+        response_generator.process = AsyncMock()
+        return input_processor, response_generator
+
+    @pytest.fixture
+    def orchestrator(self, mock_processors):
+        input_proc, response_gen = mock_processors
+        with patch('graphs.orchestration.InputProcessor', return_value=input_proc), \
+             patch('graphs.orchestration.ResponseGenerator', return_value=response_gen):
+            return NAILAOrchestrationGraph()
+
+    @pytest.mark.asyncio
+    async def test_config_forwarded_to_generate_response(self, orchestrator):
+        """Config with audio_delivery should reach the generate_response node."""
+        callback_received = {}
+
+        async def capture_config(state, config=None):
+            callback_received["config"] = config
+            return {**state, "response_text": "ok"}
+
+        orchestrator.response_generator.process = AsyncMock(side_effect=capture_config)
+        orchestrator.input_processor.process.return_value = {
+            "processed_text": "test", "intent": "general"
+        }
+
+        config = {"configurable": {"transport": "grpc", "audio_delivery": lambda: None}}
+        await orchestrator.run({"task_id": "cfg_test", "raw_input": "test"}, config=config)
+
+        assert "config" in callback_received
+        assert callback_received["config"]["configurable"]["transport"] == "grpc"
+
+    @pytest.mark.asyncio
+    async def test_no_config_still_works(self, orchestrator):
+        """Graph should work fine without config (MQTT path)."""
+        orchestrator.input_processor.process.return_value = {
+            "processed_text": "hi", "intent": "greeting"
+        }
+        orchestrator.response_generator.process.return_value = {
+            "response_text": "hello"
+        }
+
+        result = await orchestrator.run({"task_id": "no_cfg", "raw_input": "hi"})
+        assert result["response_text"] == "hello"
+
+    @pytest.mark.asyncio
+    async def test_generate_response_passes_config(self, orchestrator):
+        """_generate_response node should forward config to ResponseGenerator.process."""
+        orchestrator.response_generator.process.return_value = {"response_text": "ok"}
+
+        config = {"configurable": {"transport": "grpc"}}
+        await orchestrator._generate_response({"intent": "general"}, config=config)
+
+        orchestrator.response_generator.process.assert_called_once_with(
+            {"intent": "general"}, config=config
+        )
