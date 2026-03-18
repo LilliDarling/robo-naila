@@ -43,6 +43,11 @@ class NailaAIStub(object):
                 request_serializer=naila__pb2.AudioInput.SerializeToString,
                 response_deserializer=naila__pb2.AudioOutput.FromString,
                 _registered_method=True)
+        self.GetStatus = channel.unary_unary(
+                '/naila.NailaAI/GetStatus',
+                request_serializer=naila__pb2.StatusRequest.SerializeToString,
+                response_deserializer=naila__pb2.StatusResponse.FromString,
+                _registered_method=True)
 
 
 class NailaAIServicer(object):
@@ -59,6 +64,14 @@ class NailaAIServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetStatus(self, request, context):
+        """Server status and capability check.
+        Call before opening streams to verify readiness and discover capabilities.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_NailaAIServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -66,6 +79,11 @@ def add_NailaAIServicer_to_server(servicer, server):
                     servicer.StreamConversation,
                     request_deserializer=naila__pb2.AudioInput.FromString,
                     response_serializer=naila__pb2.AudioOutput.SerializeToString,
+            ),
+            'GetStatus': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetStatus,
+                    request_deserializer=naila__pb2.StatusRequest.FromString,
+                    response_serializer=naila__pb2.StatusResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -99,6 +117,33 @@ class NailaAI(object):
             '/naila.NailaAI/StreamConversation',
             naila__pb2.AudioInput.SerializeToString,
             naila__pb2.AudioOutput.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetStatus(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/naila.NailaAI/GetStatus',
+            naila__pb2.StatusRequest.SerializeToString,
+            naila__pb2.StatusResponse.FromString,
             options,
             channel_credentials,
             insecure,

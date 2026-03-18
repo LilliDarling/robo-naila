@@ -1,6 +1,7 @@
-"""Unit tests for the gRPC NailaAI service — StreamConversation and helpers."""
+"""Unit tests for the gRPC NailaAI service — StreamConversation, GetStatus, and helpers."""
 
 import asyncio
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -348,3 +349,295 @@ class TestExtractAudio:
         msg = MagicMock()
         msg.WhichOneof.return_value = None
         assert NailaAIServicer._extract_audio(msg) is None
+
+
+# ── GetStatus helpers ───────────────────────────────────────────────────────
+
+def _make_ai_model_manager(
+    models_loaded=True,
+    llm_ready=True,
+    stt_ready=True,
+    tts_ready=True,
+    vision_ready=True,
+):
+    """Build a mock AIModelManager with configurable service readiness."""
+    manager = MagicMock()
+
+    def _svc_status(name, ready, model_path, **extras):
+        status = {
+            "ready": ready,
+            "model_path": f"/models/{model_path}",
+            "model_exists": ready,
+            "hardware": {"device_type": "cuda", "device_name": "NVIDIA RTX 4090"},
+        }
+        status.update(extras)
+        return status
+
+    manager.get_status.return_value = {
+        "models_loaded": models_loaded,
+        "llm": _svc_status("llm", llm_ready, "llama-3-8b.gguf", context_size=8192, max_tokens=512),
+        "stt": _svc_status("stt", stt_ready, "whisper-small-en", sample_rate=16000),
+        "tts": _svc_status("tts", tts_ready, "lessac.onnx", sample_rate=22050, voice="lessac"),
+        "vision": _svc_status("vision", vision_ready, "yolov8n.pt", model_name="yolov8n"),
+    }
+    return manager
+
+
+def _make_status_servicer(
+    models_loaded=True,
+    llm_ready=True,
+    stt_ready=True,
+    tts_ready=True,
+    vision_ready=True,
+    start_time=None,
+    max_concurrent_streams=4,
+):
+    """Return a NailaAIServicer configured for GetStatus tests."""
+    servicer = NailaAIServicer()
+    servicer.set_ai_model_manager(
+        _make_ai_model_manager(models_loaded, llm_ready, stt_ready, tts_ready, vision_ready)
+    )
+    servicer.set_server_info(
+        start_time=start_time or time.time(),
+        server_version="1.0.0",
+        max_concurrent_streams=max_concurrent_streams,
+    )
+    return servicer
+
+
+# ── GetStatus — happy path ──────────────────────────────────────────────────
+
+class TestGetStatus:
+    @pytest.mark.asyncio
+    async def test_healthy_response(self):
+        """All services ready should return HEALTHY."""
+        servicer = _make_status_servicer()
+        request = naila_pb2.StatusRequest()
+        response = await servicer.GetStatus(request, _grpc_context())
+
+        assert response.health == naila_pb2.SERVER_HEALTH_HEALTHY
+        assert response.server_version == "1.0.0"
+        assert response.uptime_seconds >= 0
+
+    @pytest.mark.asyncio
+    async def test_supported_codecs(self):
+        """Response should advertise PCM and Opus input, PCM output."""
+        servicer = _make_status_servicer()
+        request = naila_pb2.StatusRequest()
+        response = await servicer.GetStatus(request, _grpc_context())
+
+        assert naila_pb2.AUDIO_CODEC_PCM_S16LE in response.supported_input_codecs
+        assert naila_pb2.AUDIO_CODEC_PCM_S16LE in response.supported_output_codecs
+
+    @pytest.mark.asyncio
+    async def test_max_concurrent_streams(self):
+        """Response should reflect the configured max concurrent streams."""
+        servicer = _make_status_servicer(max_concurrent_streams=8)
+        request = naila_pb2.StatusRequest()
+        response = await servicer.GetStatus(request, _grpc_context())
+
+        assert response.max_concurrent_streams == 8
+
+    @pytest.mark.asyncio
+    async def test_uptime_calculation(self):
+        """Uptime should reflect time since server start."""
+        start = time.time() - 120  # started 2 minutes ago
+        servicer = _make_status_servicer(start_time=start)
+        request = naila_pb2.StatusRequest()
+        response = await servicer.GetStatus(request, _grpc_context())
+
+        assert response.uptime_seconds >= 119  # allow 1s tolerance
+
+    @pytest.mark.asyncio
+    async def test_component_health_all_ready(self):
+        """When all services are ready, all components should be HEALTHY."""
+        servicer = _make_status_servicer()
+        request = naila_pb2.StatusRequest()
+        response = await servicer.GetStatus(request, _grpc_context())
+
+        component_names = [c.name for c in response.components]
+        assert "stt" in component_names
+        assert "llm" in component_names
+        assert "tts" in component_names
+        assert "vision" in component_names
+
+        for component in response.components:
+            assert component.health == naila_pb2.SERVER_HEALTH_HEALTHY
+
+    @pytest.mark.asyncio
+    async def test_component_health_partial_failure(self):
+        """When a service is not ready, its component should be UNHEALTHY."""
+        servicer = _make_status_servicer(tts_ready=False)
+        request = naila_pb2.StatusRequest()
+        response = await servicer.GetStatus(request, _grpc_context())
+
+        tts_component = next(c for c in response.components if c.name == "tts")
+        assert tts_component.health == naila_pb2.SERVER_HEALTH_UNHEALTHY
+
+        llm_component = next(c for c in response.components if c.name == "llm")
+        assert llm_component.health == naila_pb2.SERVER_HEALTH_HEALTHY
+
+
+# ── GetStatus — degraded / unhealthy ────────────────────────────────────────
+
+class TestGetStatusHealth:
+    @pytest.mark.asyncio
+    async def test_degraded_when_non_critical_service_down(self):
+        """When vision is down but core services are up, health should be DEGRADED."""
+        servicer = _make_status_servicer(vision_ready=False)
+        request = naila_pb2.StatusRequest()
+        response = await servicer.GetStatus(request, _grpc_context())
+
+        assert response.health == naila_pb2.SERVER_HEALTH_DEGRADED
+
+    @pytest.mark.asyncio
+    async def test_degraded_when_tts_down(self):
+        """When TTS is down, health should be DEGRADED (voice still works inbound)."""
+        servicer = _make_status_servicer(tts_ready=False)
+        request = naila_pb2.StatusRequest()
+        response = await servicer.GetStatus(request, _grpc_context())
+
+        assert response.health == naila_pb2.SERVER_HEALTH_DEGRADED
+
+    @pytest.mark.asyncio
+    async def test_unhealthy_when_llm_down(self):
+        """When LLM is down, health should be UNHEALTHY (can't generate responses)."""
+        servicer = _make_status_servicer(llm_ready=False)
+        request = naila_pb2.StatusRequest()
+        response = await servicer.GetStatus(request, _grpc_context())
+
+        assert response.health == naila_pb2.SERVER_HEALTH_UNHEALTHY
+
+    @pytest.mark.asyncio
+    async def test_unhealthy_when_stt_down(self):
+        """When STT is down, health should be UNHEALTHY (can't process voice input)."""
+        servicer = _make_status_servicer(stt_ready=False)
+        request = naila_pb2.StatusRequest()
+        response = await servicer.GetStatus(request, _grpc_context())
+
+        assert response.health == naila_pb2.SERVER_HEALTH_UNHEALTHY
+
+    @pytest.mark.asyncio
+    async def test_unhealthy_when_models_not_loaded(self):
+        """When models_loaded is False, overall health should be UNHEALTHY."""
+        servicer = _make_status_servicer(models_loaded=False)
+        request = naila_pb2.StatusRequest()
+        response = await servicer.GetStatus(request, _grpc_context())
+
+        assert response.health == naila_pb2.SERVER_HEALTH_UNHEALTHY
+
+
+# ── GetStatus — model info ──────────────────────────────────────────────────
+
+class TestGetStatusModelInfo:
+    @pytest.mark.asyncio
+    async def test_model_info_included_when_requested(self):
+        """Model info should be populated when include_model_info=True."""
+        servicer = _make_status_servicer()
+        request = naila_pb2.StatusRequest(include_model_info=True)
+        response = await servicer.GetStatus(request, _grpc_context())
+
+        assert response.llm_model.loaded is True
+        assert response.llm_model.model_id != ""
+        assert response.stt_model.loaded is True
+        assert response.tts_model.loaded is True
+        assert response.vision_model.loaded is True
+
+    @pytest.mark.asyncio
+    async def test_model_info_has_device(self):
+        """Model info should include the hardware device."""
+        servicer = _make_status_servicer()
+        request = naila_pb2.StatusRequest(include_model_info=True)
+        response = await servicer.GetStatus(request, _grpc_context())
+
+        assert response.llm_model.device != ""
+
+    @pytest.mark.asyncio
+    async def test_model_info_not_included_when_not_requested(self):
+        """Model info should be empty when include_model_info=False."""
+        servicer = _make_status_servicer()
+        request = naila_pb2.StatusRequest(include_model_info=False)
+        response = await servicer.GetStatus(request, _grpc_context())
+
+        # Protobuf default: unset sub-messages have all-default fields
+        assert response.llm_model.model_id == ""
+        assert response.stt_model.model_id == ""
+
+    @pytest.mark.asyncio
+    async def test_model_info_partial_services(self):
+        """Model info for unavailable services should show loaded=False."""
+        servicer = _make_status_servicer(tts_ready=False)
+        request = naila_pb2.StatusRequest(include_model_info=True)
+        response = await servicer.GetStatus(request, _grpc_context())
+
+        assert response.tts_model.loaded is False
+        assert response.llm_model.loaded is True
+
+
+# ── GetStatus — metrics ─────────────────────────────────────────────────────
+
+class TestGetStatusMetrics:
+    @pytest.mark.asyncio
+    async def test_metrics_included_when_requested(self):
+        """Server metrics should be populated when include_metrics=True."""
+        servicer = _make_status_servicer()
+        request = naila_pb2.StatusRequest(include_metrics=True)
+
+        with patch("rpc.service.psutil") as mock_psutil:
+            mock_psutil.cpu_percent.return_value = 45.0
+            mock_psutil.virtual_memory.return_value = SimpleNamespace(percent=62.5)
+            response = await servicer.GetStatus(request, _grpc_context())
+
+        assert response.metrics.cpu_utilization == pytest.approx(0.45, abs=0.01)
+        assert response.metrics.memory_utilization == pytest.approx(0.625, abs=0.01)
+
+    @pytest.mark.asyncio
+    async def test_metrics_not_included_when_not_requested(self):
+        """Metrics should be empty when include_metrics=False."""
+        servicer = _make_status_servicer()
+        request = naila_pb2.StatusRequest(include_metrics=False)
+        response = await servicer.GetStatus(request, _grpc_context())
+
+        assert response.metrics.cpu_utilization == 0.0
+
+    @pytest.mark.asyncio
+    async def test_metrics_handles_psutil_failure(self):
+        """Metrics should gracefully handle psutil errors."""
+        servicer = _make_status_servicer()
+        request = naila_pb2.StatusRequest(include_metrics=True)
+
+        with patch("rpc.service.psutil") as mock_psutil:
+            mock_psutil.cpu_percent.side_effect = RuntimeError("no access")
+            mock_psutil.virtual_memory.side_effect = RuntimeError("no access")
+            response = await servicer.GetStatus(request, _grpc_context())
+
+        # Should still return a valid response with zeroed metrics
+        assert response.health != naila_pb2.SERVER_HEALTH_UNKNOWN
+        assert response.metrics.cpu_utilization == 0.0
+
+
+# ── GetStatus — no manager configured ───────────────────────────────────────
+
+class TestGetStatusNoManager:
+    @pytest.mark.asyncio
+    async def test_no_manager_returns_unhealthy(self):
+        """When AIModelManager is not set, server should report UNHEALTHY."""
+        servicer = NailaAIServicer()
+        servicer.set_server_info(start_time=time.time(), server_version="1.0.0")
+        request = naila_pb2.StatusRequest()
+        response = await servicer.GetStatus(request, _grpc_context())
+
+        assert response.health == naila_pb2.SERVER_HEALTH_UNHEALTHY
+        assert response.server_version == "1.0.0"
+        assert len(response.components) == 0
+
+    @pytest.mark.asyncio
+    async def test_no_server_info_uses_defaults(self):
+        """When server info is not set, defaults should be used."""
+        servicer = NailaAIServicer()
+        servicer.set_ai_model_manager(_make_ai_model_manager())
+        request = naila_pb2.StatusRequest()
+        response = await servicer.GetStatus(request, _grpc_context())
+
+        assert response.server_version == ""
+        assert response.uptime_seconds == 0

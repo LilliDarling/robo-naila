@@ -16,6 +16,10 @@ option optimize_for = SPEED;
 service NailaAI {
   // Bidirectional streaming for voice conversations
   rpc StreamConversation(stream AudioInput) returns (stream AudioOutput);
+
+  // Server status and capability check.
+  // Call before opening streams to verify readiness and discover capabilities.
+  rpc GetStatus(StatusRequest) returns (StatusResponse);
 }
 
 // =============================================================================
@@ -82,4 +86,77 @@ enum ErrorCode {
   ERROR_LLM_FAILED = 2;
   ERROR_TTS_FAILED = 3;
   ERROR_INTERNAL = 99;
+}
+
+// =============================================================================
+// Status & Health
+// =============================================================================
+
+message StatusRequest {
+  // Include model details in response (may be slower)
+  bool include_model_info = 1;
+
+  // Include resource utilization metrics
+  bool include_metrics = 2;
+}
+
+message StatusResponse {
+  // Overall server health
+  ServerHealth health = 1;
+
+  // Server version
+  string server_version = 2;
+
+  // Server uptime in seconds
+  uint64 uptime_seconds = 3;
+
+  // Audio codecs the server can process (input)
+  repeated AudioCodec supported_input_codecs = 4;
+
+  // Audio codecs the server can produce (output)
+  repeated AudioCodec supported_output_codecs = 5;
+
+  // Maximum concurrent streams the server can handle
+  uint32 max_concurrent_streams = 6;
+
+  // Active AI models (if requested)
+  ModelInfo stt_model = 7;
+  ModelInfo llm_model = 8;
+  ModelInfo tts_model = 9;
+  ModelInfo vision_model = 10;
+
+  // Current resource utilization (if requested)
+  ServerMetrics metrics = 11;
+
+  // Individual component status
+  repeated ComponentHealth components = 12;
+}
+
+enum ServerHealth {
+  SERVER_HEALTH_UNKNOWN = 0;
+  SERVER_HEALTH_HEALTHY = 1;
+  SERVER_HEALTH_DEGRADED = 2;
+  SERVER_HEALTH_UNHEALTHY = 3;
+}
+
+message ModelInfo {
+  string model_id = 1;
+  string version = 2;
+  bool loaded = 3;
+  string device = 4;
+}
+
+message ServerMetrics {
+  uint32 active_streams = 1;
+  float cpu_utilization = 2;
+  float memory_utilization = 3;
+  float gpu_utilization = 4;
+  float gpu_memory_utilization = 5;
+  uint32 avg_latency_ms = 6;
+}
+
+message ComponentHealth {
+  string name = 1;
+  ServerHealth health = 2;
+  string message = 3;
 }

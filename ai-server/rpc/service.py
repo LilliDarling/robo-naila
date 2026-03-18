@@ -16,11 +16,14 @@ from typing import Optional
 
 from typing import TYPE_CHECKING
 
+import psutil
+
 from rpc.generated import naila_pb2, naila_pb2_grpc
 from utils import get_logger
 
 if TYPE_CHECKING:
     from agents.orchestrator import NAILAOrchestrator
+    from managers.ai_model import AIModelManager
 
 
 logger = get_logger(__name__)
@@ -63,15 +66,124 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
     orchestrator which runs the LangGraph pipeline.
     """
 
+    # Services considered critical for the voice pipeline.
+    # If any of these are down, overall health is UNHEALTHY.
+    _CRITICAL_SERVICES = {"stt", "llm"}
+
     def __init__(self):
         self.stt_service = None
         self.orchestrator: Optional[NAILAOrchestrator] = None
+        self._ai_model_manager: Optional[AIModelManager] = None
+        self._start_time: Optional[float] = None
+        self._server_version: str = ""
+        self._max_concurrent_streams: int = 0
 
     def set_stt_service(self, stt_service):
         self.stt_service = stt_service
 
     def set_orchestrator(self, orchestrator):
         self.orchestrator = orchestrator
+
+    def set_ai_model_manager(self, manager: "AIModelManager"):
+        self._ai_model_manager = manager
+
+    def set_server_info(
+        self,
+        start_time: Optional[float] = None,
+        server_version: str = "",
+        max_concurrent_streams: int = 0,
+    ):
+        self._start_time = start_time
+        self._server_version = server_version
+        self._max_concurrent_streams = max_concurrent_streams
+
+    async def GetStatus(self, request, context):
+        """Return server health, capabilities, and optional model/metrics info."""
+        uptime = int(time.time() - self._start_time) if self._start_time else 0
+
+        # Build component health and determine overall health
+        components = []
+        health = naila_pb2.SERVER_HEALTH_HEALTHY
+
+        if self._ai_model_manager:
+            status = self._ai_model_manager.get_status()
+
+            if not status.get("models_loaded"):
+                health = naila_pb2.SERVER_HEALTH_UNHEALTHY
+
+            for name in ("stt", "llm", "tts", "vision"):
+                svc = status.get(name)
+                if svc is None:
+                    continue
+                ready = svc.get("ready", False)
+                svc_health = (
+                    naila_pb2.SERVER_HEALTH_HEALTHY
+                    if ready
+                    else naila_pb2.SERVER_HEALTH_UNHEALTHY
+                )
+                components.append(naila_pb2.ComponentHealth(
+                    name=name,
+                    health=svc_health,
+                    message="ready" if ready else "not ready",
+                ))
+                if not ready:
+                    if name in self._CRITICAL_SERVICES:
+                        health = naila_pb2.SERVER_HEALTH_UNHEALTHY
+                    elif health == naila_pb2.SERVER_HEALTH_HEALTHY:
+                        health = naila_pb2.SERVER_HEALTH_DEGRADED
+        else:
+            health = naila_pb2.SERVER_HEALTH_UNHEALTHY
+
+        response = naila_pb2.StatusResponse(
+            health=health,
+            server_version=self._server_version,
+            uptime_seconds=uptime,
+            supported_input_codecs=[
+                naila_pb2.AUDIO_CODEC_PCM_S16LE,
+                naila_pb2.AUDIO_CODEC_OPUS,
+            ],
+            supported_output_codecs=[
+                naila_pb2.AUDIO_CODEC_PCM_S16LE,
+            ],
+            max_concurrent_streams=self._max_concurrent_streams,
+            components=components,
+        )
+
+        # Model info (only when requested)
+        if request.include_model_info and self._ai_model_manager:
+            status = self._ai_model_manager.get_status()
+            for name, field in [
+                ("stt", "stt_model"),
+                ("llm", "llm_model"),
+                ("tts", "tts_model"),
+                ("vision", "vision_model"),
+            ]:
+                svc = status.get(name)
+                if svc is None:
+                    continue
+                model_path = svc.get("model_path", "")
+                hw = svc.get("hardware") or {}
+                getattr(response, field).CopyFrom(naila_pb2.ModelInfo(
+                    model_id=model_path.rsplit("/", 1)[-1] if model_path else "",
+                    loaded=svc.get("ready", False),
+                    device=hw.get("device_type", ""),
+                ))
+
+        # Metrics (only when requested)
+        if request.include_metrics:
+            cpu = 0.0
+            mem = 0.0
+            try:
+                cpu = psutil.cpu_percent() / 100.0
+                mem = psutil.virtual_memory().percent / 100.0
+            except Exception:
+                logger.debug("metrics_collection_failed")
+            response.metrics.CopyFrom(naila_pb2.ServerMetrics(
+                cpu_utilization=cpu,
+                memory_utilization=mem,
+            ))
+
+        return response
 
     async def StreamConversation(self, request_iterator, context):
         """Bidirectional streaming voice conversation.
