@@ -13,7 +13,7 @@ use hub::audio::AudioBus;
 use hub::device::run_device;
 use hub::grpc::proto::audio_input::Audio;
 use hub::grpc::proto::naila_ai_server::{NailaAi, NailaAiServer};
-use hub::grpc::proto::{AudioInput, AudioOutput};
+use hub::grpc::proto::{AudioInput, AudioOutput, StatusRequest, StatusResponse};
 use hub::grpc::{run_grpc_client, GrpcConfig};
 use hub::metrics::HubMetrics;
 use hub::vad::VadConfig;
@@ -60,6 +60,19 @@ impl NailaAi for EchoAiService {
         });
 
         Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
+    }
+
+    async fn get_status(
+        &self,
+        _request: Request<StatusRequest>,
+    ) -> Result<Response<StatusResponse>, Status> {
+        Ok(Response::new(StatusResponse {
+            health: hub::grpc::proto::ServerHealth::Healthy as i32,
+            server_version: "test-1.0.0".to_owned(),
+            uptime_seconds: 42,
+            max_concurrent_streams: 4,
+            ..Default::default()
+        }))
     }
 }
 
