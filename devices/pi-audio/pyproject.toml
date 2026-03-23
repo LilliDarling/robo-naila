@@ -9,7 +9,7 @@ dependencies = [
     "aiohttp>=3.10.0",
     "sounddevice>=0.5.0",
     "numpy>=1.26.0",
-    "speexdsp>=0.1.1",
+    # "speexdsp>=0.1.1",  # disabled for local mac dev - needs C build deps
 ]
 
 [dependency-groups]
@@ -25,6 +25,9 @@ pi-audio = "pi_audio.main:cli"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.extra-build-dependencies]
+speexdsp = ["setuptools"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

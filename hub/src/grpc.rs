@@ -265,7 +265,7 @@ async fn recv_loop(
                     continue;
                 }
 
-                if msg.audio_pcm.is_empty() && !msg.is_final {
+                if msg.audio_pcm.is_empty() {
                     continue;
                 }
 

@@ -46,10 +46,11 @@ async fn main() {
     });
 
     // ── HTTP signaling server ───────────────────────────────────────────
+    let device_tasks: Arc<DashMap<Arc<str>, CancellationToken>> = Arc::new(DashMap::new());
     let state = AppState {
         audio_bus: Arc::clone(&audio_bus),
         connection_counter: Arc::new(AtomicU64::new(0)),
-        device_tasks: Arc::new(DashMap::new()),
+        device_tasks: Arc::clone(&device_tasks),
         metrics,
     };
     let app = router(state);
@@ -68,22 +69,26 @@ async fn main() {
     });
 
     // ── Shutdown ────────────────────────────────────────────────────────
-    // `tokio::signal::ctrl_c()` returns a future that completes when the process
-    // receives SIGINT (Ctrl+C on Unix, Ctrl+C/Ctrl+Break on Windows). This is
-    // the standard way to implement graceful shutdown in async Rust.
-    //
-    // Pattern: main awaits the signal, then cancels all child tasks, then awaits
-    // their completion. This ensures clean shutdown (connections closed, buffers
-    // flushed) rather than abrupt termination.
     tokio::signal::ctrl_c()
         .await
         .expect("failed to listen for ctrl-c");
     info!("ctrl-c received, shutting down");
+
+    // Cancel all device tasks so WebRTC peer connections close.
+    for entry in device_tasks.iter() {
+        entry.value().cancel();
+    }
     cancel.cancel();
 
-    // `tokio::join!` waits for ALL futures to complete (unlike `select!` which
-    // returns on the FIRST). The `let _ =` discards the Results since we're
-    // shutting down anyway — errors at this point aren't actionable.
-    let _ = tokio::join!(grpc_handle, http_handle);
+    // Give tasks a few seconds to shut down gracefully, then exit.
+    let graceful = async {
+        let _ = tokio::join!(grpc_handle, http_handle);
+    };
+    if tokio::time::timeout(std::time::Duration::from_secs(3), graceful)
+        .await
+        .is_err()
+    {
+        info!("graceful shutdown timed out, forcing exit");
+    }
     info!("shutdown complete");
 }

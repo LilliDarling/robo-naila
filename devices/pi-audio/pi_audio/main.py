@@ -32,10 +32,18 @@ async def run(config: DeviceConfig) -> None:
     log_task = asyncio.create_task(periodic_log(metrics, pipeline))
 
     # Shutdown flag set by signal handlers.
+    # Second Ctrl+C force-exits.
     shutdown = asyncio.Event()
     loop = asyncio.get_running_loop()
+
+    def _handle_signal():
+        if shutdown.is_set():
+            # Second signal — force exit immediately.
+            sys.exit(1)
+        shutdown.set()
+
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, shutdown.set)
+        loop.add_signal_handler(sig, _handle_signal)
 
     pipeline.start()
     delay = config.reconnect_delay
@@ -67,6 +75,8 @@ async def run(config: DeviceConfig) -> None:
                             await task
                         except asyncio.CancelledError:
                             pass
+                except (KeyboardInterrupt, asyncio.CancelledError):
+                    raise
                 except Exception:
                     metrics.connection_failures += 1
                     log.exception("connection failed")
@@ -86,7 +96,10 @@ async def run(config: DeviceConfig) -> None:
         finally:
             pipeline.stop()
             log_task.cancel()
-            await health_runner.cleanup()
+            try:
+                await asyncio.wait_for(health_runner.cleanup(), timeout=2.0)
+            except (asyncio.TimeoutError, Exception):
+                pass
             log.info("shutdown complete")
 
 
@@ -101,7 +114,10 @@ def cli() -> None:
     )
 
     log.info("starting pi-audio device: hub=%s id=%s", config.hub_url, config.device_id)
-    asyncio.run(run(config))
+    try:
+        asyncio.run(run(config))
+    except KeyboardInterrupt:
+        log.info("interrupted, exiting")
 
 
 if __name__ == "__main__":

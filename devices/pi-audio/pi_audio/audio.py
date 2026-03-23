@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 
 # Maximum queued frames before we start dropping.
 _MIC_QUEUE_MAX = 50
-_SPEAKER_QUEUE_MAX = 50
+_SPEAKER_QUEUE_MAX = 500
 
 
 class StoppedError(Exception):
@@ -57,6 +57,7 @@ class AudioPipeline:
 
         self._stream: sd.Stream | None = None
         self._silence = np.zeros(frame_size, dtype=np.int16)
+        self._playback_buf = np.array([], dtype=np.int16)
 
     # ------------------------------------------------------------------
     # PortAudio callback (audio thread)
@@ -151,20 +152,30 @@ class AudioPipeline:
         return frame
 
     def queue_playback(self, samples: np.ndarray) -> None:
-        """Non-blocking enqueue of TTS samples for playback."""
-        try:
-            self._speaker_queue.put_nowait(samples)
-        except queue.Full:
+        """Non-blocking enqueue of TTS samples for playback.
+
+        Incoming TTS chunks may be any size. We buffer and rechunk
+        into frame_size pieces so the PortAudio callback always gets
+        the exact number of samples it expects.
+        """
+        self._playback_buf = np.concatenate([self._playback_buf, samples.astype(np.int16)])
+
+        while len(self._playback_buf) >= self._frame_size:
+            chunk = self._playback_buf[: self._frame_size]
+            self._playback_buf = self._playback_buf[self._frame_size :]
             try:
-                self._speaker_queue.get_nowait()
-            except queue.Empty:
-                pass
-            try:
-                self._speaker_queue.put_nowait(samples)
+                self._speaker_queue.put_nowait(chunk)
             except queue.Full:
-                pass
-            if self._metrics:
-                self._metrics.tts_frames_dropped += 1
+                try:
+                    self._speaker_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self._speaker_queue.put_nowait(chunk)
+                except queue.Full:
+                    pass
+                if self._metrics:
+                    self._metrics.tts_frames_dropped += 1
 
     @property
     def mic_queue_depth(self) -> int:

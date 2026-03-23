@@ -14,6 +14,9 @@ import time
 import wave
 from typing import Optional
 
+import numpy as np
+import resampy
+
 from typing import TYPE_CHECKING
 
 from rpc.generated import naila_pb2, naila_pb2_grpc
@@ -93,6 +96,11 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
 
         peer = context.peer()
         logger.info("stream_opened", peer=peer)
+
+        # Send initial metadata immediately so the tonic client unblocks.
+        # Without this, grpc.aio may delay response headers until the first
+        # yield, causing a deadlock with bidirectional streaming clients.
+        await context.send_initial_metadata(())
 
         async def _read_inputs():
             """Read the input stream and dispatch speech events."""
@@ -252,7 +260,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         async for output in self._process_utterance(
             pcm_bytes, sample_rate, device_id, conversation_id, context,
         ):
-            if context and not context.is_active():
+            if context and context.cancelled():
                 logger.info("client_disconnected_during_enqueue", device_id=device_id)
                 return
             await queue.put(output)
@@ -313,7 +321,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
             duration_ms=stt_result.transcription_time_ms,
         )
 
-        if context and not context.is_active():
+        if context and context.cancelled():
             logger.info("client_disconnected_after_stt", device_id=device_id)
             return
 
@@ -337,11 +345,21 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
 
             Chunks the raw PCM into ~100ms AudioOutput messages and streams
             them into an asyncio.Queue for immediate delivery to the client.
+            Resamples to 48 kHz for WebRTC/Opus compatibility.
             """
             if not audio_data or not audio_data.audio_bytes:
                 return
             raw_bytes = audio_data.audio_bytes
             tts_sample_rate = audio_data.sample_rate
+
+            # Resample to 48 kHz if needed (Opus/WebRTC standard).
+            target_rate = 48000
+            if tts_sample_rate != target_rate:
+                samples = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+                resampled = resampy.resample(samples, tts_sample_rate, target_rate)
+                resampled = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
+                raw_bytes = resampled.tobytes()
+                tts_sample_rate = target_rate
             for seq, offset in enumerate(range(0, len(raw_bytes), TTS_CHUNK_BYTES)):
                 chunk = raw_bytes[offset : offset + TTS_CHUNK_BYTES]
                 is_last = offset + TTS_CHUNK_BYTES >= len(raw_bytes)
@@ -386,7 +404,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                 item = await tts_queue.get()
                 if item is _DONE:
                     break
-                if context and not context.is_active():
+                if context and context.cancelled():
                     logger.info("client_disconnected_during_tts_stream", device_id=device_id)
                     orchestration_task.cancel()
                     return
