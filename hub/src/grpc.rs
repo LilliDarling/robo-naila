@@ -19,7 +19,7 @@ pub mod proto {
 }
 
 use proto::naila_ai_client::NailaAiClient;
-use proto::{AudioCodec, AudioInput, AudioOutput, SpeechEvent};
+use proto::{AudioCodec, AudioInput, AudioOutput, SpeechEvent, StatusRequest};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config
@@ -89,11 +89,13 @@ pub async fn run_grpc_client(
                 Ok(()) => {
                     // Graceful shutdown (audio bus closed or cancellation).
                     metrics.grpc_connected.store(false, Ordering::Relaxed);
+                    metrics.clear_ai_status();
                     info!("gRPC stream ended cleanly");
                     return;
                 }
                 Err(e) => {
                     metrics.grpc_connected.store(false, Ordering::Relaxed);
+                    metrics.clear_ai_status();
                     metrics.grpc_reconnects.fetch_add(1, Ordering::Relaxed);
                     error!("gRPC error: {e}");
                     drain_stale(&mut audio_rx);
@@ -144,7 +146,33 @@ async fn connect_and_stream(
 
     let mut client = NailaAiClient::new(channel);
 
-    info!("gRPC channel connected, opening stream");
+    info!("gRPC channel connected, checking AI server status");
+
+    // Call GetStatus before opening the streaming RPC. This lets us
+    // verify the server is healthy and cache its status for /health.
+    match client.get_status(StatusRequest {
+        include_model_info: true,
+        include_metrics: true,
+    }).await {
+        Ok(response) => {
+            let status = response.into_inner();
+            let health = proto::ServerHealth::try_from(status.health)
+                .unwrap_or(proto::ServerHealth::Unknown);
+            info!(
+                health = ?health,
+                version = %status.server_version,
+                uptime_secs = status.uptime_seconds,
+                "AI server status received"
+            );
+            metrics.update_ai_status(status);
+        }
+        Err(e) => {
+            warn!("GetStatus failed (server may not support it yet): {e}");
+            metrics.clear_ai_status();
+        }
+    }
+
+    info!("opening bidirectional stream");
 
     // Tonic takes ownership of the request stream at call time, so we
     // can't hand audio_rx directly — it needs to survive reconnects.

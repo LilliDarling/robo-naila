@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0bnaila.proto\x12\x05naila\"\x9e\x02\n\nAudioInput\x12\x11\n\tdevice_id\x18\x01 \x01(\t\x12\x0f\n\x07room_id\x18\x02 \x01(\t\x12\x17\n\x0f\x63onversation_id\x18\x03 \x01(\t\x12\x13\n\taudio_pcm\x18\x04 \x01(\x0cH\x00\x12\x14\n\naudio_opus\x18\x05 \x01(\x0cH\x00\x12 \n\x05\x63odec\x18\x06 \x01(\x0e\x32\x11.naila.AudioCodec\x12\x13\n\x0bsample_rate\x18\x07 \x01(\r\x12\x19\n\x11\x63hunk_duration_ms\x18\x08 \x01(\r\x12\x14\n\x0ctimestamp_ms\x18\t \x01(\x04\x12\x14\n\x0csequence_num\x18\n \x01(\r\x12!\n\x05\x65vent\x18\x0b \x01(\x0e\x32\x12.naila.SpeechEventB\x07\n\x05\x61udio\"\xea\x01\n\x0b\x41udioOutput\x12\x11\n\tdevice_id\x18\x01 \x01(\t\x12\x0f\n\x07room_id\x18\x02 \x01(\t\x12\x17\n\x0f\x63onversation_id\x18\x03 \x01(\t\x12\x11\n\taudio_pcm\x18\x04 \x01(\x0c\x12\x13\n\x0bsample_rate\x18\x05 \x01(\r\x12\x14\n\x0csequence_num\x18\x06 \x01(\r\x12\x10\n\x08is_final\x18\x07 \x01(\x08\x12\x11\n\tfinal_stt\x18\x08 \x01(\t\x12$\n\nerror_code\x18\t \x01(\x0e\x32\x10.naila.ErrorCode\x12\x15\n\rerror_message\x18\n \x01(\t*V\n\nAudioCodec\x12\x17\n\x13\x41UDIO_CODEC_UNKNOWN\x10\x00\x12\x19\n\x15\x41UDIO_CODEC_PCM_S16LE\x10\x01\x12\x14\n\x10\x41UDIO_CODEC_OPUS\x10\x02*\x8c\x01\n\x0bSpeechEvent\x12\x18\n\x14SPEECH_EVENT_UNKNOWN\x10\x00\x12\x16\n\x12SPEECH_EVENT_START\x10\x01\x12\x19\n\x15SPEECH_EVENT_CONTINUE\x10\x02\x12\x14\n\x10SPEECH_EVENT_END\x10\x03\x12\x1a\n\x16SPEECH_EVENT_INTERRUPT\x10\x04*q\n\tErrorCode\x12\x0e\n\nERROR_NONE\x10\x00\x12\x14\n\x10\x45RROR_STT_FAILED\x10\x01\x12\x14\n\x10\x45RROR_LLM_FAILED\x10\x02\x12\x14\n\x10\x45RROR_TTS_FAILED\x10\x03\x12\x12\n\x0e\x45RROR_INTERNAL\x10\x63\x32J\n\x07NailaAI\x12?\n\x12StreamConversation\x12\x11.naila.AudioInput\x1a\x12.naila.AudioOutput(\x01\x30\x01\x42\x02H\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0bnaila.proto\x12\x05naila\"\x9e\x02\n\nAudioInput\x12\x11\n\tdevice_id\x18\x01 \x01(\t\x12\x0f\n\x07room_id\x18\x02 \x01(\t\x12\x17\n\x0f\x63onversation_id\x18\x03 \x01(\t\x12\x13\n\taudio_pcm\x18\x04 \x01(\x0cH\x00\x12\x14\n\naudio_opus\x18\x05 \x01(\x0cH\x00\x12 \n\x05\x63odec\x18\x06 \x01(\x0e\x32\x11.naila.AudioCodec\x12\x13\n\x0bsample_rate\x18\x07 \x01(\r\x12\x19\n\x11\x63hunk_duration_ms\x18\x08 \x01(\r\x12\x14\n\x0ctimestamp_ms\x18\t \x01(\x04\x12\x14\n\x0csequence_num\x18\n \x01(\r\x12!\n\x05\x65vent\x18\x0b \x01(\x0e\x32\x12.naila.SpeechEventB\x07\n\x05\x61udio\"\xea\x01\n\x0b\x41udioOutput\x12\x11\n\tdevice_id\x18\x01 \x01(\t\x12\x0f\n\x07room_id\x18\x02 \x01(\t\x12\x17\n\x0f\x63onversation_id\x18\x03 \x01(\t\x12\x11\n\taudio_pcm\x18\x04 \x01(\x0c\x12\x13\n\x0bsample_rate\x18\x05 \x01(\r\x12\x14\n\x0csequence_num\x18\x06 \x01(\r\x12\x10\n\x08is_final\x18\x07 \x01(\x08\x12\x11\n\tfinal_stt\x18\x08 \x01(\t\x12$\n\nerror_code\x18\t \x01(\x0e\x32\x10.naila.ErrorCode\x12\x15\n\rerror_message\x18\n \x01(\t\"D\n\rStatusRequest\x12\x1a\n\x12include_model_info\x18\x01 \x01(\x08\x12\x17\n\x0finclude_metrics\x18\x02 \x01(\x08\"\xd6\x03\n\x0eStatusResponse\x12#\n\x06health\x18\x01 \x01(\x0e\x32\x13.naila.ServerHealth\x12\x16\n\x0eserver_version\x18\x02 \x01(\t\x12\x16\n\x0euptime_seconds\x18\x03 \x01(\x04\x12\x31\n\x16supported_input_codecs\x18\x04 \x03(\x0e\x32\x11.naila.AudioCodec\x12\x32\n\x17supported_output_codecs\x18\x05 \x03(\x0e\x32\x11.naila.AudioCodec\x12\x1e\n\x16max_concurrent_streams\x18\x06 \x01(\r\x12#\n\tstt_model\x18\x07 \x01(\x0b\x32\x10.naila.ModelInfo\x12#\n\tllm_model\x18\x08 \x01(\x0b\x32\x10.naila.ModelInfo\x12#\n\ttts_model\x18\t \x01(\x0b\x32\x10.naila.ModelInfo\x12&\n\x0cvision_model\x18\n \x01(\x0b\x32\x10.naila.ModelInfo\x12%\n\x07metrics\x18\x0b \x01(\x0b\x32\x14.naila.ServerMetrics\x12*\n\ncomponents\x18\x0c \x03(\x0b\x32\x16.naila.ComponentHealth\"N\n\tModelInfo\x12\x10\n\x08model_id\x18\x01 \x01(\t\x12\x0f\n\x07version\x18\x02 \x01(\t\x12\x0e\n\x06loaded\x18\x03 \x01(\x08\x12\x0e\n\x06\x64\x65vice\x18\x04 \x01(\t\"\xad\x01\n\rServerMetrics\x12\x16\n\x0e\x61\x63tive_streams\x18\x01 \x01(\r\x12\x17\n\x0f\x63pu_utilization\x18\x02 \x01(\x02\x12\x1a\n\x12memory_utilization\x18\x03 \x01(\x02\x12\x17\n\x0fgpu_utilization\x18\x04 \x01(\x02\x12\x1e\n\x16gpu_memory_utilization\x18\x05 \x01(\x02\x12\x16\n\x0e\x61vg_latency_ms\x18\x06 \x01(\r\"U\n\x0f\x43omponentHealth\x12\x0c\n\x04name\x18\x01 \x01(\t\x12#\n\x06health\x18\x02 \x01(\x0e\x32\x13.naila.ServerHealth\x12\x0f\n\x07message\x18\x03 \x01(\t*V\n\nAudioCodec\x12\x17\n\x13\x41UDIO_CODEC_UNKNOWN\x10\x00\x12\x19\n\x15\x41UDIO_CODEC_PCM_S16LE\x10\x01\x12\x14\n\x10\x41UDIO_CODEC_OPUS\x10\x02*\x8c\x01\n\x0bSpeechEvent\x12\x18\n\x14SPEECH_EVENT_UNKNOWN\x10\x00\x12\x16\n\x12SPEECH_EVENT_START\x10\x01\x12\x19\n\x15SPEECH_EVENT_CONTINUE\x10\x02\x12\x14\n\x10SPEECH_EVENT_END\x10\x03\x12\x1a\n\x16SPEECH_EVENT_INTERRUPT\x10\x04*q\n\tErrorCode\x12\x0e\n\nERROR_NONE\x10\x00\x12\x14\n\x10\x45RROR_STT_FAILED\x10\x01\x12\x14\n\x10\x45RROR_LLM_FAILED\x10\x02\x12\x14\n\x10\x45RROR_TTS_FAILED\x10\x03\x12\x12\n\x0e\x45RROR_INTERNAL\x10\x63*}\n\x0cServerHealth\x12\x19\n\x15SERVER_HEALTH_UNKNOWN\x10\x00\x12\x19\n\x15SERVER_HEALTH_HEALTHY\x10\x01\x12\x1a\n\x16SERVER_HEALTH_DEGRADED\x10\x02\x12\x1b\n\x17SERVER_HEALTH_UNHEALTHY\x10\x03\x32\x84\x01\n\x07NailaAI\x12?\n\x12StreamConversation\x12\x11.naila.AudioInput\x1a\x12.naila.AudioOutput(\x01\x30\x01\x12\x38\n\tGetStatus\x12\x14.naila.StatusRequest\x1a\x15.naila.StatusResponseB\x02H\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,16 +32,28 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'naila_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'H\001'
-  _globals['_AUDIOCODEC']._serialized_start=548
-  _globals['_AUDIOCODEC']._serialized_end=634
-  _globals['_SPEECHEVENT']._serialized_start=637
-  _globals['_SPEECHEVENT']._serialized_end=777
-  _globals['_ERRORCODE']._serialized_start=779
-  _globals['_ERRORCODE']._serialized_end=892
+  _globals['_AUDIOCODEC']._serialized_start=1434
+  _globals['_AUDIOCODEC']._serialized_end=1520
+  _globals['_SPEECHEVENT']._serialized_start=1523
+  _globals['_SPEECHEVENT']._serialized_end=1663
+  _globals['_ERRORCODE']._serialized_start=1665
+  _globals['_ERRORCODE']._serialized_end=1778
+  _globals['_SERVERHEALTH']._serialized_start=1780
+  _globals['_SERVERHEALTH']._serialized_end=1905
   _globals['_AUDIOINPUT']._serialized_start=23
   _globals['_AUDIOINPUT']._serialized_end=309
   _globals['_AUDIOOUTPUT']._serialized_start=312
   _globals['_AUDIOOUTPUT']._serialized_end=546
-  _globals['_NAILAAI']._serialized_start=894
-  _globals['_NAILAAI']._serialized_end=968
+  _globals['_STATUSREQUEST']._serialized_start=548
+  _globals['_STATUSREQUEST']._serialized_end=616
+  _globals['_STATUSRESPONSE']._serialized_start=619
+  _globals['_STATUSRESPONSE']._serialized_end=1089
+  _globals['_MODELINFO']._serialized_start=1091
+  _globals['_MODELINFO']._serialized_end=1169
+  _globals['_SERVERMETRICS']._serialized_start=1172
+  _globals['_SERVERMETRICS']._serialized_end=1345
+  _globals['_COMPONENTHEALTH']._serialized_start=1347
+  _globals['_COMPONENTHEALTH']._serialized_end=1432
+  _globals['_NAILAAI']._serialized_start=1908
+  _globals['_NAILAAI']._serialized_end=2040
 # @@protoc_insertion_point(module_scope)
