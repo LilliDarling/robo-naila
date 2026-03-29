@@ -172,3 +172,188 @@ pub struct HealthResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ai_server: Option<AiServerStatus>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::grpc::proto;
+
+    /// Fully populated healthy StatusResponse for test reuse.
+    fn healthy_status() -> proto::StatusResponse {
+        proto::StatusResponse {
+            health: proto::ServerHealth::Healthy as i32,
+            server_version: "test-1.0.0".to_owned(),
+            uptime_seconds: 42,
+            max_concurrent_streams: 4,
+            components: vec![
+                proto::ComponentHealth {
+                    name: "stt".to_owned(),
+                    health: proto::ServerHealth::Healthy as i32,
+                    message: "ready".to_owned(),
+                },
+                proto::ComponentHealth {
+                    name: "llm".to_owned(),
+                    health: proto::ServerHealth::Healthy as i32,
+                    message: "ready".to_owned(),
+                },
+            ],
+            stt_model: Some(proto::ModelInfo {
+                model_id: "whisper-small.en".to_owned(),
+                version: "1.0".to_owned(),
+                loaded: true,
+                device: "cuda:0".to_owned(),
+            }),
+            llm_model: Some(proto::ModelInfo {
+                model_id: "llama-3-8b".to_owned(),
+                version: "1.0".to_owned(),
+                loaded: true,
+                device: "cuda:0".to_owned(),
+            }),
+            tts_model: None,
+            vision_model: None,
+            metrics: Some(proto::ServerMetrics {
+                cpu_utilization: 0.45,
+                memory_utilization: 0.72,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn update_caches_health_version_uptime() {
+        let m = HubMetrics::new();
+        m.update_ai_status(healthy_status());
+
+        let ai = m.snapshot(0).ai_server.unwrap();
+        assert_eq!(ai.health, "healthy");
+        assert_eq!(ai.server_version, "test-1.0.0");
+        assert_eq!(ai.uptime_seconds, 42);
+        assert_eq!(ai.max_concurrent_streams, 4);
+    }
+
+    #[test]
+    fn update_maps_components() {
+        let m = HubMetrics::new();
+        m.update_ai_status(healthy_status());
+
+        let ai = m.snapshot(0).ai_server.unwrap();
+        assert_eq!(ai.components.len(), 2);
+        assert_eq!(ai.components[0].name, "stt");
+        assert_eq!(ai.components[0].health, "healthy");
+        assert_eq!(ai.components[0].message, "ready");
+        assert_eq!(ai.components[1].name, "llm");
+    }
+
+    #[test]
+    fn update_maps_loaded_models_and_filters_absent() {
+        let m = HubMetrics::new();
+        m.update_ai_status(healthy_status());
+
+        let ai = m.snapshot(0).ai_server.unwrap();
+        // stt and llm have models; tts and vision are None → filtered out
+        assert_eq!(ai.models.len(), 2);
+        assert_eq!(ai.models[0].name, "stt");
+        assert_eq!(ai.models[0].model_id, "whisper-small.en");
+        assert!(ai.models[0].loaded);
+        assert_eq!(ai.models[0].device, "cuda:0");
+        assert_eq!(ai.models[1].name, "llm");
+        assert_eq!(ai.models[1].model_id, "llama-3-8b");
+    }
+
+    #[test]
+    fn update_filters_empty_unloaded_models() {
+        let m = HubMetrics::new();
+        let mut status = healthy_status();
+        // Empty model_id + not loaded → should be filtered out
+        status.tts_model = Some(proto::ModelInfo {
+            model_id: String::new(),
+            loaded: false,
+            ..Default::default()
+        });
+        m.update_ai_status(status);
+
+        let ai = m.snapshot(0).ai_server.unwrap();
+        assert_eq!(ai.models.len(), 2); // stt + llm only
+    }
+
+    #[test]
+    fn update_extracts_metrics() {
+        let m = HubMetrics::new();
+        m.update_ai_status(healthy_status());
+
+        let ai = m.snapshot(0).ai_server.unwrap();
+        assert!((ai.cpu_utilization - 0.45).abs() < 0.001);
+        assert!((ai.memory_utilization - 0.72).abs() < 0.001);
+    }
+
+    #[test]
+    fn update_defaults_metrics_when_absent() {
+        let m = HubMetrics::new();
+        let mut status = healthy_status();
+        status.metrics = None;
+        m.update_ai_status(status);
+
+        let ai = m.snapshot(0).ai_server.unwrap();
+        assert_eq!(ai.cpu_utilization, 0.0);
+        assert_eq!(ai.memory_utilization, 0.0);
+    }
+
+    #[test]
+    fn update_maps_degraded_health() {
+        let m = HubMetrics::new();
+        let mut status = healthy_status();
+        status.health = proto::ServerHealth::Degraded as i32;
+        m.update_ai_status(status);
+
+        assert_eq!(m.snapshot(0).ai_server.unwrap().health, "degraded");
+    }
+
+    #[test]
+    fn update_maps_unknown_for_invalid_health_value() {
+        let m = HubMetrics::new();
+        let mut status = healthy_status();
+        status.health = 99; // not a valid ServerHealth variant
+        m.update_ai_status(status);
+
+        assert_eq!(m.snapshot(0).ai_server.unwrap().health, "unknown");
+    }
+
+    #[test]
+    fn clear_removes_cached_status() {
+        let m = HubMetrics::new();
+        m.update_ai_status(healthy_status());
+        assert!(m.snapshot(0).ai_server.is_some());
+
+        m.clear_ai_status();
+        assert!(m.snapshot(0).ai_server.is_none());
+    }
+
+    #[test]
+    fn snapshot_without_status_has_none() {
+        let m = HubMetrics::new();
+        let snap = m.snapshot(0);
+        assert!(snap.ai_server.is_none());
+        assert_eq!(snap.status, "ok");
+    }
+
+    #[test]
+    fn snapshot_reflects_counters_and_devices() {
+        let m = HubMetrics::new();
+        m.frames_forwarded.store(100, Ordering::Relaxed);
+        m.vad_onsets.store(5, Ordering::Relaxed);
+        m.vad_ends.store(4, Ordering::Relaxed);
+        m.tts_frames_routed.store(50, Ordering::Relaxed);
+        m.grpc_reconnects.store(2, Ordering::Relaxed);
+        m.grpc_connected.store(true, Ordering::Relaxed);
+
+        let snap = m.snapshot(3);
+        assert_eq!(snap.active_devices, 3);
+        assert_eq!(snap.frames_forwarded, 100);
+        assert_eq!(snap.vad_onsets, 5);
+        assert_eq!(snap.vad_ends, 4);
+        assert_eq!(snap.tts_frames_routed, 50);
+        assert_eq!(snap.grpc_reconnects, 2);
+        assert!(snap.grpc_connected);
+    }
+}

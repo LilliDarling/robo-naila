@@ -104,6 +104,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         # Build component health and determine overall health
         components = []
         health = naila_pb2.SERVER_HEALTH_HEALTHY
+        status = None
 
         if self._ai_model_manager:
             status = self._ai_model_manager.get_status()
@@ -149,9 +150,8 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
             components=components,
         )
 
-        # Model info (only when requested)
-        if request.include_model_info and self._ai_model_manager:
-            status = self._ai_model_manager.get_status()
+        # Model info (only when requested — reuse `status` from above)
+        if request.include_model_info and status:
             for name, field in [
                 ("stt", "stt_model"),
                 ("llm", "llm_model"),
@@ -174,7 +174,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
             cpu = 0.0
             mem = 0.0
             try:
-                cpu = psutil.cpu_percent() / 100.0
+                cpu = psutil.cpu_percent(interval=0.0) / 100.0
                 mem = psutil.virtual_memory().percent / 100.0
             except Exception:
                 logger.debug("metrics_collection_failed")

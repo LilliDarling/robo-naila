@@ -23,7 +23,24 @@ use webrtc_vad::VadMode;
 // ── Mock AI server ───────────────────────────────────────────────────────────
 
 /// Echoes every AudioInput back as an AudioOutput with the same PCM data.
-struct EchoAiService;
+/// Accepts an optional CancellationToken to close streams on demand (for
+/// disconnect testing). When the token fires, the stream handler drops
+/// its sender, which the client sees as "server closed the stream".
+struct EchoAiService {
+    stream_kill: CancellationToken,
+}
+
+impl EchoAiService {
+    fn new() -> Self {
+        Self {
+            stream_kill: CancellationToken::new(),
+        }
+    }
+
+    fn with_kill_switch(kill: CancellationToken) -> Self {
+        Self { stream_kill: kill }
+    }
+}
 
 #[tonic::async_trait]
 impl NailaAi for EchoAiService {
@@ -36,27 +53,39 @@ impl NailaAi for EchoAiService {
     ) -> Result<Response<Self::StreamConversationStream>, Status> {
         let mut inbound = request.into_inner();
         let (tx, rx) = mpsc::channel::<Result<AudioOutput, Status>>(128);
+        let kill = self.stream_kill.clone();
 
         tokio::spawn(async move {
-            while let Ok(Some(input)) = inbound.message().await {
-                let pcm = match input.audio {
-                    Some(Audio::AudioPcm(data)) => data,
-                    _ => continue,
-                };
+            loop {
+                tokio::select! {
+                    msg = inbound.message() => {
+                        let input = match msg {
+                            Ok(Some(input)) => input,
+                            _ => break,
+                        };
 
-                let output = AudioOutput {
-                    device_id: input.device_id,
-                    conversation_id: input.conversation_id,
-                    audio_pcm: pcm,
-                    sample_rate: input.sample_rate,
-                    is_final: false,
-                    ..Default::default()
-                };
+                        let pcm = match input.audio {
+                            Some(Audio::AudioPcm(data)) => data,
+                            _ => continue,
+                        };
 
-                if tx.send(Ok(output)).await.is_err() {
-                    break;
+                        let output = AudioOutput {
+                            device_id: input.device_id,
+                            conversation_id: input.conversation_id,
+                            audio_pcm: pcm,
+                            sample_rate: input.sample_rate,
+                            is_final: false,
+                            ..Default::default()
+                        };
+
+                        if tx.send(Ok(output)).await.is_err() {
+                            break;
+                        }
+                    }
+                    _ = kill.cancelled() => break,
                 }
             }
+            // Dropping tx closes the response stream.
         });
 
         Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
@@ -92,7 +121,7 @@ async fn audio_loopback_through_grpc() {
 
     let server_handle = tokio::spawn(async move {
         tonic::transport::Server::builder()
-            .add_service(NailaAiServer::new(EchoAiService))
+            .add_service(NailaAiServer::new(EchoAiService::new()))
             .serve_with_incoming(incoming)
             .await
             .unwrap();
@@ -166,4 +195,138 @@ async fn audio_loopback_through_grpc() {
     device_cancel.cancel();
     let _ = tokio::join!(grpc_handle, device_handle);
     server_handle.abort();
+}
+
+// ── GetStatus integration tests ─────────────────────────────────────────────
+
+/// After a successful gRPC connection, the hub should call GetStatus and
+/// cache the AI server's health, version, uptime, and capabilities.
+#[tokio::test]
+async fn grpc_connection_populates_ai_server_status() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
+    let server_addr = listener.local_addr().unwrap();
+    let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
+
+    let server_handle = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(NailaAiServer::new(EchoAiService::new()))
+            .serve_with_incoming(incoming)
+            .await
+            .unwrap();
+    });
+
+    let (audio_tx, audio_rx) = mpsc::channel(256);
+    let bus = Arc::new(AudioBus {
+        audio_tx,
+        tts_sub: DashMap::new(),
+    });
+
+    let cancel = CancellationToken::new();
+    let metrics = Arc::new(HubMetrics::new());
+    let grpc_config = GrpcConfig {
+        server_addr: format!("http://{server_addr}"),
+        initial_backoff: Duration::from_millis(50),
+        max_backoff: Duration::from_millis(200),
+    };
+
+    let grpc_handle = tokio::spawn(run_grpc_client(
+        grpc_config,
+        Arc::clone(&bus),
+        audio_rx,
+        cancel.clone(),
+        Arc::clone(&metrics),
+    ));
+
+    // Wait for connection + GetStatus call.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let snap = metrics.snapshot(0);
+    assert!(snap.grpc_connected, "should be connected");
+
+    let ai = snap
+        .ai_server
+        .expect("ai_server should be populated after connection");
+    assert_eq!(ai.health, "healthy");
+    assert_eq!(ai.server_version, "test-1.0.0");
+    assert_eq!(ai.uptime_seconds, 42);
+    assert_eq!(ai.max_concurrent_streams, 4);
+
+    cancel.cancel();
+    let _ = grpc_handle.await;
+    server_handle.abort();
+}
+
+/// When the AI server's stream closes, the hub should clear the cached
+/// status and mark the connection as down.
+#[tokio::test]
+async fn grpc_disconnect_clears_ai_server_status() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
+    let server_addr = listener.local_addr().unwrap();
+    let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
+
+    // Use the kill switch so we can close the stream on demand.
+    let stream_kill = CancellationToken::new();
+    let service = EchoAiService::with_kill_switch(stream_kill.clone());
+
+    let server_handle = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(NailaAiServer::new(service))
+            .serve_with_incoming(incoming)
+            .await
+            .unwrap();
+    });
+
+    let (audio_tx, audio_rx) = mpsc::channel(256);
+    let bus = Arc::new(AudioBus {
+        audio_tx,
+        tts_sub: DashMap::new(),
+    });
+
+    let cancel = CancellationToken::new();
+    let metrics = Arc::new(HubMetrics::new());
+    let grpc_config = GrpcConfig {
+        server_addr: format!("http://{server_addr}"),
+        initial_backoff: Duration::from_millis(50),
+        max_backoff: Duration::from_millis(200),
+    };
+
+    let grpc_handle = tokio::spawn(run_grpc_client(
+        grpc_config,
+        Arc::clone(&bus),
+        audio_rx,
+        cancel.clone(),
+        Arc::clone(&metrics),
+    ));
+
+    // Wait for connection.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        metrics.snapshot(0).ai_server.is_some(),
+        "ai_server should be populated before disconnect"
+    );
+
+    // Close the stream and shut down the server so reconnection also fails.
+    stream_kill.cancel();
+    server_handle.abort();
+
+    // Poll until the client detects the failure and clears status.
+    let mut cleared = false;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        if metrics.snapshot(0).ai_server.is_none() {
+            cleared = true;
+            break;
+        }
+    }
+
+    assert!(cleared, "ai_server should be cleared after disconnect");
+    assert!(!metrics.snapshot(0).grpc_connected);
+    assert!(metrics.snapshot(0).grpc_reconnects >= 1);
+
+    cancel.cancel();
+    let _ = grpc_handle.await;
 }
