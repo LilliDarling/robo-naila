@@ -125,7 +125,7 @@ class ResponseGenerator(BaseAgent):
                 return result
 
         # Handle low confidence inputs
-        if confidence < 0.6:
+        if confidence < 0.3:
             return self._generate_clarification_response(text, confidence)
 
         # Try LLM generation first if available

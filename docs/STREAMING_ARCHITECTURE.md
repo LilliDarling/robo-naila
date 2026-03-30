@@ -7,7 +7,7 @@ Real-time voice streaming for NAILA, enabling low-latency conversations between 
 ```
 ┌──────────────┐        WebRTC (Opus)        ┌──────────────┐       gRPC (protobuf)      ┌──────────────┐
 │    Device    │ ◄══════════════════════════► │     Hub      │ ◄══════════════════════════► │  AI Server   │
-│  (Pi Audio)  │                              │    (Rust)    │                              │   (Python)   │
+│(Audio Client)│                              │    (Rust)    │                              │   (Python)   │
 │              │    HTTP signaling (SDP)       │              │                              │              │
 │  • Mic       │ ─────────────────────────── ►│  • WebRTC    │    StreamConversation RPC    │  • STT       │
 │  • Speaker   │                              │  • VAD       │    (bidirectional stream)    │  • LLM       │
@@ -20,7 +20,7 @@ Real-time voice streaming for NAILA, enabling low-latency conversations between 
 
 | Component | Language | Role |
 |-----------|----------|------|
-| **Pi Audio** (`devices/pi-audio/`) | Python | Captures mic audio, plays TTS, runs echo cancellation |
+| **Audio Client** (`devices/audio-client/`) | Python | Captures mic audio, plays TTS, runs echo cancellation |
 | **Hub** (`hub/`) | Rust | WebRTC server, VAD filtering, gRPC relay to AI server |
 | **AI Server** (`ai-server/`) | Python | STT → LLM → TTS pipeline, MQTT for commands/alerts |
 
@@ -39,7 +39,7 @@ Real-time voice streaming for NAILA, enabling low-latency conversations between 
 User speaks
     │
     ▼
-Pi Audio captures mic (48kHz, Opus, 20ms frames)
+Audio client captures mic (48kHz, Opus, 20ms frames)
     │
     ▼
 AEC removes speaker echo (SpeexDSP)
@@ -66,7 +66,7 @@ AI Server streams gRPC AudioOutput (PCM)
 Hub encodes PCM → Opus → RTP
     │
     ▼
-WebRTC stream → Pi Audio speaker
+WebRTC stream → Audio client speaker
 ```
 
 ## gRPC Protocol

@@ -3,7 +3,7 @@ import queue
 import numpy as np
 import pytest
 
-from pi_audio.metrics import DeviceMetrics
+from audio_client.metrics import DeviceMetrics
 
 
 SAMPLE_RATE = 48_000

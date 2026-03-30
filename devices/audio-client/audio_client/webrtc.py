@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from fractions import Fraction
 from typing import TYPE_CHECKING
 
 import aiohttp
@@ -9,6 +10,7 @@ import av
 import numpy as np
 from aiortc import (
     MediaStreamTrack,
+    RTCConfiguration,
     RTCPeerConnection,
     RTCSessionDescription,
 )
@@ -20,6 +22,7 @@ from .http import exchange_sdp
 if TYPE_CHECKING:
     from .audio import AudioPipeline
     from .metrics import DeviceMetrics
+    from .profile import DeviceProfile
 
 log = logging.getLogger(__name__)
 
@@ -58,7 +61,7 @@ class MicTrack(MediaStreamTrack):
         )
         frame.sample_rate = OPUS_SAMPLE_RATE
         frame.pts = self._pts
-        frame.time_base = f"1/{OPUS_SAMPLE_RATE}"
+        frame.time_base = Fraction(1, OPUS_SAMPLE_RATE)
         self._pts += SAMPLES_PER_FRAME
 
         if self._metrics:
@@ -77,12 +80,14 @@ class WebRTCClient:
         pipeline: AudioPipeline,
         session: aiohttp.ClientSession,
         metrics: DeviceMetrics | None = None,
+        profile: DeviceProfile | None = None,
     ) -> None:
         self._hub_url = hub_url
         self._device_id = device_id
         self._pipeline = pipeline
         self._session = session
         self._metrics = metrics
+        self._profile = profile
         self._pc: RTCPeerConnection | None = None
         self._closed = asyncio.Event()
         self._recv_task: asyncio.Task[None] | None = None
@@ -90,7 +95,7 @@ class WebRTCClient:
     async def connect(self) -> None:
         """Create offer, exchange SDP with hub, start streaming."""
         # No ICE servers — local network only, matching hub RTCConfiguration.
-        self._pc = RTCPeerConnection(configuration={"iceServers": []})
+        self._pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=[]))
 
         # Outbound: mic → hub.
         mic_track = MicTrack(self._pipeline, self._metrics)
@@ -119,7 +124,8 @@ class WebRTCClient:
         await self._wait_ice_gathering()
 
         answer_sdp = await exchange_sdp(
-            self._session, self._hub_url, self._device_id, self._pc.localDescription.sdp
+            self._session, self._hub_url, self._device_id, self._pc.localDescription.sdp,
+            profile=self._profile,
         )
         answer = RTCSessionDescription(sdp=answer_sdp, type="answer")
         await self._pc.setRemoteDescription(answer)
@@ -146,9 +152,18 @@ class WebRTCClient:
     async def _recv_tts(self, track: MediaStreamTrack) -> None:
         """Receive inbound TTS audio frames and enqueue for playback."""
         log.info("TTS receive loop started")
+        logged_format = False
         try:
             while True:
                 frame: av.AudioFrame = await track.recv()
+                if not logged_format:
+                    arr = frame.to_ndarray()
+                    log.info(
+                        "TTS frame format: %s dtype=%s shape=%s sr=%d range=[%.2f, %.2f]",
+                        frame.format.name, arr.dtype, arr.shape,
+                        frame.sample_rate, arr.min(), arr.max(),
+                    )
+                    logged_format = True
                 # Decode to int16 numpy array.
                 pcm = frame.to_ndarray().flatten().astype(np.int16)
                 self._pipeline.queue_playback(pcm)

@@ -1,7 +1,7 @@
 [project]
-name = "pi-audio"
+name = "audio-client"
 version = "0.1.0"
-description = "WebRTC audio client for Raspberry Pi"
+description = "WebRTC audio client for any device with a mic and speaker"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -9,8 +9,10 @@ dependencies = [
     "aiohttp>=3.10.0",
     "sounddevice>=0.5.0",
     "numpy>=1.26.0",
-    "speexdsp>=0.1.1",
 ]
+
+[project.optional-dependencies]
+aec = ["speexdsp>=0.1.1"]
 
 [dependency-groups]
 dev = [
@@ -20,11 +22,14 @@ dev = [
 ]
 
 [project.scripts]
-pi-audio = "pi_audio.main:cli"
+audio-client = "audio_client.main:cli"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.extra-build-dependencies]
+speexdsp = ["setuptools"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

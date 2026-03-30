@@ -14,6 +14,9 @@ import time
 import wave
 from typing import Optional
 
+import numpy as np
+import resampy
+
 from typing import TYPE_CHECKING
 
 import psutil
@@ -199,6 +202,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         device_id = ""
         conversation_id = ""
         input_sample_rate = 48000
+        target_output_sample_rate: Optional[int] = None
         processing_task: Optional[asyncio.Task] = None
         output_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
         _SENTINEL = object()
@@ -206,10 +210,15 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         peer = context.peer()
         logger.info("stream_opened", peer=peer)
 
+        # Send initial metadata immediately so the tonic client unblocks.
+        # Without this, grpc.aio may delay response headers until the first
+        # yield, causing a deadlock with bidirectional streaming clients.
+        await context.send_initial_metadata(())
+
         async def _read_inputs():
             """Read the input stream and dispatch speech events."""
             nonlocal audio_buffer, device_id, conversation_id
-            nonlocal input_sample_rate, processing_task
+            nonlocal input_sample_rate, target_output_sample_rate, processing_task
 
             try:
                 async for audio_input in request_iterator:
@@ -224,6 +233,22 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                         audio_buffer.clear()
                         if pcm_data:
                             audio_buffer.extend(pcm_data)
+
+                        # Read SessionConfig from the first START message.
+                        if target_output_sample_rate is None and audio_input.HasField("session_config"):
+                            sc = audio_input.session_config
+                            if sc.preferred_output_sample_rate:
+                                target_output_sample_rate = sc.preferred_output_sample_rate
+                                logger.info(
+                                    "session_config",
+                                    device_id=device_id,
+                                    preferred_output_sample_rate=target_output_sample_rate,
+                                    supported_output_codecs=[
+                                        naila_pb2.AudioCodec.Name(c)
+                                        for c in sc.supported_output_codecs
+                                    ],
+                                )
+
                         logger.debug(
                             "speech_start",
                             device_id=device_id,
@@ -288,6 +313,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                                 device_id,
                                 conversation_id,
                                 context,
+                                target_output_sample_rate=target_output_sample_rate,
                             )
                         )
 
@@ -354,17 +380,19 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         device_id: str,
         conversation_id: str,
         context=None,
+        target_output_sample_rate: Optional[int] = None,
     ):
         """Run the utterance pipeline and push results onto *queue*.
 
         Designed to run as an asyncio.Task so it can be cancelled on interrupt.
-        Checks context.is_active() before each stage to avoid wasting compute
+        Checks context.cancelled() before each stage to avoid wasting compute
         after a client disconnect.
         """
         async for output in self._process_utterance(
             pcm_bytes, sample_rate, device_id, conversation_id, context,
+            target_output_sample_rate=target_output_sample_rate,
         ):
-            if context and not context.is_active():
+            if context and context.cancelled():
                 logger.info("client_disconnected_during_enqueue", device_id=device_id)
                 return
             await queue.put(output)
@@ -376,6 +404,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         device_id: str,
         conversation_id: str,
         context=None,
+        target_output_sample_rate: Optional[int] = None,
     ):
         """Run STT then delegate to the orchestration graph.
 
@@ -425,7 +454,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
             duration_ms=stt_result.transcription_time_ms,
         )
 
-        if context and not context.is_active():
+        if context and context.cancelled():
             logger.info("client_disconnected_after_stt", device_id=device_id)
             return
 
@@ -449,11 +478,22 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
 
             Chunks the raw PCM into ~100ms AudioOutput messages and streams
             them into an asyncio.Queue for immediate delivery to the client.
+            Resamples to the device's preferred output rate (from SessionConfig),
+            falling back to 48 kHz for WebRTC/Opus compatibility.
             """
             if not audio_data or not audio_data.audio_bytes:
                 return
             raw_bytes = audio_data.audio_bytes
             tts_sample_rate = audio_data.sample_rate
+
+            # Resample to the device's preferred rate, or 48 kHz as fallback.
+            target_rate = target_output_sample_rate or 48000
+            if tts_sample_rate != target_rate:
+                samples = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+                resampled = resampy.resample(samples, tts_sample_rate, target_rate)
+                resampled = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
+                raw_bytes = resampled.tobytes()
+                tts_sample_rate = target_rate
             for seq, offset in enumerate(range(0, len(raw_bytes), TTS_CHUNK_BYTES)):
                 chunk = raw_bytes[offset : offset + TTS_CHUNK_BYTES]
                 is_last = offset + TTS_CHUNK_BYTES >= len(raw_bytes)
@@ -498,7 +538,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                 item = await tts_queue.get()
                 if item is _DONE:
                     break
-                if context and not context.is_active():
+                if context and context.cancelled():
                     logger.info("client_disconnected_during_tts_stream", device_id=device_id)
                     orchestration_task.cancel()
                     return

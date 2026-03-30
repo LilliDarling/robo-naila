@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from . import naila_pb2 as naila__pb2
+from rpc.generated import naila_pb2 as naila__pb2
 
 GRPC_GENERATED_VERSION = '1.78.0'
 GRPC_VERSION = grpc.__version__

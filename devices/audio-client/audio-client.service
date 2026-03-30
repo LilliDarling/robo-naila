@@ -1,0 +1,17 @@
+[Unit]
+Description=Naila Audio Client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/audio-client
+ExecStart=/home/pi/.local/bin/uv run python -m audio_client
+Restart=on-failure
+RestartSec=5
+
+EnvironmentFile=/home/pi/audio-client/.env
+
+[Install]
+WantedBy=multi-user.target

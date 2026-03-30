@@ -19,7 +19,7 @@ pub mod proto {
 }
 
 use proto::naila_ai_client::NailaAiClient;
-use proto::{AudioCodec, AudioInput, AudioOutput, SpeechEvent, StatusRequest};
+use proto::{AudioCodec, AudioInput, AudioOutput, SessionConfig, SpeechEvent, StatusRequest};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config
@@ -193,7 +193,7 @@ async fn connect_and_stream(
     *stream_established = true;
     metrics.grpc_connected.store(true, Ordering::Relaxed);
 
-    let send_fut = send_loop(audio_rx, session_tx, cancel);
+    let send_fut = send_loop(audio_rx, session_tx, audio_bus, cancel);
     let recv_fut = recv_loop(inbound, audio_bus, cancel, metrics);
 
     tokio::select! {
@@ -208,13 +208,18 @@ async fn connect_and_stream(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Reads TaggedFrames from the bus, wraps them in AudioInput protobufs,
-/// and pushes into the session stream.
+/// and pushes into the session stream. Attaches SessionConfig on the
+/// first SPEECH_EVENT_START per device so the AI server knows the
+/// device's audio capabilities.
 async fn send_loop(
     audio_rx: &mut mpsc::Receiver<TaggedFrame>,
     session_tx: mpsc::Sender<AudioInput>,
+    audio_bus: &Arc<AudioBus>,
     cancel: &CancellationToken,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut sequence: u32 = 0;
+    // Track which devices have already sent their SessionConfig.
+    let mut config_sent: std::collections::HashSet<Arc<str>> = std::collections::HashSet::new();
 
     loop {
         tokio::select! {
@@ -233,6 +238,16 @@ async fn send_loop(
                     crate::audio::SpeechEvent::End => SpeechEvent::End,
                 };
 
+                // Attach SessionConfig on the first START for each device.
+                let session_config = if event == SpeechEvent::Start
+                    && !config_sent.contains(&tagged.device_id)
+                {
+                    config_sent.insert(Arc::clone(&tagged.device_id));
+                    build_session_config(audio_bus, &tagged.device_id)
+                } else {
+                    None
+                };
+
                 let msg = AudioInput {
                     device_id: tagged.device_id.to_string(),
                     room_id: String::new(),
@@ -246,6 +261,7 @@ async fn send_loop(
                     timestamp_ms: tagged.frame.timestamp,
                     sequence_num: sequence,
                     event: event as i32,
+                    session_config,
                 };
 
                 sequence = sequence.wrapping_add(1);
@@ -257,6 +273,24 @@ async fn send_loop(
             _ = cancel.cancelled() => return Ok(()),
         }
     }
+}
+
+/// Build a SessionConfig from the device's stored audio capabilities.
+fn build_session_config(audio_bus: &AudioBus, device_id: &str) -> Option<SessionConfig> {
+    let config = audio_bus.device_configs.get(device_id)?;
+    let codecs = config
+        .supported_output_codecs
+        .iter()
+        .filter_map(|c| match c.as_str() {
+            "pcm_s16le" => Some(AudioCodec::PcmS16le as i32),
+            "opus" => Some(AudioCodec::Opus as i32),
+            _ => None,
+        })
+        .collect();
+    Some(SessionConfig {
+        preferred_output_sample_rate: config.preferred_output_sample_rate,
+        supported_output_codecs: codecs,
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@ FRAME_SIZE = 960
 class TestEchoCanceller:
     def test_passthrough_without_speexdsp(self, monkeypatch):
         """When speexdsp is unavailable, mic passes through unchanged."""
-        import pi_audio.aec as aec_mod
+        import audio_client.aec as aec_mod
 
         # Force import failure.
         original_init = aec_mod.EchoCanceller._init_echo
@@ -27,7 +27,7 @@ class TestEchoCanceller:
 
     def test_output_shape_and_dtype(self, monkeypatch):
         """Output is int16 with correct frame size, even in passthrough."""
-        import pi_audio.aec as aec_mod
+        import audio_client.aec as aec_mod
 
         def _broken_init(self):
             self._echo = None
@@ -43,7 +43,7 @@ class TestEchoCanceller:
 
     def test_filter_tail_calculation(self):
         """Verify 100ms filter tail = 4800 samples at 48kHz."""
-        from pi_audio.aec import _FILTER_TAIL_MS, EchoCanceller
+        from audio_client.aec import _FILTER_TAIL_MS, EchoCanceller
 
         tail = SAMPLE_RATE * _FILTER_TAIL_MS // 1000
         assert tail == 4800

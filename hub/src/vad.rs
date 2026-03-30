@@ -20,7 +20,7 @@ impl Default for VadConfig {
         Self {
             onset_threshold: 3,
             hangover_threshold: 15,
-            mode: VadMode::Quality,
+            mode: VadMode::VeryAggressive,
         }
     }
 }

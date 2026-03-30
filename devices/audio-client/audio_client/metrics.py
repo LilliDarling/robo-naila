@@ -13,7 +13,7 @@ _HEALTH_PORT = 8081
 
 
 class DeviceMetrics:
-    """Best-effort counters and gauges for the pi-audio device.
+    """Best-effort counters and gauges for the audio client device.
 
     Accessed from both the PortAudio audio thread and the asyncio thread.
     No locking — the audio callback must never block.  Each counter has a
