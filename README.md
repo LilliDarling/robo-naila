@@ -109,16 +109,16 @@ Rust service bridging devices to the AI server via WebRTC + gRPC.
 
 See [hub/README.md](hub/README.md)
 
-### `devices/pi-audio/` — Raspberry Pi Audio Client
+### `devices/audio-client/` — Audio Client
 
-Python WebRTC client for Raspberry Pi.
+WebRTC audio client for any device with a mic and speaker.
 
 - Full-duplex audio via PortAudio
-- SpeexDSP echo cancellation
+- SpeexDSP echo cancellation (optional)
 - aiortc WebRTC connection to hub
 - Automatic reconnect with exponential backoff
 
-See [devices/pi-audio/README.md](devices/pi-audio/README.md)
+See [devices/audio-client/README.md](devices/audio-client/README.md)
 
 ### `proto/` — gRPC Protocol Definitions
 

@@ -110,12 +110,12 @@ Rust service that bridges devices to the AI server via WebRTC + gRPC.
 
 See `STREAMING_ARCHITECTURE.md` for protocol details.
 
-### Pi Audio Device (`devices/pi-audio/`)
+### Audio Client (`devices/audio-client/`)
 
-Python WebRTC client for Raspberry Pi.
+WebRTC audio client for any device with a mic and speaker.
 
 - Full-duplex audio via PortAudio
-- SpeexDSP echo cancellation
+- SpeexDSP echo cancellation (optional)
 - aiortc WebRTC connection to hub (Opus, 48kHz, 20ms frames)
 - Automatic reconnect with exponential backoff
 - Health endpoint on `:8081/health`

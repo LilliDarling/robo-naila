@@ -150,6 +150,46 @@ wheels = [
 ]
 
 [[package]]
+name = "audio-client"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "aiortc" },
+    { name = "numpy" },
+    { name = "sounddevice" },
+]
+
+[package.optional-dependencies]
+aec = [
+    { name = "speexdsp" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-aiohttp" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.10.0" },
+    { name = "aiortc", specifier = ">=1.9.0" },
+    { name = "numpy", specifier = ">=1.26.0" },
+    { name = "sounddevice", specifier = ">=0.5.0" },
+    { name = "speexdsp", marker = "extra == 'aec'", specifier = ">=0.1.1" },
+]
+provides-extras = ["aec"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.4.0" },
+    { name = "pytest-aiohttp", specifier = ">=1.1.0" },
+    { name = "pytest-asyncio", specifier = ">=1.2.0" },
+]
+
+[[package]]
 name = "av"
 version = "16.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -629,39 +669,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pi-audio"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "aiortc" },
-    { name = "numpy" },
-    { name = "sounddevice" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-aiohttp" },
-    { name = "pytest-asyncio" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", specifier = ">=3.10.0" },
-    { name = "aiortc", specifier = ">=1.9.0" },
-    { name = "numpy", specifier = ">=1.26.0" },
-    { name = "sounddevice", specifier = ">=0.5.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=8.4.0" },
-    { name = "pytest-aiohttp", specifier = ">=1.1.0" },
-    { name = "pytest-asyncio", specifier = ">=1.2.0" },
-]
-
-[[package]]
 name = "pluggy"
 version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -877,6 +884,12 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c3/0e/002ed7c4c1c2ab69031f78989d3b789fee3a7fba9e586eb2b81688bf4961/sounddevice-0.5.5-py3-none-win_amd64.whl", hash = "sha256:cfc6b2c49fb7f555591c78cb8ecf48d6a637fd5b6e1db5fec6ed9365d64b3519", size = 365324, upload-time = "2026-01-23T18:36:40.496Z" },
     { url = "https://files.pythonhosted.org/packages/4e/39/a61d4b83a7746b70d23d9173be688c0c6bfc7173772344b7442c2c155497/sounddevice-0.5.5-py3-none-win_arm64.whl", hash = "sha256:3861901ddd8230d2e0e8ae62ac320cdd4c688d81df89da036dcb812f757bb3e6", size = 317115, upload-time = "2026-01-23T18:36:42.235Z" },
 ]
+
+[[package]]
+name = "speexdsp"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/71/e7/da5a9559bfbdc6cbd0f3f4510477722af3509a2b418072ba627eb1b66999/speexdsp-0.1.1.tar.gz", hash = "sha256:c0d0851ea15de30ed2fd314d403bff4963cba99b840252e22e35b980b664bc0e", size = 4424, upload-time = "2018-07-17T05:57:17.793Z" }
 
 [[package]]
 name = "typing-extensions"

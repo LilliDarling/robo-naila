@@ -104,7 +104,7 @@ async def run(config: DeviceConfig) -> None:
 
 
 def cli() -> None:
-    """Entry point: ``python -m pi_audio`` or ``pi-audio`` script."""
+    """Entry point: ``python -m audio_client`` or ``audio-client`` script."""
     config = DeviceConfig.from_env_and_args()
 
     logging.basicConfig(
@@ -113,7 +113,7 @@ def cli() -> None:
         datefmt="%H:%M:%S",
     )
 
-    log.info("starting pi-audio device: hub=%s id=%s", config.hub_url, config.device_id)
+    log.info("starting audio-client: profile=%s hub=%s id=%s", config.profile.name, config.hub_url, config.device_id)
     try:
         asyncio.run(run(config))
     except KeyboardInterrupt:

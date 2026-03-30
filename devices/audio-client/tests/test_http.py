@@ -2,7 +2,7 @@ import pytest
 import aiohttp
 from aiohttp import web
 
-from pi_audio.http import exchange_sdp
+from audio_client.http import exchange_sdp
 
 
 @pytest.fixture

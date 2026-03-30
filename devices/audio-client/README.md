@@ -1,11 +1,11 @@
-# Pi Audio Device
+# Audio Client
 
-WebRTC audio client for Raspberry Pi. Captures mic audio, runs acoustic echo cancellation, streams Opus to the hub via WebRTC, and plays TTS responses through the speaker.
+WebRTC audio client for any device with a mic and speaker. Captures mic audio, runs acoustic echo cancellation, streams Opus to the hub via WebRTC, and plays TTS responses through the speaker.
 
 ## What it does
 
 - Full-duplex audio via PortAudio (single callback for time-aligned mic + speaker)
-- SpeexDSP echo cancellation so TTS playback doesn't feed back into mic
+- SpeexDSP echo cancellation so TTS playback doesn't feed back into mic (optional — degrades gracefully)
 - aiortc WebRTC connection to hub (Opus, 48kHz, 20ms frames)
 - Automatic reconnect with exponential backoff
 - Health endpoint at `:8081/health` serving live metrics as JSON
@@ -15,10 +15,16 @@ WebRTC audio client for Raspberry Pi. Captures mic audio, runs acoustic echo can
 ### System dependencies
 
 ```bash
-sudo apt install swig portaudio19-dev libspeexdsp-dev libopus0 \
+# Debian/Raspberry Pi
+sudo apt install swig portaudio19-dev libopus0 \
   libavformat-dev libavcodec-dev libavdevice-dev \
   libavutil-dev libswscale-dev libswresample-dev
+
+# Optional: AEC support
+sudo apt install libspeexdsp-dev
 ```
+
+On macOS, PortAudio and Opus are typically available via Homebrew or bundled with the system.
 
 ### Install
 
@@ -28,6 +34,12 @@ Requires [uv](https://docs.astral.sh/uv/getting-started/installation/).
 uv venv
 source .venv/bin/activate
 uv sync
+```
+
+To install with AEC support:
+
+```bash
+uv sync --extra aec
 ```
 
 ### Configure
@@ -42,24 +54,24 @@ cp .env.example .env
 ### Direct
 
 ```bash
-uv run python -m pi_audio
+uv run python -m audio_client
 ```
 
 Or with CLI overrides:
 
 ```bash
-uv run python -m pi_audio --hub-url http://192.168.1.10:8080 --device-id pi-kitchen
+uv run python -m audio_client --hub-url http://192.168.1.10:8080 --device-id kitchen
 ```
 
 ### systemd
 
 ```bash
-sudo cp pi-audio.service /etc/systemd/system/
+sudo cp audio-client.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now pi-audio
+sudo systemctl enable --now audio-client
 ```
 
-Logs: `journalctl -u pi-audio -f`
+Logs: `journalctl -u audio-client -f`
 
 ## Tests
 
