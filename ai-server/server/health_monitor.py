@@ -128,7 +128,7 @@ class HealthMonitor:
                 services_status["services"]["llm"] = {
                     "status": "ready" if llm_status.get("ready") else "not_ready",
                     "model": llm_status.get("model_path", "").split("/")[-1] if llm_status.get("model_path") else "none",
-                    "hardware": llm_status.get("hardware", {}).get("device_type", "unknown"),
+                    "hardware": (llm_status.get("hardware") or {}).get("device_type", "unknown"),
                 }
 
             # STT status
@@ -137,7 +137,7 @@ class HealthMonitor:
                 services_status["services"]["stt"] = {
                     "status": "ready" if stt_status.get("ready") else "not_ready",
                     "model": stt_status.get("model_path", "").split("/")[-1] if stt_status.get("model_path") else "none",
-                    "hardware": stt_status.get("hardware", {}).get("device_type", "unknown"),
+                    "hardware": (stt_status.get("hardware") or {}).get("device_type", "unknown"),
                 }
 
             # TTS status
