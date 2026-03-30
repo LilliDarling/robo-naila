@@ -201,6 +201,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                                 device_id,
                                 conversation_id,
                                 context,
+                                target_output_sample_rate=target_output_sample_rate,
                             )
                         )
 
@@ -267,6 +268,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         device_id: str,
         conversation_id: str,
         context=None,
+        target_output_sample_rate: Optional[int] = None,
     ):
         """Run the utterance pipeline and push results onto *queue*.
 
@@ -276,6 +278,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         """
         async for output in self._process_utterance(
             pcm_bytes, sample_rate, device_id, conversation_id, context,
+            target_output_sample_rate=target_output_sample_rate,
         ):
             if context and context.cancelled():
                 logger.info("client_disconnected_during_enqueue", device_id=device_id)
@@ -289,6 +292,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         device_id: str,
         conversation_id: str,
         context=None,
+        target_output_sample_rate: Optional[int] = None,
     ):
         """Run STT then delegate to the orchestration graph.
 
