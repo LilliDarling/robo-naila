@@ -385,7 +385,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         """Run the utterance pipeline and push results onto *queue*.
 
         Designed to run as an asyncio.Task so it can be cancelled on interrupt.
-        Checks context.is_active() before each stage to avoid wasting compute
+        Checks context.cancelled() before each stage to avoid wasting compute
         after a client disconnect.
         """
         async for output in self._process_utterance(
