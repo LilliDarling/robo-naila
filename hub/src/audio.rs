@@ -133,6 +133,14 @@ pub trait AudioTransport: Send + 'static {
     fn send(&mut self, frame: TtsFrame) -> impl Future<Output = Result<(), TransportError>> + Send;
 }
 
+/// Audio capabilities declared by a device at connect time.
+/// Used to populate SessionConfig on the gRPC stream.
+#[derive(Debug, Clone)]
+pub struct DeviceAudioConfig {
+    pub preferred_output_sample_rate: u32,
+    pub supported_output_codecs: Vec<String>,
+}
+
 /// Routes audio between device tasks and the processing layer.
 ///
 /// Shared across all device tasks via `Arc<AudioBus>`. Each device task
@@ -153,4 +161,6 @@ pub struct AudioBus {
     //   - `Arc<str>` is created via `Arc::from(s)` where s: String or &str
     pub audio_tx: Sender<TaggedFrame>,
     pub tts_sub: DashMap<Arc<str>, Sender<TtsFrame>>,
+    /// Per-device audio capabilities, set at connect time.
+    pub device_configs: DashMap<Arc<str>, DeviceAudioConfig>,
 }

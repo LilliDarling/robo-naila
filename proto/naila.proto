@@ -39,6 +39,18 @@ message AudioInput {
   uint32 sequence_num = 10;
 
   SpeechEvent event = 11;
+
+  // Client capabilities — set on first message with SPEECH_EVENT_START,
+  // ignored on subsequent messages.
+  SessionConfig session_config = 15;
+}
+
+// Session configuration sent on the first message of a stream.
+// Allows the client to declare device capabilities so the server
+// can adapt its output format.
+message SessionConfig {
+  uint32 preferred_output_sample_rate = 3;
+  repeated AudioCodec supported_output_codecs = 4;
 }
 
 message AudioOutput {

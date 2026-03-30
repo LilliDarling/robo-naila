@@ -57,6 +57,7 @@ async def run(config: DeviceConfig) -> None:
                     pipeline=pipeline,
                     session=session,
                     metrics=metrics,
+                    profile=config.profile,
                 )
                 try:
                     await client.connect()

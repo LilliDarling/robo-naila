@@ -90,6 +90,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         device_id = ""
         conversation_id = ""
         input_sample_rate = 48000
+        target_output_sample_rate: Optional[int] = None
         processing_task: Optional[asyncio.Task] = None
         output_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
         _SENTINEL = object()
@@ -105,7 +106,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         async def _read_inputs():
             """Read the input stream and dispatch speech events."""
             nonlocal audio_buffer, device_id, conversation_id
-            nonlocal input_sample_rate, processing_task
+            nonlocal input_sample_rate, target_output_sample_rate, processing_task
 
             try:
                 async for audio_input in request_iterator:
@@ -120,6 +121,22 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                         audio_buffer.clear()
                         if pcm_data:
                             audio_buffer.extend(pcm_data)
+
+                        # Read SessionConfig from the first START message.
+                        if target_output_sample_rate is None and audio_input.HasField("session_config"):
+                            sc = audio_input.session_config
+                            if sc.preferred_output_sample_rate:
+                                target_output_sample_rate = sc.preferred_output_sample_rate
+                                logger.info(
+                                    "session_config",
+                                    device_id=device_id,
+                                    preferred_output_sample_rate=target_output_sample_rate,
+                                    supported_output_codecs=[
+                                        naila_pb2.AudioCodec.Name(c)
+                                        for c in sc.supported_output_codecs
+                                    ],
+                                )
+
                         logger.debug(
                             "speech_start",
                             device_id=device_id,
@@ -345,15 +362,16 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
 
             Chunks the raw PCM into ~100ms AudioOutput messages and streams
             them into an asyncio.Queue for immediate delivery to the client.
-            Resamples to 48 kHz for WebRTC/Opus compatibility.
+            Resamples to the device's preferred output rate (from SessionConfig),
+            falling back to 48 kHz for WebRTC/Opus compatibility.
             """
             if not audio_data or not audio_data.audio_bytes:
                 return
             raw_bytes = audio_data.audio_bytes
             tts_sample_rate = audio_data.sample_rate
 
-            # Resample to 48 kHz if needed (Opus/WebRTC standard).
-            target_rate = 48000
+            # Resample to the device's preferred rate, or 48 kHz as fallback.
+            target_rate = target_output_sample_rate or 48000
             if tts_sample_rate != target_rate:
                 samples = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
                 resampled = resampy.resample(samples, tts_sample_rate, target_rate)

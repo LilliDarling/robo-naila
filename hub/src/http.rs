@@ -26,13 +26,21 @@ use crate::webrtc::{spawn_track_reader, WebRtcTransport};
 // Request / Response types for the signaling endpoint
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Pi sends this: its SDP offer and a device identifier.
+/// Device sends this: its SDP offer, identifier, and audio capabilities.
 #[derive(Deserialize)]
 pub struct ConnectRequest {
-    /// Device identifier (e.g., "pi-kitchen", "pi-office").
+    /// Device identifier (e.g., "kitchen", "office").
     pub device_id: String,
-    /// SDP offer from the Pi's WebRTC client.
+    /// SDP offer from the device's WebRTC client.
     pub sdp: String,
+    /// Preferred TTS output sample rate in Hz (e.g., 48000, 16000).
+    /// Defaults to 48000 if not provided.
+    #[serde(default)]
+    pub preferred_output_sample_rate: Option<u32>,
+    /// Audio codecs the device can decode (e.g., ["pcm_s16le", "opus"]).
+    /// Defaults to ["pcm_s16le"] if not provided.
+    #[serde(default)]
+    pub supported_output_codecs: Vec<String>,
 }
 
 /// Server responds with its SDP answer.
@@ -292,6 +300,20 @@ async fn negotiate_session(
     state
         .device_tasks
         .insert(Arc::clone(&device_id), device_cancel.clone());
+
+    // Store device audio capabilities for gRPC SessionConfig.
+    let device_audio_config = crate::audio::DeviceAudioConfig {
+        preferred_output_sample_rate: req.preferred_output_sample_rate.unwrap_or(48_000),
+        supported_output_codecs: if req.supported_output_codecs.is_empty() {
+            vec!["pcm_s16le".to_owned()]
+        } else {
+            req.supported_output_codecs
+        },
+    };
+    state
+        .audio_bus
+        .device_configs
+        .insert(Arc::clone(&device_id), device_audio_config);
 
     let audio_bus = Arc::clone(&state.audio_bus);
     let conversation_id_for_device = Arc::clone(&conversation_id);

@@ -32,6 +32,7 @@ async fn main() {
     let audio_bus = Arc::new(AudioBus {
         audio_tx,
         tts_sub: DashMap::new(),
+        device_configs: DashMap::new(),
     });
 
     // ── Metrics ────────────────────────────────────────────────────────

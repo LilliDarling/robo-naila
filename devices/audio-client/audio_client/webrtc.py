@@ -22,6 +22,7 @@ from .http import exchange_sdp
 if TYPE_CHECKING:
     from .audio import AudioPipeline
     from .metrics import DeviceMetrics
+    from .profile import DeviceProfile
 
 log = logging.getLogger(__name__)
 
@@ -79,12 +80,14 @@ class WebRTCClient:
         pipeline: AudioPipeline,
         session: aiohttp.ClientSession,
         metrics: DeviceMetrics | None = None,
+        profile: DeviceProfile | None = None,
     ) -> None:
         self._hub_url = hub_url
         self._device_id = device_id
         self._pipeline = pipeline
         self._session = session
         self._metrics = metrics
+        self._profile = profile
         self._pc: RTCPeerConnection | None = None
         self._closed = asyncio.Event()
         self._recv_task: asyncio.Task[None] | None = None
@@ -121,7 +124,8 @@ class WebRTCClient:
         await self._wait_ice_gathering()
 
         answer_sdp = await exchange_sdp(
-            self._session, self._hub_url, self._device_id, self._pc.localDescription.sdp
+            self._session, self._hub_url, self._device_id, self._pc.localDescription.sdp,
+            profile=self._profile,
         )
         answer = RTCSessionDescription(sdp=answer_sdp, type="answer")
         await self._pc.setRemoteDescription(answer)
