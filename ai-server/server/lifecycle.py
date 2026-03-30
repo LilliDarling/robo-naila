@@ -3,11 +3,29 @@ import contextlib
 import os
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Optional
 from .health_monitor import HealthMonitor
 from utils.platform import get_platform_info
 from managers.ai_model import AIModelManager
 from utils import get_logger
+
+
+def _read_server_version() -> str:
+    """Read version from pyproject.toml (single source of truth)."""
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        import tomli as tomllib  # type: ignore[no-redef]
+    try:
+        pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        data = tomllib.loads(pyproject.read_text())
+        return data["project"]["version"]
+    except Exception:
+        return "unknown"
+
+
+SERVER_VERSION = _read_server_version()
 
 
 logger = get_logger(__name__)
@@ -94,9 +112,20 @@ class ServerLifecycleManager:
                 if self.orchestrator:
                     self.orchestrator.set_vision_service(vision_service)
 
-            # Wire shared orchestrator into gRPC servicer
+            # Wire shared orchestrator and status info into gRPC servicer
             if self.grpc_servicer and self.orchestrator:
                 self.grpc_servicer.set_orchestrator(self.orchestrator)
+
+            if self.grpc_servicer:
+                self.grpc_servicer.set_ai_model_manager(self.ai_model_manager)
+                self.grpc_servicer.set_server_info(
+                    start_time=self._start_time.timestamp() if self._start_time else None,
+                    server_version=SERVER_VERSION,
+                    max_concurrent_streams=(
+                        self.grpc_server.config.max_concurrent_streams
+                        if self.grpc_server else 0
+                    ),
+                )
 
             # Stage: Register protocol handlers
             logger.info("startup_stage", stage=StartupStage.REGISTER_HANDLERS.value)
@@ -197,7 +226,7 @@ class ServerLifecycleManager:
         startup_data = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "event": "server_startup",
-            "server_version": "1.0.0",
+            "server_version": SERVER_VERSION,
             "config": {
                 "mqtt_broker": f"{self.mqtt_service.config.broker_host}:{self.mqtt_service.config.broker_port}",
                 "mqtt_qos": self.mqtt_service.config.qos,
