@@ -72,6 +72,9 @@ message AudioOutput {
 
   ErrorCode error_code = 9;
   string error_message = 10;
+
+  // Pre-encoded Opus audio (hub forwards as-is, skipping re-encoding).
+  bytes audio_opus = 11;
 }
 
 // =============================================================================

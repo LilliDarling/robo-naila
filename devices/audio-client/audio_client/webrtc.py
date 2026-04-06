@@ -153,19 +153,35 @@ class WebRTCClient:
         """Receive inbound TTS audio frames and enqueue for playback."""
         log.info("TTS receive loop started")
         logged_format = False
+        # DEBUG: collect all decoded samples so we can save to file
+        _debug_samples = []
         try:
             while True:
                 frame: av.AudioFrame = await track.recv()
                 if not logged_format:
                     arr = frame.to_ndarray()
                     log.info(
-                        "TTS frame format: %s dtype=%s shape=%s sr=%d range=[%.2f, %.2f]",
-                        frame.format.name, arr.dtype, arr.shape,
+                        "TTS frame format: %s layout=%s dtype=%s shape=%s sr=%d range=[%.2f, %.2f]",
+                        frame.format.name, frame.layout.name, arr.dtype, arr.shape,
                         frame.sample_rate, arr.min(), arr.max(),
                     )
                     logged_format = True
                 # Decode to int16 numpy array.
-                pcm = frame.to_ndarray().flatten().astype(np.int16)
+                arr = frame.to_ndarray()
+                if arr.dtype in (np.float32, np.float64):
+                    arr = np.clip(arr * 32767, -32768, 32767).astype(np.int16)
+                elif arr.dtype == np.int32:
+                    arr = (arr >> 16).astype(np.int16)
+                # Extract left channel only if stereo (packed interleaved).
+                if arr.shape[0] == 1 and frame.layout.name == 'stereo':
+                    # Packed stereo: samples are L,R,L,R,...  Take every other.
+                    pcm = arr[0, 0::2].copy()
+                elif arr.shape[0] == 2:
+                    # Planar stereo: row 0 = left, row 1 = right.
+                    pcm = arr[0].copy()
+                else:
+                    pcm = arr.flatten().astype(np.int16)
+                _debug_samples.append(pcm.copy())
                 self._pipeline.queue_playback(pcm)
                 if self._metrics:
                     self._metrics.tts_frames_received += 1
@@ -174,6 +190,12 @@ class WebRTCClient:
         except Exception:
             log.exception("TTS receive error")
         finally:
+            # DEBUG: save received audio for inspection
+            if _debug_samples:
+                import soundfile as sf
+                all_pcm = np.concatenate(_debug_samples)
+                sf.write("/tmp/webrtc_received.wav", all_pcm, 48000)
+                log.info("DEBUG saved %d samples to /tmp/webrtc_received.wav (peak=%d)", len(all_pcm), max(abs(int(all_pcm.min())), abs(int(all_pcm.max()))))
             self._closed.set()
 
     async def wait_closed(self) -> None:

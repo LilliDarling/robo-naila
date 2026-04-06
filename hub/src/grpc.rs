@@ -327,14 +327,27 @@ async fn recv_loop(
                     continue;
                 }
 
-                if msg.audio_pcm.is_empty() && !msg.is_final {
+                let has_opus = !msg.audio_opus.is_empty();
+                let has_pcm = !msg.audio_pcm.is_empty();
+
+                if !has_opus && !has_pcm && !msg.is_final {
                     continue;
                 }
 
-                let tts_frame = TtsFrame {
-                    data: Bytes::from(msg.audio_pcm),
-                    sample_rate: msg.sample_rate,
-                    is_final: msg.is_final,
+                let tts_frame = if has_opus {
+                    TtsFrame {
+                        data: Bytes::from(msg.audio_opus),
+                        sample_rate: msg.sample_rate,
+                        is_final: msg.is_final,
+                        is_opus: true,
+                    }
+                } else {
+                    TtsFrame {
+                        data: Bytes::from(msg.audio_pcm),
+                        sample_rate: msg.sample_rate,
+                        is_final: msg.is_final,
+                        is_opus: false,
+                    }
                 };
 
                 // DashMap::get accepts &Q where Key: Borrow<Q>. Since Arc<str>: Borrow<str>,

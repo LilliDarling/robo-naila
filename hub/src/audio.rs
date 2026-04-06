@@ -55,13 +55,16 @@ pub struct TaggedFrame {
 /// The AI server converts LLM text responses into audio using models like OuteTTS,
 /// then sends these frames back to the robot via MQTT.
 pub struct TtsFrame {
-    /// Synthesized audio data (same PCM format as AudioFrame).
+    /// Synthesized audio data — PCM or pre-encoded Opus.
     pub data: Bytes,
     pub sample_rate: u32,
     /// Hub-consumed signal: last frame of this response. The hub uses this
     /// to distinguish "pause in TTS generation" from "response complete"
     /// for barge-in vs new-utterance detection.
     pub is_final: bool,
+    /// If true, `data` contains pre-encoded Opus packets (one 20ms frame each).
+    /// The hub will forward them directly as RTP without re-encoding.
+    pub is_opus: bool,
 }
 
 /// Errors that can occur during audio transport operations.

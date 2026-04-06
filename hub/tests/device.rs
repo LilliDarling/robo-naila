@@ -116,6 +116,7 @@ async fn tts_routed_back_to_transport() {
         data: Bytes::from(vec![42u8; 100]),
         sample_rate: 48_000,
         is_final: false,
+        is_opus: false,
     };
 
     if let Some(tx) = bus.tts_sub.get("test-device") {

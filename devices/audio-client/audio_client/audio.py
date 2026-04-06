@@ -86,7 +86,7 @@ class AudioPipeline:
 
         outdata[:, 0] = speaker_samples
 
-        # 2. Mic capture + AEC.
+        # 2. Mic capture + AEC (use first input channel only).
         mic_raw = indata[:, 0].astype(np.int16)
         cleaned = self._aec.process(mic_raw, speaker_samples)
 
@@ -129,9 +129,11 @@ class AudioPipeline:
         )
         self._stream.start()
         log.info(
-            "audio pipeline started: sr=%d frame=%d",
+            "audio pipeline started: sr=%d frame=%d actual_sr=%.0f out_channels=%d",
             self._sample_rate,
             self._frame_size,
+            self._stream.samplerate,
+            self._stream.channels[1] if isinstance(self._stream.channels, tuple) else self._stream.channels,
         )
 
     def stop(self) -> None:

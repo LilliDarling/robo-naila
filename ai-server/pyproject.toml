@@ -12,6 +12,7 @@ dependencies = [
     "freezegun>=1.5.5",
     "grpcio>=1.78.0",
     "grpcio-tools>=1.78.0",
+    "kokoro-onnx>=0.5.0",
     "langchain>=1.0.3",
     "langgraph>=1.0.2",
     "llama-cpp-python>=0.3.16",

@@ -67,24 +67,25 @@ print('LLM model downloaded successfully')
 "
 
 
-# Download TTS Model (Piper)
-echo -e "${BLUE}Downloading Text-to-Speech model (Piper - Lessac voice)...${NC}"
-echo "Model: en_US-lessac-medium (~17MB)"
-uv run python -c "
-from huggingface_hub import hf_hub_download
-print('Downloading Piper TTS model...')
-hf_hub_download(
-    repo_id='rhasspy/piper-voices',
-    filename='en/en_US/lessac/medium/en_US-lessac-medium.onnx',
-    local_dir='models/tts/'
-)
-hf_hub_download(
-    repo_id='rhasspy/piper-voices',
-    filename='en/en_US/lessac/medium/en_US-lessac-medium.onnx.json',
-    local_dir='models/tts/'
-)
-print('TTS model downloaded successfully')
-"
+# Download TTS Model (Kokoro ONNX)
+echo -e "${BLUE}Downloading Text-to-Speech model (Kokoro 82M ONNX)...${NC}"
+echo "Model: kokoro-v1.0.onnx (~310MB) + voices-v1.0.bin (~27MB)"
+mkdir -p models/tts/kokoro
+if [ -f "models/tts/kokoro/kokoro-v1.0.onnx" ]; then
+    echo -e "${GREEN}Model already exists, skipping${NC}"
+else
+    curl -L --progress-bar \
+        -o models/tts/kokoro/kokoro-v1.0.onnx \
+        "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
+fi
+if [ -f "models/tts/kokoro/voices-v1.0.bin" ]; then
+    echo -e "${GREEN}Voices already exist, skipping${NC}"
+else
+    curl -L --progress-bar \
+        -o models/tts/kokoro/voices-v1.0.bin \
+        "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
+fi
+echo -e "${GREEN}TTS model downloaded successfully${NC}"
 
 
 # Download Vision Model (YOLOv8n)
@@ -108,7 +109,7 @@ echo ""
 echo "Downloaded models:"
 echo "  • STT:    models/stt/ggml-small.en.bin"
 echo "  • LLM:    models/llm/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
-echo "  • TTS:    models/tts/en/en_US/lessac/medium/en_US-lessac-medium.onnx"
+echo "  • TTS:    models/tts/kokoro/kokoro-v1.0.onnx + voices-v1.0.bin"
 echo "  • Vision: models/vision/yolov8n.pt"
 echo ""
 echo -e "${BLUE}Next steps:${NC}"
