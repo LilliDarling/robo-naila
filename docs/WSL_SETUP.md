@@ -178,10 +178,19 @@ Wait for: `signaling server listening addr=0.0.0.0:8080`
 
 ### Terminal 4: Audio Client
 
+First, find your WSLg audio device indices:
+
 ```bash
 cd devices/audio-client
 source .venv/bin/activate
-uv run python -m audio_client --hub-url http://localhost:8080 --device-id dev-headset
+python -c "import sounddevice; print(sounddevice.query_devices())"
+```
+
+Look for the `RDPSource` (mic input) and `RDPSink` (speaker output) PulseAudio
+devices and note their indices. Then start the client:
+
+```bash
+uv run python -m audio_client --hub-url http://localhost:8080 --device-id dev-laptop --input-device <RDPSource index> --output-device <RDPSink index>
 ```
 
 Wait for: `WebRTC connected to hub`
