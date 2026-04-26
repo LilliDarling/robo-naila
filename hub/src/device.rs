@@ -1,14 +1,21 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 use dashmap::DashMap;
 use tokio::sync::mpsc;
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, info_span, Instrument};
+use tracing::{error, info, info_span, warn, Instrument};
 
 use crate::audio::{AudioBus, AudioTransport, SpeechEvent, TaggedFrame, TtsFrame};
 use crate::metrics::HubMetrics;
 use crate::vad::{VadConfig, VadFilter, VadResult};
+
+/// Max time a single transport.send is allowed to block before we treat the
+/// peer as wedged and tear down the session. write_rtp is normally instant;
+/// 2 seconds is well outside any plausible scheduling delay.
+const TTS_SEND_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Transport-level relay states. The hub tracks what's flowing in which
 /// direction — it doesn't interpret content or make conversation-level decisions.
@@ -98,9 +105,25 @@ pub async fn run_device<T: AudioTransport>(
                 tts = tts_rx.recv() => {
                     match tts {
                         Some(tts_frame) => {
-                            if let Err(e) = transport.send(tts_frame).await {
-                                error!("send TTS failed: {e:?}");
-                                break 'outer;
+                            // Cap how long a single transport.send may block.
+                            // webrtc-rs's write_rtp normally returns in microseconds;
+                            // anything beyond TTS_SEND_TIMEOUT means the underlying
+                            // track is wedged (peer not consuming, internal buffer
+                            // full). Better to tear down the device task than to
+                            // sit here indefinitely and back-pressure upstream.
+                            match timeout(TTS_SEND_TIMEOUT, transport.send(tts_frame)).await {
+                                Ok(Ok(())) => {}
+                                Ok(Err(e)) => {
+                                    error!("send TTS failed: {e:?}");
+                                    break 'outer;
+                                }
+                                Err(_elapsed) => {
+                                    warn!(
+                                        timeout_ms = TTS_SEND_TIMEOUT.as_millis(),
+                                        "transport.send timed out — peer not draining; tearing down device"
+                                    );
+                                    break 'outer;
+                                }
                             }
                         }
                         None => {

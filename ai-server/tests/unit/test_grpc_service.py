@@ -73,6 +73,10 @@ def _make_servicer(stt_text="hello", response_text="hi there", tts_bytes=b"\x00"
 def _grpc_context():
     ctx = MagicMock()
     ctx.peer.return_value = "ipv4:127.0.0.1:9999"
+    # StreamConversation awaits send_initial_metadata to unblock tonic clients;
+    # MagicMock's default sync return value can't be awaited.
+    ctx.send_initial_metadata = AsyncMock(return_value=None)
+    ctx.cancelled = MagicMock(return_value=False)
     return ctx
 
 
@@ -168,7 +172,7 @@ class TestInterruptCancellation:
 
         original_enqueue = NailaAIServicer._enqueue_utterance
 
-        async def slow_enqueue(self, queue, pcm_bytes, sample_rate, device_id, conversation_id, context=None):
+        async def slow_enqueue(self, queue, pcm_bytes, sample_rate, device_id, conversation_id, context=None, target_output_sample_rate=None):
             processing_started.set()
             try:
                 # Simulate long processing
@@ -211,7 +215,7 @@ class TestInterruptCancellation:
         servicer = _make_servicer()
         processing_started = asyncio.Event()
 
-        async def slow_enqueue(self, queue, pcm_bytes, sample_rate, device_id, conversation_id, context=None):
+        async def slow_enqueue(self, queue, pcm_bytes, sample_rate, device_id, conversation_id, context=None, target_output_sample_rate=None):
             processing_started.set()
             try:
                 await asyncio.sleep(10)
@@ -234,7 +238,7 @@ class TestInterruptCancellation:
         original_enqueue = NailaAIServicer._enqueue_utterance
         call_count = 0
 
-        async def tracking_enqueue(self, queue, pcm_bytes, sample_rate, device_id, conversation_id, context=None):
+        async def tracking_enqueue(self, queue, pcm_bytes, sample_rate, device_id, conversation_id, context=None, target_output_sample_rate=None):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -247,7 +251,7 @@ class TestInterruptCancellation:
             else:
                 # Second call: run normally
                 captured_pcm.append(pcm_bytes)
-                await original_enqueue(self, queue, pcm_bytes, sample_rate, device_id, conversation_id, context)
+                await original_enqueue(self, queue, pcm_bytes, sample_rate, device_id, conversation_id, context, target_output_sample_rate=target_output_sample_rate)
 
         with patch.object(NailaAIServicer, "_enqueue_utterance", tracking_enqueue):
             outputs = []

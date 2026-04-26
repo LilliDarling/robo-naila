@@ -12,8 +12,10 @@ import asyncio
 import io
 import time
 import wave
+from fractions import Fraction
 from typing import Optional
 
+import av
 import numpy as np
 import resampy
 
@@ -31,8 +33,8 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# TTS output chunking: ~100ms at 22050 Hz, 16-bit mono = 4410 bytes
-TTS_CHUNK_BYTES = 4410
+# TTS output chunking: ~100ms at 24000 Hz, 16-bit mono = 4800 bytes
+TTS_CHUNK_BYTES = 4800
 
 # Max audio buffer: ~60s of 16-bit mono at 48kHz = ~5.76 MB
 MAX_AUDIO_BUFFER_BYTES = 6 * 1024 * 1024
@@ -476,36 +478,116 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         async def _grpc_audio_delivery(audio_data, text: str, is_final: bool = True):
             """Callback invoked by ResponseGenerator when TTS audio is ready.
 
-            Chunks the raw PCM into ~100ms AudioOutput messages and streams
-            them into an asyncio.Queue for immediate delivery to the client.
-            Resamples to the device's preferred output rate (from SessionConfig),
-            falling back to 48 kHz for WebRTC/Opus compatibility.
+            Pre-encodes TTS audio as Opus frames using PyAV and sends them
+            via the audio_opus field. The hub forwards these directly as RTP
+            packets without re-encoding, avoiding the Rust opus crate's
+            amplitude reduction bug.
             """
             if not audio_data or not audio_data.audio_bytes:
                 return
             raw_bytes = audio_data.audio_bytes
             tts_sample_rate = audio_data.sample_rate
 
-            # Resample to the device's preferred rate, or 48 kHz as fallback.
-            target_rate = target_output_sample_rate or 48000
+            # Resample to 48kHz for Opus (WebRTC standard).
+            target_rate = 48000
             if tts_sample_rate != target_rate:
                 samples = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
                 resampled = resampy.resample(samples, tts_sample_rate, target_rate)
-                resampled = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
-                raw_bytes = resampled.tobytes()
-                tts_sample_rate = target_rate
-            for seq, offset in enumerate(range(0, len(raw_bytes), TTS_CHUNK_BYTES)):
-                chunk = raw_bytes[offset : offset + TTS_CHUNK_BYTES]
-                is_last = offset + TTS_CHUNK_BYTES >= len(raw_bytes)
+                pcm_48k = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
+            else:
+                pcm_48k = np.frombuffer(raw_bytes, dtype=np.int16)
+
+            # Prepend ~100ms of silence so the receive path (jitter buffer,
+            # opus decoder cold-start, playback callback timing) reaches steady
+            # state before real audio begins. Without this the first ~20-40ms
+            # of every TTS response is clipped or muffled — listener hears
+            # "...m here to help" instead of "I'm here to help". 100ms at 48kHz
+            # = 4800 samples = 5 Opus frames; a barely-perceptible extra pause
+            # before the response, much better than a chopped first syllable.
+            lead_in_silence = np.zeros(4800, dtype=np.int16)
+            pcm_48k = np.concatenate([lead_in_silence, pcm_48k])
+
+            # Encode 20ms Opus frames (960 samples at 48kHz) using PyAV.
+            opus_enc = av.CodecContext.create('libopus', 'w')
+            opus_enc.sample_rate = 48000
+            opus_enc.layout = 'mono'
+            opus_enc.format = av.AudioFormat('s16')
+            opus_enc.bit_rate = 64000
+            opus_enc.open()
+
+            seq = 0
+            frame_size = 960  # 20ms at 48kHz
+            frame_duration_s = frame_size / 48000  # 0.020s
+
+            # Real-time pacing. Without this, the encoder produces ~90 frames
+            # in well under a second and gRPC ships them all to the hub at
+            # full speed; the hub forwards them at full speed to WebRTC; the
+            # audio client receives them in a burst far faster than the 50
+            # frames/sec real-time playback rate. Its bounded speaker queue
+            # then overflows and drops frames mid-response, which sounds like
+            # "speeding up" to the listener.
+            #
+            # Strategy: send the first INITIAL_BURST_FRAMES as fast as we can
+            # so the receiver has a small jitter buffer to start with, then
+            # pace the remainder so each frame leaves at its real-time slot.
+            # The math: target_time for frame N = start + N * 20ms. If we're
+            # ahead, sleep until then; if behind, send immediately.
+            INITIAL_BURST_FRAMES = 10  # 200ms head-start for jitter buffer
+            pacing_start = time.monotonic()
+
+            # Opus is a buffered encoder: encode(frame) may yield 0+ packets,
+            # and encode(None) flushes any remaining. We can't know during the
+            # loop which packet will be the actual last one, so we hold a
+            # one-packet lookahead — the previous packet flushes out as
+            # is_final=False once we have a successor, and only the truly
+            # final packet (after the encoder is fully flushed) carries
+            # is_final=is_final. Without this, multiple packets ended up
+            # tagged is_final=True (the last in-loop packet plus every flush
+            # packet), which silently violated the "last frame of this
+            # response" contract documented in hub::audio.
+            pending: Optional[bytes] = None
+
+            async def _send_packet(payload: bytes, final: bool) -> None:
+                nonlocal seq
                 await tts_queue.put(naila_pb2.AudioOutput(
                     device_id=device_id,
                     conversation_id=conversation_id,
-                    audio_pcm=chunk,
-                    sample_rate=tts_sample_rate,
+                    audio_opus=payload,
+                    sample_rate=48000,
                     sequence_num=seq,
-                    is_final=is_last and is_final,
+                    is_final=final,
                     final_stt=transcription if seq == 0 else "",
                 ))
+                seq += 1
+                if seq > INITIAL_BURST_FRAMES:
+                    target = pacing_start + seq * frame_duration_s
+                    delay = target - time.monotonic()
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+
+            for i in range(0, len(pcm_48k) - frame_size + 1, frame_size):
+                chunk = pcm_48k[i : i + frame_size]
+                frame = av.AudioFrame.from_ndarray(
+                    chunk.reshape(1, -1), format='s16', layout='mono',
+                )
+                frame.sample_rate = 48000
+                frame.pts = i
+                frame.time_base = Fraction(1, 48000)
+
+                for pkt in opus_enc.encode(frame):
+                    if pending is not None:
+                        await _send_packet(pending, final=False)
+                    pending = bytes(pkt)
+
+            # Flush encoder
+            for pkt in opus_enc.encode(None):
+                if pending is not None:
+                    await _send_packet(pending, final=False)
+                pending = bytes(pkt)
+
+            # Send the genuinely-last packet (or nothing if no audio was produced).
+            if pending is not None:
+                await _send_packet(pending, final=is_final)
 
         task_data = {
             "task_id": f"grpc_{conversation_id}_{int(time.time() * 1000)}",

@@ -101,7 +101,32 @@ impl AudioTransport for WebRtcTransport {
     }
 
     async fn send(&mut self, frame: TtsFrame) -> Result<(), TransportError> {
-        // Validate sample rate — mismatches cause garbled audio with no other symptom.
+        if frame.data.is_empty() {
+            return Ok(());
+        }
+
+        if frame.is_opus {
+            // Pre-encoded Opus: forward directly as a single RTP packet.
+            let packet = Packet {
+                header: Header {
+                    version: 2,
+                    payload_type: 111,
+                    sequence_number: self.rtp_sequence,
+                    timestamp: self.rtp_timestamp,
+                    ..Default::default()
+                },
+                payload: Bytes::copy_from_slice(&frame.data),
+            };
+            self.outbound_track
+                .write_rtp(&packet)
+                .await
+                .map_err(|_| TransportError::Disconnected)?;
+            self.rtp_sequence = self.rtp_sequence.wrapping_add(1);
+            self.rtp_timestamp = self.rtp_timestamp.wrapping_add(SAMPLES_PER_FRAME as u32);
+            return Ok(());
+        }
+
+        // PCM path: encode locally with Opus.
         if frame.sample_rate != OPUS_SAMPLE_RATE {
             warn!(
                 expected = OPUS_SAMPLE_RATE,
@@ -110,7 +135,6 @@ impl AudioTransport for WebRtcTransport {
             );
         }
 
-        // PCM is 16-bit (2 bytes per sample). Odd-length data means truncated sample.
         if frame.data.len() % 2 != 0 {
             warn!(
                 len = frame.data.len(),
@@ -125,10 +149,9 @@ impl AudioTransport for WebRtcTransport {
             self.samples_buf.push(i16::from_le_bytes([c[0], c[1]]));
         }
 
-        // Encode PCM → Opus in frame-sized chunks.
         for chunk in self.samples_buf.chunks(SAMPLES_PER_FRAME) {
             if chunk.len() < SAMPLES_PER_FRAME {
-                break; // Drop incomplete frames.
+                break;
             }
 
             let encoded_len = self
@@ -139,7 +162,7 @@ impl AudioTransport for WebRtcTransport {
             let packet = Packet {
                 header: Header {
                     version: 2,
-                    payload_type: 111, // standard Opus PT
+                    payload_type: 111,
                     sequence_number: self.rtp_sequence,
                     timestamp: self.rtp_timestamp,
                     ..Default::default()
@@ -152,10 +175,6 @@ impl AudioTransport for WebRtcTransport {
                 .await
                 .map_err(|_| TransportError::Disconnected)?;
 
-            // `wrapping_add` performs addition that wraps around on overflow instead
-            // of panicking (debug) or being undefined behavior (release). RTP sequence
-            // numbers and timestamps are designed to wrap — a u16 sequence goes
-            // 65534 → 65535 → 0 → 1, and receivers handle this gracefully.
             self.rtp_sequence = self.rtp_sequence.wrapping_add(1);
             self.rtp_timestamp = self.rtp_timestamp.wrapping_add(SAMPLES_PER_FRAME as u32);
         }

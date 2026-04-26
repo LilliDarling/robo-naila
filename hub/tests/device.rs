@@ -30,6 +30,7 @@ fn test_bus() -> (Arc<AudioBus>, mpsc::Receiver<hub::audio::TaggedFrame>) {
     let bus = Arc::new(AudioBus {
         audio_tx,
         tts_sub: DashMap::new(),
+        device_configs: DashMap::new(),
     });
     (bus, audio_rx)
 }
@@ -116,6 +117,7 @@ async fn tts_routed_back_to_transport() {
         data: Bytes::from(vec![42u8; 100]),
         sample_rate: 48_000,
         is_final: false,
+        is_opus: false,
     };
 
     if let Some(tx) = bus.tts_sub.get("test-device") {

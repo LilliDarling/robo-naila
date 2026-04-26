@@ -11,12 +11,18 @@ class TestInputProcessor:
     
     @pytest.fixture
     def processor(self, disable_hardware_optimization):
-        """Create InputProcessor instance with mocked hardware"""
+        """Create InputProcessor instance with mocked hardware.
+
+        Clears the class-level @lru_cache on _detect_intent after wiring up
+        the mock. The cache key is (self, text); Python reuses object ids
+        across instances, so a stale entry from a previous test's processor
+        can shadow this one and silently return the wrong intent.
+        """
         with patch('agents.input_processor.SentenceTransformer') as mock_st:
             mock_model = Mock()
             mock_model.encode.return_value = np.array([[0.1, 0.2, 0.3]])
             mock_st.return_value = mock_model
-            
+
             processor = InputProcessor()
             processor.model = mock_model
             processor.has_model = True
@@ -24,6 +30,7 @@ class TestInputProcessor:
                 "greeting": np.array([0.1, 0.2, 0.3]),
                 "time_query": np.array([0.2, 0.3, 0.4])
             }
+            InputProcessor._detect_intent.cache_clear()
             return processor
     
     @pytest.fixture 
@@ -129,17 +136,16 @@ class TestInputProcessor:
         assert result["confidence"] <= 0.3
 
     def test_semantic_intent_similarity(self, processor):
-        """Test that similar phrases get same intent"""
+        """Test that similar phrases get same intent."""
         similar_greetings = [
             "hello",
-            "hi there", 
+            "hi there",
             "hey",
-            "good morning"
+            "good morning",
         ]
-        
+
         intents = [processor._detect_intent(text) for text in similar_greetings]
-        
-        # Most should be classified as greeting (allowing some variation)
+
         greeting_count = sum(1 for intent in intents if intent == "greeting")
         assert greeting_count >= len(similar_greetings) // 2
 

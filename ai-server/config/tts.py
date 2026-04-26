@@ -1,72 +1,39 @@
-"""TTS Service Configuration Constants"""
+"""TTS Service Configuration — Kokoro ONNX"""
 
 import os
-from pathlib import Path
 
 
 # Model Configuration
 MODEL_PATH = os.getenv(
     "TTS_MODEL_PATH",
-    "models/tts/en/en_US/lessac/medium/en_US-lessac-medium.onnx"
+    "models/tts/kokoro/kokoro-v1.0.onnx"
 )
-VOICE = os.getenv("TTS_VOICE", "lessac")
-LANGUAGE = os.getenv("TTS_LANGUAGE", "en_US")
-SPEAKER_ID = int(os.getenv("TTS_SPEAKER_ID", "0"))
+VOICES_PATH = os.getenv(
+    "TTS_VOICES_PATH",
+    "models/tts/kokoro/voices-v1.0.bin"
+)
 
-# Multi-Voice Support
-ENABLE_MULTI_VOICE = os.getenv("TTS_ENABLE_MULTI_VOICE", "false").lower() == "true"
-DEFAULT_VOICE = os.getenv("TTS_DEFAULT_VOICE", "lessac")
-
-# Voice Definitions
-# Add voice configurations here as you download more Piper models
-# Format: name -> (model_path, description, sample_rate, speaker_id)
-AVAILABLE_VOICES = {
-    "lessac": {
-        "model_path": "models/tts/en/en_US/lessac/medium/en_US-lessac-medium.onnx",
-        "description": "Clear, professional female voice",
-        "sample_rate": 22050,
-        "speaker_id": 0,
-        "language": "en_US"
-    },
-    # Add more voices here:
-    # "amy": {
-    #     "model_path": "models/tts/en/en_US/amy/medium/en_US-amy-medium.onnx",
-    #     "description": "Friendly female voice",
-    #     "sample_rate": 22050,
-    #     "speaker_id": 0,
-    #     "language": "en_US"
-    # },
-}
+# Voice Selection (see get_voices() for full list)
+# American female: af_heart, af_bella, af_nicole, af_sarah, af_sky, af_nova, ...
+# British female:  bf_emma, bf_isabella, bf_lily, bf_alice
+# American male:   am_adam, am_michael, am_eric, ...
+VOICE = os.getenv("TTS_VOICE", "bf_emma")
+LANGUAGE = os.getenv("TTS_LANGUAGE", "en-us")
 
 # Synthesis Parameters
-SAMPLE_RATE = int(os.getenv("TTS_SAMPLE_RATE", "22050"))
-LENGTH_SCALE = float(os.getenv("TTS_LENGTH_SCALE", "1.0"))  # Speaking rate
-NOISE_SCALE = float(os.getenv("TTS_NOISE_SCALE", "0.667"))  # Pitch variation
-NOISE_W = float(os.getenv("TTS_NOISE_W", "0.8"))  # Energy variation
+SAMPLE_RATE = 24000  # Kokoro outputs at 24kHz (fixed)
+SPEED = float(os.getenv("TTS_SPEED", "1.0"))  # Speaking rate (1.0 = normal)
 
-# Output Settings
-OUTPUT_FORMAT = os.getenv("TTS_OUTPUT_FORMAT", "mp3")  # wav, mp3, ogg, raw
-MP3_BITRATE = int(os.getenv("TTS_MP3_BITRATE", "128"))  # kbps
-OGG_QUALITY = int(os.getenv("TTS_OGG_QUALITY", "6"))  # 0-10
+# Text Processing
+MAX_TEXT_LENGTH = int(os.getenv("TTS_MAX_TEXT_LENGTH", "500"))
+MIN_TEXT_LENGTH = int(os.getenv("TTS_MIN_TEXT_LENGTH", "1"))
+NORMALIZE_NUMBERS = os.getenv("TTS_NORMALIZE_NUMBERS", "true").lower() == "true"
+NORMALIZE_DATES = os.getenv("TTS_NORMALIZE_DATES", "true").lower() == "true"
 
-# Performance
-ENABLE_GPU = os.getenv("TTS_ENABLE_GPU", "true").lower() == "true"  # Enable GPU acceleration when available
-THREADS = int(os.getenv("TTS_THREADS", "4"))  # Increased for better parallelism
+# Caching
 CACHE_COMMON_PHRASES = os.getenv("TTS_CACHE_COMMON_PHRASES", "true").lower() == "true"
 CACHE_INCLUDES_PARAMETERS = os.getenv("TTS_CACHE_INCLUDES_PARAMETERS", "true").lower() == "true"
 MAX_CACHED_PHRASES = int(os.getenv("TTS_MAX_CACHED_PHRASES", "256"))
-
-# Concurrency Control
-MAX_CONCURRENT_REQUESTS = int(os.getenv("TTS_MAX_CONCURRENT_REQUESTS", "4"))
-POOL_TIMEOUT_SECONDS = float(os.getenv("TTS_POOL_TIMEOUT_SECONDS", "30.0"))
-
-# Text Processing
-NORMALIZE_NUMBERS = os.getenv("TTS_NORMALIZE_NUMBERS", "true").lower() == "true"
-NORMALIZE_DATES = os.getenv("TTS_NORMALIZE_DATES", "true").lower() == "true"
-MAX_TEXT_LENGTH = int(os.getenv("TTS_MAX_TEXT_LENGTH", "500"))  # Characters
-MIN_TEXT_LENGTH = int(os.getenv("TTS_MIN_TEXT_LENGTH", "1"))
-
-# Common Phrases to Cache (if caching enabled)
 COMMON_PHRASES = [
     "Hello",
     "Goodbye",
@@ -79,12 +46,13 @@ COMMON_PHRASES = [
     "You're welcome"
 ]
 
-# Performance Thresholds
-MAX_SYNTHESIS_TIME_SECONDS = 30.0  # Timeout
-WARNING_RTF_THRESHOLD = 0.5  # Real-time factor (warn if slower)
+# Concurrency Control
+MAX_CONCURRENT_REQUESTS = int(os.getenv("TTS_MAX_CONCURRENT_REQUESTS", "4"))
+POOL_TIMEOUT_SECONDS = float(os.getenv("TTS_POOL_TIMEOUT_SECONDS", "30.0"))
 
-# SSML Support
-ENABLE_SSML = os.getenv("TTS_ENABLE_SSML", "true").lower() == "true"
+# Performance Thresholds
+MAX_SYNTHESIS_TIME_SECONDS = 30.0
+WARNING_RTF_THRESHOLD = 0.5
 
 # Logging
 LOG_SYNTHESES = os.getenv("TTS_LOG_SYNTHESES", "true").lower() == "true"

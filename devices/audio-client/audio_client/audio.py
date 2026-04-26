@@ -86,7 +86,7 @@ class AudioPipeline:
 
         outdata[:, 0] = speaker_samples
 
-        # 2. Mic capture + AEC.
+        # 2. Mic capture + AEC (use first input channel only).
         mic_raw = indata[:, 0].astype(np.int16)
         cleaned = self._aec.process(mic_raw, speaker_samples)
 
@@ -111,8 +111,9 @@ class AudioPipeline:
                 self._metrics.mic_frames_dropped += 1
 
         if self._metrics:
-            elapsed = (time.monotonic() - t0) * 1000.0
-            self._metrics.audio_callback_duration_ms = elapsed
+            now = time.monotonic()
+            self._metrics.audio_callback_duration_ms = (now - t0) * 1000.0
+            self._metrics.last_callback_monotonic = now
 
     # ------------------------------------------------------------------
     # Public API
@@ -129,19 +130,73 @@ class AudioPipeline:
         )
         self._stream.start()
         log.info(
-            "audio pipeline started: sr=%d frame=%d",
+            "audio pipeline started: sr=%d frame=%d actual_sr=%.0f out_channels=%d",
             self._sample_rate,
             self._frame_size,
+            self._stream.samplerate,
+            self._stream.channels[1] if isinstance(self._stream.channels, tuple) else self._stream.channels,
         )
 
     def stop(self) -> None:
-        if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
+        self._teardown_stream()
+        # Unblock any executor thread waiting in read_mic_frame() so the WebRTC
+        # tracks shut down cleanly. Do NOT do this in restart() — we want
+        # in-flight readers (MicTrack) to keep waiting and pick up the new
+        # stream's frames once recovery completes.
+        self._mic_queue.put(None)
+        log.info("audio pipeline stopped")
+
+    def _teardown_stream(self) -> None:
+        """Close the underlying sd.Stream without poisoning the queues."""
+        if self._stream is None:
+            return
+        try:
+            # abort() discards in-flight buffers; faster than stop() and less
+            # likely to block on a wedged audio device.
+            self._stream.abort(ignore_errors=True)
+        except Exception:
+            log.exception("stream abort raised")
+        try:
+            self._stream.close(ignore_errors=True)
+        except Exception:
+            log.exception("stream close raised")
+        self._stream = None
+
+    def restart(self) -> bool:
+        """Tear down the current sd.Stream and create a fresh one.
+
+        Used by the recovery loop when the audio host (PulseAudio on WSLg, or
+        an unplugged USB device) drops out underneath PortAudio. Reinitializes
+        PortAudio so its cached host-API state is refreshed.
+
+        The mic and speaker queues are intentionally NOT cleared and the mic
+        sentinel (None) is NOT enqueued — in-flight TTS audio stays queued
+        and any caller blocked on read_mic_frame() simply resumes once the
+        new callback starts producing frames. The WebRTC connection survives
+        unless the peer itself decides to drop it.
+
+        Returns True on success, False on failure (caller should retry).
+        """
+        log.info("audio pipeline restart requested")
+        self._teardown_stream()
+
+        # Refresh PortAudio so it re-queries the host's device list and rebuilds
+        # any cached handles into PulseAudio. Without this, the new sd.Stream
+        # often inherits the same wedged backend handle.
+        try:
+            sd._terminate()
+            sd._initialize()
+        except Exception:
+            log.exception("PortAudio reinitialise raised — continuing anyway")
+
+        try:
+            self.start()
+            log.info("audio pipeline restarted")
+            return True
+        except Exception:
+            log.exception("audio pipeline restart failed")
             self._stream = None
-            # Unblock any executor thread waiting in read_mic_frame().
-            self._mic_queue.put(None)
-            log.info("audio pipeline stopped")
+            return False
 
     async def read_mic_frame(self) -> np.ndarray:
         """Async bridge: block in executor until a mic frame is available."""

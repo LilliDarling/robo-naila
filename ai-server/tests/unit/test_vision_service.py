@@ -331,8 +331,15 @@ class TestModelLoading:
 
     @pytest.mark.asyncio
     async def test_model_loading_success(self, vision_service):
-        """Test successful model loading with mocked YOLO"""
-        with patch('services.vision.YOLO') as mock_yolo_class:
+        """Test successful model loading with mocked YOLO.
+
+        Also patches HAS_ULTRALYTICS — when ultralytics fails to import at
+        module load time (e.g. on dev machines with broken torch), the
+        module-level flag is False and _load_model_impl bails out before
+        even reaching YOLO.
+        """
+        with patch('services.vision.YOLO') as mock_yolo_class, \
+             patch('services.vision.HAS_ULTRALYTICS', True):
             # Mock the YOLO model
             mock_model = MagicMock()
             mock_yolo_class.return_value = mock_model

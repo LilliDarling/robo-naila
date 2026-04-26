@@ -10,6 +10,10 @@ log = logging.getLogger(__name__)
 
 _LOG_INTERVAL = 10  # seconds
 _HEALTH_PORT = 8081
+# Callback should fire every frame_duration_ms (typically 20ms). Anything beyond
+# 2s of silence means the audio thread is wedged — far longer than any normal
+# scheduling jitter or buffer underrun would explain.
+_CALLBACK_STALE_SECONDS = 2.0
 
 
 class DeviceMetrics:
@@ -40,6 +44,10 @@ class DeviceMetrics:
         self.speaker_queue_depth: int = 0
         self.connected: bool = False
         self.audio_callback_duration_ms: float = 0.0
+        # monotonic timestamp of the last PortAudio callback. 0.0 = never fired.
+        # The watchdog in periodic_log uses this to detect a wedged audio thread,
+        # which on WSLg happens when PulseAudio drops out underneath PortAudio.
+        self.last_callback_monotonic: float = 0.0
 
         # Delta tracking for periodic log (rates per interval).
         self._prev_mic_sent: int = 0
@@ -122,11 +130,26 @@ async def start_health_server(metrics: DeviceMetrics) -> web.AppRunner:
 
 
 async def periodic_log(metrics: DeviceMetrics, pipeline=None) -> None:
-    """Log metrics every _LOG_INTERVAL seconds. Runs as a background task."""
+    """Log metrics every _LOG_INTERVAL seconds. Runs as a background task.
+
+    Also runs the audio-callback liveness watchdog: if the PortAudio callback
+    hasn't fired in _CALLBACK_STALE_SECONDS, log a warning. On WSLg this
+    typically means PulseAudio dropped out and the stream is wedged — there is
+    no recovery without restarting the client.
+    """
     while True:
         await asyncio.sleep(_LOG_INTERVAL)
-        # Update queue gauges from pipeline if available.
         if pipeline is not None:
             metrics.mic_queue_depth = pipeline.mic_queue_depth
             metrics.speaker_queue_depth = pipeline.speaker_queue_depth
         metrics.log_periodic()
+
+        last = metrics.last_callback_monotonic
+        if last > 0.0:
+            stale_for = time.monotonic() - last
+            if stale_for > _CALLBACK_STALE_SECONDS:
+                log.warning(
+                    "audio callback stalled for %.1fs — PortAudio/PulseAudio "
+                    "appears wedged; audio in/out has stopped (restart required)",
+                    stale_for,
+                )
