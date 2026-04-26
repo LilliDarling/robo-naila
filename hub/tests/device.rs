@@ -30,6 +30,7 @@ fn test_bus() -> (Arc<AudioBus>, mpsc::Receiver<hub::audio::TaggedFrame>) {
     let bus = Arc::new(AudioBus {
         audio_tx,
         tts_sub: DashMap::new(),
+        device_configs: DashMap::new(),
     });
     (bus, audio_rx)
 }

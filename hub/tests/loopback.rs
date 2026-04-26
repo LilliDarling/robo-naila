@@ -132,6 +132,7 @@ async fn audio_loopback_through_grpc() {
     let bus = Arc::new(AudioBus {
         audio_tx,
         tts_sub: DashMap::new(),
+        device_configs: DashMap::new(),
     });
 
     // 3. Start gRPC client pointed at the mock server.
@@ -221,6 +222,7 @@ async fn grpc_connection_populates_ai_server_status() {
     let bus = Arc::new(AudioBus {
         audio_tx,
         tts_sub: DashMap::new(),
+        device_configs: DashMap::new(),
     });
 
     let cancel = CancellationToken::new();
@@ -284,6 +286,7 @@ async fn grpc_disconnect_clears_ai_server_status() {
     let bus = Arc::new(AudioBus {
         audio_tx,
         tts_sub: DashMap::new(),
+        device_configs: DashMap::new(),
     });
 
     let cancel = CancellationToken::new();

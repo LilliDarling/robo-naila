@@ -3,10 +3,17 @@
 import multiprocessing
 import os
 import platform
-import torch
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 from utils import get_logger
+
+# torch is only needed for CUDA/MPS detection. CPU-only deployments (and machines
+# with a mismatched CUDA driver/runtime) should still be able to import this module
+# and fall through to CPU detection.
+try:
+    import torch
+except ImportError:
+    torch = None
 
 try:
     import cpuinfo
@@ -42,6 +49,10 @@ class HardwareOptimizer:
     def _detect_hardware(self) -> HardwareInfo:
         """Comprehensive hardware detection"""
         try:
+            if torch is None:
+                logger.info("torch_unavailable", fallback="cpu detection only")
+                return self._detect_cpu_hardware()
+
             # CUDA detection
             if torch.cuda.is_available():
                 device_name = torch.cuda.get_device_name(0)

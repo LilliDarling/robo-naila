@@ -42,7 +42,13 @@ class TestLoadModel:
 
     @pytest.mark.asyncio
     async def test_load_model_file_not_found(self, service):
-        """Test that load_model returns False when model file missing"""
+        """Test that load_model returns False when model file missing.
+
+        STT's _validate_model_path also accepts non-filesystem strings like
+        "small.en" (HuggingFace model IDs faster_whisper downloads on demand),
+        so we point at a path-like value that must exist on disk.
+        """
+        service.model_path = Path("/nonexistent/path/to/model.bin")
         with patch('pathlib.Path.exists', return_value=False):
             result = await service.load_model()
 

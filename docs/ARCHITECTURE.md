@@ -43,7 +43,7 @@ NAILA is a local AI assistant with voice conversations, vision, and personality.
 │   │                                                                     │   │
 │   │  ┌───────┐    ┌───────┐    ┌───────┐    ┌────────┐                  │   │
 │   │  │  STT  │    │  LLM  │    │  TTS  │    │ Vision │                  │   │
-│   │  │Whisper│    │Llama 3│    │ Piper │    │ YOLOv8 │                  │   │
+│   │  │Whisper│    │Llama 3│    │Kokoro │    │ YOLOv8 │                  │   │
 │   │  └───────┘    └───────┘    └───────┘    └────────┘                  │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │              │                                                              │
@@ -71,7 +71,7 @@ Python service that runs all AI models and orchestrates conversations.
 |---------|-------|---------|
 | STT | faster-whisper (small.en) | Speech-to-text transcription |
 | LLM | Llama 3 8B Instruct (llama-cpp-python) | Response generation |
-| TTS | Piper (Lessac voice, ONNX) | Text-to-speech with SSML, emotion presets |
+| TTS | Kokoro 82M (ONNX) | Text-to-speech with multi-voice selection and adjustable speaking rate |
 | Vision | YOLOv8 Nano (ultralytics) | Object detection, scene analysis |
 
 **Orchestration (LangGraph):**
@@ -127,7 +127,7 @@ WebRTC audio client for any device with a mic and speaker.
 | AI Orchestration | LangGraph |
 | LLM | Llama 3 8B via llama-cpp-python |
 | STT | faster-whisper |
-| TTS | Piper (ONNX) with SSML + emotion presets |
+| TTS | Kokoro 82M (ONNX) with multi-voice selection |
 | Vision | YOLOv8 via ultralytics |
 | Streaming | WebRTC (webrtc-rs / aiortc) + gRPC (tonic / grpcio) |
 | Messaging | MQTT (paho-mqtt / Mosquitto broker) |

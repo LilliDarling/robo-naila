@@ -6,14 +6,20 @@ from functools import lru_cache
 from datetime import datetime, timezone
 from agents.base import BaseAgent
 
+# numpy is a hard dependency, sentence_transformers is optional. Import them
+# separately so a sentence_transformers/torch failure doesn't strip numpy too —
+# downstream similarity math uses np even when the transformer itself is mocked.
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
 try:
     from sentence_transformers import SentenceTransformer
-    import numpy as np
     HAS_TRANSFORMERS = True
 except ImportError:
     HAS_TRANSFORMERS = False
     SentenceTransformer = None
-    np = None
 
 try:
     from config.hardware import hardware_optimizer

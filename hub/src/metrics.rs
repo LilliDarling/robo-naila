@@ -18,6 +18,10 @@ pub struct HubMetrics {
     pub vad_ends: AtomicU64,
     /// TTS frames routed from gRPC back to devices.
     pub tts_frames_routed: AtomicU64,
+    /// TTS frames dropped because a device's per-device channel was full.
+    /// Non-zero indicates the device's transport (WebRTC track) is not
+    /// draining — typically a wedged audio client or stalled peer.
+    pub tts_frames_dropped: AtomicU64,
     /// gRPC reconnection attempts.
     pub grpc_reconnects: AtomicU64,
     /// Whether the gRPC stream is currently established.
@@ -74,6 +78,7 @@ impl HubMetrics {
             vad_onsets: AtomicU64::new(0),
             vad_ends: AtomicU64::new(0),
             tts_frames_routed: AtomicU64::new(0),
+            tts_frames_dropped: AtomicU64::new(0),
             grpc_reconnects: AtomicU64::new(0),
             grpc_connected: AtomicBool::new(false),
             start_time: Instant::now(),
@@ -150,6 +155,7 @@ impl HubMetrics {
             vad_onsets: self.vad_onsets.load(Ordering::Relaxed),
             vad_ends: self.vad_ends.load(Ordering::Relaxed),
             tts_frames_routed: self.tts_frames_routed.load(Ordering::Relaxed),
+            tts_frames_dropped: self.tts_frames_dropped.load(Ordering::Relaxed),
             grpc_reconnects: self.grpc_reconnects.load(Ordering::Relaxed),
             ai_server,
         }
@@ -166,6 +172,7 @@ pub struct HealthResponse {
     pub vad_onsets: u64,
     pub vad_ends: u64,
     pub tts_frames_routed: u64,
+    pub tts_frames_dropped: u64,
     pub grpc_reconnects: u64,
     /// AI server status from the last successful GetStatus call.
     /// `None` if the server hasn't been reached or doesn't support GetStatus.

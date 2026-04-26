@@ -50,18 +50,22 @@ class TestResponseGenerator:
 
     @pytest.mark.asyncio
     async def test_low_confidence_handling(self, generator):
-        """Test handling of low confidence inputs"""
+        """Test handling of low confidence inputs.
+
+        ResponseGenerator triggers a clarification when confidence is strictly
+        below 0.3 (see _generate_response). 0.2 is firmly in the "low" zone.
+        """
         state = {
             "intent": "general",
             "processed_text": "unclear mumbling",
             "context": {},
             "conversation_history": [],
-            "confidence": 0.3,
+            "confidence": 0.2,
             "device_id": "test"
         }
-        
+
         result = await generator.process(state)
-        
+
         # Should generate clarification request
         assert "didn't catch that" in result["response_text"].lower() or \
                "confidence" in result["response_text"].lower()

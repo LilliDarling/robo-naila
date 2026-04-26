@@ -38,7 +38,7 @@ NAILA is an AI companion powered by local models for privacy-focused, low-latenc
 ### Voice Conversation
 - **Speech-to-Text:** Transcribes speech using **faster-whisper** (Whisper small.en model)
 - **LLM Processing:** Generates responses using **Llama 3 8B Instruct** via `llama-cpp-python`
-- **Text-to-Speech:** Synthesizes voice with **Piper** (Lessac voice, ONNX) including SSML support and 24 emotion presets
+- **Text-to-Speech:** Synthesizes voice with **Kokoro 82M** (ONNX) with multi-voice selection and adjustable speaking rate
 - **Real-Time Streaming:** Sub-700ms voice response latency via WebRTC + gRPC pipeline
 
 ### Vision
@@ -91,7 +91,7 @@ Python service running all AI models with LangGraph orchestration.
 |---------|-------|---------|
 | STT | Whisper small.en | faster-whisper |
 | LLM | Llama 3 8B Instruct | llama-cpp-python |
-| TTS | Piper (Lessac, ONNX) | piper-tts |
+| TTS | Kokoro 82M (ONNX) | kokoro-onnx |
 | Vision | YOLOv8 Nano | ultralytics |
 
 **Key modules:** `services/` (AI models), `graphs/` (LangGraph orchestration), `agents/` (orchestrator, input processor, response generator), `mqtt/` (client, handlers, routing), `config/` (per-service configuration), `memory/` (conversation history)

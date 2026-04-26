@@ -352,16 +352,37 @@ async fn recv_loop(
 
                 // DashMap::get accepts &Q where Key: Borrow<Q>. Since Arc<str>: Borrow<str>,
                 // we can look up with &str. The as_str() converts &String → &str.
+                //
+                // Use try_send rather than send().await so a wedged device (transport
+                // not draining its per-device channel) can't block this loop. If we
+                // blocked here, the gRPC recv stream would stall for ALL devices and
+                // back-pressure would cascade all the way to the AI server's TTS
+                // queue with no error logged. Dropping the frame on overflow keeps
+                // the rest of the system healthy and surfaces the problem via metrics.
                 if let Some(tx) = audio_bus.tts_sub.get(msg.device_id.as_str()) {
-                    if tx.send(tts_frame).await.is_err() {
-                        warn!(
-                            device_id = %msg.device_id,
-                            "device TTS channel closed, dropping frame"
-                        );
-                    } else {
-                        metrics.tts_frames_routed.fetch_add(1, Ordering::Relaxed);
+                    use tokio::sync::mpsc::error::TrySendError;
+                    match tx.try_send(tts_frame) {
+                        Ok(()) => {
+                            metrics.tts_frames_routed.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(TrySendError::Full(_)) => {
+                            metrics.tts_frames_dropped.fetch_add(1, Ordering::Relaxed);
+                            warn!(
+                                device_id = %msg.device_id,
+                                "device TTS channel full — dropping frame (transport not draining; \
+                                 likely audio client wedged)"
+                            );
+                        }
+                        Err(TrySendError::Closed(_)) => {
+                            metrics.tts_frames_dropped.fetch_add(1, Ordering::Relaxed);
+                            warn!(
+                                device_id = %msg.device_id,
+                                "device TTS channel closed, dropping frame"
+                            );
+                        }
                     }
                 } else {
+                    metrics.tts_frames_dropped.fetch_add(1, Ordering::Relaxed);
                     warn!(
                         device_id = %msg.device_id,
                         "no device subscribed for TTS, dropping frame"
