@@ -42,20 +42,76 @@ class ResponseGenerator(BaseAgent):
         # Check LLM readiness dynamically
         use_llm = self.llm_service is not None and self.llm_service.is_ready
 
-        # Generate context-aware response
-        response = await self._generate_response(
-            intent, processed_text, context, conversation_history, confidence, use_llm=use_llm, visual_context=visual_context
+        # Audio output is needed when:
+        # - gRPC transport (audio is the primary output)
+        # - MQTT with audio input (device sent audio, expects audio back)
+        needs_audio = (
+            configurable.get("transport") == "grpc"
+            or state.get("input_type") == "audio"
         )
-        
+        audio_delivery = configurable.get("audio_delivery")
+        output_format = "raw" if configurable.get("transport") == "grpc" else None
+        tts_ready = self.tts_service is not None and self.tts_service.is_ready
+
+        # Streaming path: synthesize and deliver audio sentence-by-sentence as
+        # the LLM generates, instead of waiting for the full response. Brings
+        # time-to-first-audio down to ~first-sentence-LLM + first-sentence-TTS
+        # regardless of total response length. Only viable when:
+        #   - LLM is available (streaming endpoint exists only on the LLM path)
+        #   - audio is needed and the delivery callback is set up
+        #   - confidence is high enough that we'd use LLM anyway
+        #   - no short-circuit visual response (those are pre-canned text)
+        visual_short_circuit = bool(
+            visual_context and (visual_context.get("answer") or visual_context.get("description"))
+        )
+        can_stream = (
+            use_llm
+            and needs_audio
+            and audio_delivery is not None
+            and tts_ready
+            and not visual_short_circuit
+            and confidence >= 0.3
+        )
+
+        response = ""
+        streamed = False
+        if can_stream:
+            try:
+                response = await self._stream_response_to_audio(
+                    processed_text,
+                    conversation_history,
+                    visual_context,
+                    audio_delivery,
+                    output_format,
+                )
+                streamed = bool(response)
+            except Exception as e:
+                self.logger.warning(
+                    "streaming_path_failed",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    fallback="non-streaming",
+                )
+                response = ""
+
+        if not response:
+            # Non-streaming fallback: visual short-circuit, low confidence,
+            # streaming-disabled, or streaming returned no text.
+            response = await self._generate_response(
+                intent, processed_text, context, conversation_history, confidence,
+                use_llm=use_llm, visual_context=visual_context,
+            )
+
         # Add response metadata
         response_metadata = {
             "intent": intent,
             "confidence": confidence,
             "generation_time_ms": int((time.time() - start_time) * 1000),
             "context_used": bool(context.get("recent_exchanges")),
-            "device_id": device_id
+            "device_id": device_id,
+            "streamed": streamed,
         }
-        
+
         # Update conversation history
         history_entry = {
             "user": processed_text,
@@ -63,37 +119,27 @@ class ResponseGenerator(BaseAgent):
             "timestamp": state.get("timestamp", ""),
             "metadata": response_metadata
         }
-        
+
         conversation_history.append(history_entry)
-        
+
         # Update state
         state["response_text"] = response
         state["conversation_history"] = conversation_history[-10:]  # Keep last 10
         state["response_metadata"] = response_metadata
 
-        # Synthesize audio only when needed:
-        # - gRPC transport: always (audio is the primary output)
-        # - MQTT with audio input: yes (device sent audio, expects audio back)
-        # - MQTT with text input: skip (text-only round trip, no need to wait for TTS)
-        needs_audio = (
-            configurable.get("transport") == "grpc"
-            or state.get("input_type") == "audio"
-        )
-
-        if needs_audio and self.tts_service and self.tts_service.is_ready:
+        # Non-streaming TTS delivery — only fires when the streaming path didn't
+        # already deliver audio. Streaming handles its own TTS synthesis and
+        # callback invocations sentence-by-sentence.
+        if not streamed and needs_audio and tts_ready:
             try:
-                output_format = "raw" if configurable.get("transport") == "grpc" else None
                 audio_data = await self.tts_service.synthesize(response, output_format=output_format)
-
-                audio_delivery = configurable.get("audio_delivery")
                 if audio_delivery:
                     await audio_delivery(audio_data, response, is_final=True)
-
                 state["response_audio"] = audio_data
                 self.logger.debug(
                     "audio_synthesized",
                     duration_ms=audio_data.duration_ms,
-                    format=audio_data.format
+                    format=audio_data.format,
                 )
             except Exception as e:
                 self.logger.warning("tts_synthesis_failed", error=str(e), error_type=type(e).__name__)
@@ -103,9 +149,83 @@ class ResponseGenerator(BaseAgent):
             "response_generated",
             response=response,
             confidence=round(confidence, 2),
-            generation_time_ms=response_metadata['generation_time_ms']
+            generation_time_ms=response_metadata['generation_time_ms'],
+            streamed=streamed,
         )
         return state
+
+    async def _stream_response_to_audio(
+        self,
+        query: str,
+        history: List[Dict],
+        visual_context: Optional[Dict[str, Any]],
+        audio_delivery,
+        output_format: Optional[str],
+    ) -> str:
+        """Stream LLM tokens, synthesize sentence-by-sentence, deliver via callback.
+
+        Buffers streamed deltas into complete sentences, fires TTS for each as
+        soon as it's ready, calls ``audio_delivery(audio, sentence, is_final=...)``
+        with ``is_final=False`` for every sentence except the last and ``True`` on
+        the final one. Returns the full accumulated response text so the caller
+        can record it in conversation history.
+
+        Returns "" if the stream produced no text (caller should fall back to the
+        non-streaming path).
+        """
+        # Augment with visual context if present (matches non-streaming path).
+        augmented_query = query
+        if visual_context:
+            visual_info = f"Visual context: {visual_context.get('description', '')}"
+            if visual_context.get("object_counts"):
+                visual_info += f" Objects detected: {visual_context['object_counts']}"
+            augmented_query = f"{visual_info}\n\nUser query: {query}"
+
+        messages = self.llm_service.build_chat_messages(augmented_query, history)
+        sentences: List[str] = []
+        # One-sentence lookahead so we can mark only the last delivered chunk
+        # is_final=True. Mirrors the lookahead in _grpc_audio_delivery: when a
+        # new sentence arrives, the previous one is sent with is_final=False;
+        # whatever is still pending at end-of-stream gets is_final=True.
+        pending_sentence: Optional[str] = None
+
+        async def _deliver(sentence: str, is_final: bool) -> None:
+            try:
+                audio_data = await self.tts_service.synthesize(sentence, output_format=output_format)
+                await audio_delivery(audio_data, sentence, is_final=is_final)
+            except Exception as e:
+                self.logger.warning(
+                    "tts_chunk_synthesis_failed",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    fragment_chars=len(sentence),
+                )
+
+        try:
+            # LLMService yields complete sentences (segmentation runs on the
+            # producer thread). One audio_delivery call per sentence keeps
+            # asyncio cross-thread chatter low.
+            async for sentence in self.llm_service.generate_chat_stream(messages):
+                sentences.append(sentence)
+                if pending_sentence is not None:
+                    await _deliver(pending_sentence, is_final=False)
+                pending_sentence = sentence
+        except Exception as e:
+            self.logger.warning(
+                "llm_stream_interrupted",
+                error=str(e),
+                error_type=type(e).__name__,
+                sentences_so_far=len(sentences),
+            )
+
+        if pending_sentence is not None:
+            await _deliver(pending_sentence, is_final=True)
+
+        # Reconstruct full text for conversation history. Joining with " "
+        # is a slight whitespace approximation of the original (sentences are
+        # stripped during segmentation) but reads correctly and is what gets
+        # fed back to future LLM turns as past assistant context.
+        return " ".join(sentences).strip()
     
     async def _generate_response(
         self,

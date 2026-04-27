@@ -475,13 +475,34 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         tts_queue: asyncio.Queue = asyncio.Queue(maxsize=32)
         audio_produced = False
 
+        # Pacing state shared across multiple _grpc_audio_delivery calls within
+        # the same utterance. Streaming TTS calls the delivery callback once
+        # per sentence; without shared state, each call would reset its pacing
+        # baseline and either over-deliver (queue overflow at the client) or
+        # restart the silence prepend mid-response.
+        delivery_state = {
+            "started": False,             # True once the first call has run
+            "pacing_start": None,         # monotonic timestamp of frame 0
+            "cumulative_seq": 0,          # total Opus frames sent in this utterance
+        }
+
+        # Send the first ~200ms (10 frames) as fast as the network allows so
+        # the receiver's jitter buffer fills before real-time pacing kicks in.
+        INITIAL_BURST_FRAMES = 10
+        FRAME_SIZE = 960                  # 20ms at 48kHz
+        FRAME_DURATION_S = FRAME_SIZE / 48000
+
         async def _grpc_audio_delivery(audio_data, text: str, is_final: bool = True):
             """Callback invoked by ResponseGenerator when TTS audio is ready.
 
-            Pre-encodes TTS audio as Opus frames using PyAV and sends them
-            via the audio_opus field. The hub forwards these directly as RTP
-            packets without re-encoding, avoiding the Rust opus crate's
-            amplitude reduction bug.
+            Pre-encodes TTS audio as Opus frames using PyAV and sends them via
+            the audio_opus field. The hub forwards these directly as RTP packets
+            without re-encoding, avoiding the Rust opus crate's amplitude
+            reduction bug.
+
+            May be called multiple times per utterance during streaming TTS
+            (once per sentence). Pacing and the silence prepend coordinate
+            across calls via the captured ``delivery_state``.
             """
             if not audio_data or not audio_data.audio_bytes:
                 return
@@ -497,17 +518,20 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
             else:
                 pcm_48k = np.frombuffer(raw_bytes, dtype=np.int16)
 
-            # Prepend ~100ms of silence so the receive path (jitter buffer,
-            # opus decoder cold-start, playback callback timing) reaches steady
-            # state before real audio begins. Without this the first ~20-40ms
-            # of every TTS response is clipped or muffled — listener hears
-            # "...m here to help" instead of "I'm here to help". 100ms at 48kHz
-            # = 4800 samples = 5 Opus frames; a barely-perceptible extra pause
-            # before the response, much better than a chopped first syllable.
-            lead_in_silence = np.zeros(4800, dtype=np.int16)
-            pcm_48k = np.concatenate([lead_in_silence, pcm_48k])
+            # Prepend ~100ms of silence ONLY on the first call of an utterance.
+            # The silence gives the receive path (jitter buffer, opus decoder
+            # cold-start, playback callback timing) time to reach steady state
+            # before real audio begins — without it the first ~20-40ms of every
+            # response is clipped. On subsequent streaming calls the pipeline
+            # is already warm so silence would just create dead air between
+            # sentences.
+            if not delivery_state["started"]:
+                lead_in_silence = np.zeros(4800, dtype=np.int16)
+                pcm_48k = np.concatenate([lead_in_silence, pcm_48k])
+                delivery_state["pacing_start"] = time.monotonic()
+                delivery_state["started"] = True
 
-            # Encode 20ms Opus frames (960 samples at 48kHz) using PyAV.
+            # Encode 20ms Opus frames using PyAV.
             opus_enc = av.CodecContext.create('libopus', 'w')
             opus_enc.sample_rate = 48000
             opus_enc.layout = 'mono'
@@ -515,25 +539,9 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
             opus_enc.bit_rate = 64000
             opus_enc.open()
 
-            seq = 0
-            frame_size = 960  # 20ms at 48kHz
-            frame_duration_s = frame_size / 48000  # 0.020s
-
-            # Real-time pacing. Without this, the encoder produces ~90 frames
-            # in well under a second and gRPC ships them all to the hub at
-            # full speed; the hub forwards them at full speed to WebRTC; the
-            # audio client receives them in a burst far faster than the 50
-            # frames/sec real-time playback rate. Its bounded speaker queue
-            # then overflows and drops frames mid-response, which sounds like
-            # "speeding up" to the listener.
-            #
-            # Strategy: send the first INITIAL_BURST_FRAMES as fast as we can
-            # so the receiver has a small jitter buffer to start with, then
-            # pace the remainder so each frame leaves at its real-time slot.
-            # The math: target_time for frame N = start + N * 20ms. If we're
-            # ahead, sleep until then; if behind, send immediately.
-            INITIAL_BURST_FRAMES = 10  # 200ms head-start for jitter buffer
-            pacing_start = time.monotonic()
+            frame_size = FRAME_SIZE
+            frame_duration_s = FRAME_DURATION_S
+            pacing_start = delivery_state["pacing_start"]
 
             # Opus is a buffered encoder: encode(frame) may yield 0+ packets,
             # and encode(None) flushes any remaining. We can't know during the
@@ -548,7 +556,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
             pending: Optional[bytes] = None
 
             async def _send_packet(payload: bytes, final: bool) -> None:
-                nonlocal seq
+                seq = delivery_state["cumulative_seq"]
                 await tts_queue.put(naila_pb2.AudioOutput(
                     device_id=device_id,
                     conversation_id=conversation_id,
@@ -556,11 +564,13 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                     sample_rate=48000,
                     sequence_num=seq,
                     is_final=final,
+                    # Send the STT transcription only on the very first packet of
+                    # the entire utterance — not the first packet of each chunk.
                     final_stt=transcription if seq == 0 else "",
                 ))
-                seq += 1
-                if seq > INITIAL_BURST_FRAMES:
-                    target = pacing_start + seq * frame_duration_s
+                delivery_state["cumulative_seq"] = seq + 1
+                if delivery_state["cumulative_seq"] > INITIAL_BURST_FRAMES:
+                    target = pacing_start + delivery_state["cumulative_seq"] * frame_duration_s
                     delay = target - time.monotonic()
                     if delay > 0:
                         await asyncio.sleep(delay)

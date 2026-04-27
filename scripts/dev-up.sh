@@ -77,8 +77,12 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 
 tmux new-session -d -s "$SESSION" -n ai-server -c "$ROOT/ai-server"
+# `uv run --no-sync` skips uv's implicit dep-resync. Without it, every start
+# overwrites manually-built native packages (e.g. llama-cpp-python compiled
+# with CUDA) by reinstalling the PyPI CPU wheel from uv.lock. Run `uv sync`
+# explicitly when you want to update deps.
 tmux send-keys -t "$SESSION:ai-server" \
-    "source .venv/bin/activate && STT_VAD_FILTER=false STT_DEVICE=cpu STT_COMPUTE_TYPE=int8 uv run python main.py" \
+    "source .venv/bin/activate && STT_VAD_FILTER=false STT_DEVICE=cpu STT_COMPUTE_TYPE=int8 uv run --no-sync python main.py" \
     C-m
 
 tmux new-window -t "$SESSION" -n hub -c "$ROOT/hub"

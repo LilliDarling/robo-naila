@@ -2,7 +2,7 @@
 
 import asyncio
 import time
-from typing import Dict, List, Optional
+from typing import AsyncIterator, Dict, List, Optional
 
 try:
     from llama_cpp import Llama
@@ -14,6 +14,7 @@ except ImportError:
 from config import llm as llm_config
 from services.base import BaseAIService
 from utils.resource_pool import ResourcePool
+from utils.sentence_buffer import SentenceBuffer
 from utils import get_logger
 
 
@@ -265,6 +266,124 @@ class LLMService(BaseAIService):
         except Exception as e:
             logger.error("llm_generation_failed", error=str(e), error_type=type(e).__name__)
             return ""
+
+    async def generate_chat_stream(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+    ) -> AsyncIterator[str]:
+        """Stream LLM output one complete sentence at a time.
+
+        Sentence segmentation runs on the same thread that drives llama-cpp,
+        so cross-thread coordination happens once per sentence (5-10 times
+        per response) instead of once per token (50-100 times). The original
+        token-level approach lost ~13× generation throughput to GIL contention
+        between the producer thread, the asyncio loop, and concurrent TTS work.
+
+        Caller assembles the full response text by joining the yielded
+        sentences if they need it for conversation history.
+        """
+        if not self.is_ready or self.model is None:
+            logger.error("Model not loaded, cannot stream")
+            return
+
+        if self._pool is not None:
+            async with self._pool:
+                async for sentence in self._stream_chat_impl(messages, max_tokens, temperature, top_p):
+                    yield sentence
+        else:
+            async for sentence in self._stream_chat_impl(messages, max_tokens, temperature, top_p):
+                yield sentence
+
+    async def _stream_chat_impl(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+    ) -> AsyncIterator[str]:
+        """Run llama-cpp's blocking stream on an executor thread; the producer
+        thread also segments output into sentences so cross-thread asyncio
+        crossings drop from per-token to per-sentence."""
+        start_time = time.time()
+        prompt = self._format_chat_prompt(messages)
+        max_tokens = max_tokens or llm_config.MAX_TOKENS_PER_RESPONSE
+        temperature = temperature or llm_config.DEFAULT_TEMPERATURE
+        top_p = top_p or llm_config.DEFAULT_TOP_P
+
+        if llm_config.LOG_PROMPTS:
+            logger.debug("llm_prompt", prompt=prompt)
+
+        model = self.model
+        assert model is not None
+
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        _SENTINEL = object()
+
+        def _produce() -> int:
+            """Iterate llama-cpp's blocking stream, segment into sentences on
+            this thread, push complete sentences to the asyncio queue. Returns
+            total token count for performance logging."""
+            buf = SentenceBuffer()
+            tokens = 0
+            try:
+                for chunk in model(
+                    prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=llm_config.DEFAULT_TOP_K,
+                    repeat_penalty=llm_config.REPEAT_PENALTY,
+                    stop=llm_config.STOP_SEQUENCES,
+                    echo=False,
+                    stream=True,
+                ):
+                    if not chunk.get("choices"):
+                        continue
+                    delta = chunk["choices"][0].get("text", "")
+                    if delta:
+                        tokens += 1
+                        for sentence in buf.feed(delta):
+                            loop.call_soon_threadsafe(queue.put_nowait, sentence)
+                tail = buf.flush()
+                if tail:
+                    loop.call_soon_threadsafe(queue.put_nowait, tail)
+            except Exception as e:
+                logger.error("llm_stream_failed", error=str(e), error_type=type(e).__name__)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, (_SENTINEL, tokens))
+            return tokens
+
+        producer = loop.run_in_executor(None, _produce)
+        total_tokens = 0
+        try:
+            while True:
+                item = await queue.get()
+                if isinstance(item, tuple) and item and item[0] is _SENTINEL:
+                    total_tokens = item[1]
+                    break
+                yield item
+        finally:
+            try:
+                await producer
+            except Exception:
+                pass
+
+            inference_time = time.time() - start_time
+            tokens_per_sec = total_tokens / inference_time if inference_time > 0 else 0.0
+            if llm_config.LOG_PERFORMANCE_METRICS:
+                logger.info(
+                    "llm_generation_performance",
+                    inference_time_seconds=round(inference_time, 2),
+                    tokens_generated=total_tokens,
+                    tokens_per_second=round(tokens_per_sec, 1),
+                    streaming=True,
+                )
+            if inference_time > llm_config.WARNING_INFERENCE_TIME_SECONDS:
+                logger.warning("llm_slow_inference", inference_time_seconds=round(inference_time, 2))
 
     def _format_chat_prompt(self, messages: List[Dict[str, str]]) -> str:
         """Format messages into Llama 3.1 chat format"""
