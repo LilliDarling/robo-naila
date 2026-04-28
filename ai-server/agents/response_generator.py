@@ -36,6 +36,16 @@ class ResponseGenerator(BaseAgent):
         context = state.get("context", {})
         conversation_history = state.get("conversation_history", [])
         confidence = state.get("confidence", 1.0)
+        # ── MULTI-DEVICE NOTE ─────────────────────────────────────────────
+        # device_id is the SOURCE of the request today (one user, one device).
+        # Multi-room features will eventually need to also carry TARGET device(s)
+        # for the response — e.g. "tell <person> in <room>" routes audio to
+        # room B even though the request originated in room A. Suggested
+        # extension: state.get("target_device_ids") returning a list, defaulting
+        # to [device_id] so single-device behavior is unchanged. The audio
+        # delivery callback (further down) is the seam where routing actually
+        # happens.
+        # ─────────────────────────────────────────────────────────────────
         device_id = state.get("device_id", "")
         visual_context = state.get("visual_context")
 
@@ -154,6 +164,22 @@ class ResponseGenerator(BaseAgent):
         )
         return state
 
+    def _augment_query_with_visual(
+        self, query: str, visual_context: Optional[Dict[str, Any]]
+    ) -> str:
+        """Prepend visual context to the user's query when available.
+
+        Used by both the streaming and non-streaming LLM paths so changes to
+        the augmentation format (extra fields, different wording) only need
+        to land in one place.
+        """
+        if not visual_context:
+            return query
+        visual_info = f"Visual context: {visual_context.get('description', '')}"
+        if visual_context.get("object_counts"):
+            visual_info += f" Objects detected: {visual_context['object_counts']}"
+        return f"{visual_info}\n\nUser query: {query}"
+
     async def _stream_response_to_audio(
         self,
         query: str,
@@ -173,15 +199,9 @@ class ResponseGenerator(BaseAgent):
         Returns "" if the stream produced no text (caller should fall back to the
         non-streaming path).
         """
-        # Augment with visual context if present (matches non-streaming path).
-        augmented_query = query
-        if visual_context:
-            visual_info = f"Visual context: {visual_context.get('description', '')}"
-            if visual_context.get("object_counts"):
-                visual_info += f" Objects detected: {visual_context['object_counts']}"
-            augmented_query = f"{visual_info}\n\nUser query: {query}"
-
-        messages = self.llm_service.build_chat_messages(augmented_query, history)
+        messages = self.llm_service.build_chat_messages(
+            self._augment_query_with_visual(query, visual_context), history,
+        )
         sentences: List[str] = []
         # One-sentence lookahead so we can mark only the last delivered chunk
         # is_final=True. Mirrors the lookahead in _grpc_audio_delivery: when a
@@ -189,6 +209,15 @@ class ResponseGenerator(BaseAgent):
         # whatever is still pending at end-of-stream gets is_final=True.
         pending_sentence: Optional[str] = None
 
+        # ── MULTI-DEVICE NOTE ─────────────────────────────────────────────
+        # `audio_delivery` is currently a single callback bound to one device's
+        # gRPC stream. When multi-room features land (cross-room messaging,
+        # spatial response routing, broadcasts), this signature will need to
+        # carry routing intent — likely a list of (device_id, callback) pairs
+        # or a router object the caller provides. The is_final lookahead below
+        # is per-stream and would need to be tracked per-device once one
+        # response can fan out to multiple devices simultaneously.
+        # ─────────────────────────────────────────────────────────────────
         async def _deliver(sentence: str, is_final: bool) -> None:
             try:
                 audio_data = await self.tts_service.synthesize(sentence, output_format=output_format)
@@ -301,16 +330,9 @@ class ResponseGenerator(BaseAgent):
         if not self.llm_service or not self.llm_service.is_ready:
             return ""
 
-        # Augment query with visual context if available
-        augmented_query = query
-        if visual_context:
-            visual_info = f"Visual context: {visual_context.get('description', '')}"
-            if visual_context.get("object_counts"):
-                visual_info += f" Objects detected: {visual_context['object_counts']}"
-            augmented_query = f"{visual_info}\n\nUser query: {query}"
-
-        # Build chat messages with history
-        messages = self.llm_service.build_chat_messages(augmented_query, history)
+        messages = self.llm_service.build_chat_messages(
+            self._augment_query_with_visual(query, visual_context), history,
+        )
 
         last_exception = None
         for attempt in range(1, max_retries + 1):
