@@ -475,80 +475,112 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         tts_queue: asyncio.Queue = asyncio.Queue(maxsize=32)
         audio_produced = False
 
+        # Per-utterance delivery state shared across every _grpc_audio_delivery
+        # invocation for this utterance. Streaming TTS calls the delivery
+        # callback once per sentence; the state below stays continuous across
+        # those calls so we maintain pacing, sequence numbers, and the Opus
+        # encoder's predictor state through sentence boundaries.
+        #
+        # ── MULTI-DEVICE NOTE ─────────────────────────────────────────────
+        # Today this state is scoped per-utterance within a single gRPC stream
+        # (one device, one conversation). When we add multi-room/multi-device
+        # routing, this state needs to be per (device_id, conversation_id) —
+        # because the same AI server may be delivering different responses to
+        # rooms A and B simultaneously, each with its own pacing baseline,
+        # sequence number, and encoder. Likely shape: a dict keyed by
+        # device_id mapping to one of these state structs, plus a small
+        # registry of tts_queues so the gRPC writer knows which queue to
+        # drain for each outgoing AudioOutput message.
+        # ─────────────────────────────────────────────────────────────────
+        delivery_state = {
+            "silence_prepended": False,   # True after first audio's silence prepend
+            "pacing_start": None,         # monotonic timestamp of frame 0
+            "cumulative_seq": 0,          # total Opus frames sent in this utterance
+            "encoder": None,              # libopus encoder, lazy-init on first audio
+        }
+
+        # Send the first ~200ms (10 frames) as fast as the network allows so
+        # the receiver's jitter buffer fills before real-time pacing kicks in.
+        INITIAL_BURST_FRAMES = 10
+        FRAME_SIZE = 960                  # 20ms at 48kHz
+        FRAME_DURATION_S = FRAME_SIZE / 48000
+
         async def _grpc_audio_delivery(audio_data, text: str, is_final: bool = True):
             """Callback invoked by ResponseGenerator when TTS audio is ready.
 
-            Pre-encodes TTS audio as Opus frames using PyAV and sends them
-            via the audio_opus field. The hub forwards these directly as RTP
-            packets without re-encoding, avoiding the Rust opus crate's
-            amplitude reduction bug.
+            Pre-encodes TTS audio as Opus frames using PyAV and sends them via
+            the audio_opus field. The hub forwards these directly as RTP packets
+            without re-encoding, avoiding the Rust opus crate's amplitude
+            reduction bug.
+
+            May be called multiple times per utterance during streaming TTS
+            (once per sentence). Pacing, sequence numbers, the silence prepend,
+            and the Opus encoder all coordinate across calls via the captured
+            ``delivery_state`` so streamed sentences look like one continuous
+            audio stream from the receiver's POV.
             """
-            if not audio_data or not audio_data.audio_bytes:
-                return
-            raw_bytes = audio_data.audio_bytes
-            tts_sample_rate = audio_data.sample_rate
+            has_audio = bool(audio_data and audio_data.audio_bytes)
 
-            # Resample to 48kHz for Opus (WebRTC standard).
-            target_rate = 48000
-            if tts_sample_rate != target_rate:
-                samples = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-                resampled = resampy.resample(samples, tts_sample_rate, target_rate)
-                pcm_48k = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
-            else:
-                pcm_48k = np.frombuffer(raw_bytes, dtype=np.int16)
+            pcm_48k: Optional[np.ndarray] = None
+            if has_audio:
+                raw_bytes = audio_data.audio_bytes
+                tts_sample_rate = audio_data.sample_rate
 
-            # Prepend ~100ms of silence so the receive path (jitter buffer,
-            # opus decoder cold-start, playback callback timing) reaches steady
-            # state before real audio begins. Without this the first ~20-40ms
-            # of every TTS response is clipped or muffled — listener hears
-            # "...m here to help" instead of "I'm here to help". 100ms at 48kHz
-            # = 4800 samples = 5 Opus frames; a barely-perceptible extra pause
-            # before the response, much better than a chopped first syllable.
-            lead_in_silence = np.zeros(4800, dtype=np.int16)
-            pcm_48k = np.concatenate([lead_in_silence, pcm_48k])
+                # Resample to 48kHz for Opus (WebRTC standard).
+                target_rate = 48000
+                if tts_sample_rate != target_rate:
+                    samples = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+                    resampled = resampy.resample(samples, tts_sample_rate, target_rate)
+                    pcm_48k = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
+                else:
+                    pcm_48k = np.frombuffer(raw_bytes, dtype=np.int16)
 
-            # Encode 20ms Opus frames (960 samples at 48kHz) using PyAV.
-            opus_enc = av.CodecContext.create('libopus', 'w')
-            opus_enc.sample_rate = 48000
-            opus_enc.layout = 'mono'
-            opus_enc.format = av.AudioFormat('s16')
-            opus_enc.bit_rate = 64000
-            opus_enc.open()
+                # Prepend ~100ms of silence on the first audio of the utterance.
+                # The silence gives the receive path (jitter buffer, opus decoder
+                # cold-start, playback callback timing) time to reach steady state
+                # before real audio begins — without it the first ~20-40ms of
+                # every response is clipped. On subsequent streaming calls the
+                # pipeline is already warm so silence would just create dead air
+                # between sentences.
+                if not delivery_state["silence_prepended"]:
+                    lead_in_silence = np.zeros(4800, dtype=np.int16)
+                    pcm_48k = np.concatenate([lead_in_silence, pcm_48k])
+                    delivery_state["pacing_start"] = time.monotonic()
+                    delivery_state["silence_prepended"] = True
 
-            seq = 0
-            frame_size = 960  # 20ms at 48kHz
-            frame_duration_s = frame_size / 48000  # 0.020s
+            # Lazy-init the libopus encoder on first audio. Reused across every
+            # streaming sentence in the utterance, then flushed and dropped on
+            # the final call. Reuse saves ~5-10ms of libopus init per chunk
+            # (small per-call but adds up across concurrent multi-device
+            # streams) and keeps the predictor state continuous across
+            # sentence boundaries — the first frame of each new sentence
+            # encodes against valid history instead of a zero-state cold start.
+            if has_audio and delivery_state["encoder"] is None:
+                enc = av.CodecContext.create('libopus', 'w')
+                enc.sample_rate = 48000
+                enc.layout = 'mono'
+                enc.format = av.AudioFormat('s16')
+                enc.bit_rate = 64000
+                enc.open()
+                delivery_state["encoder"] = enc
 
-            # Real-time pacing. Without this, the encoder produces ~90 frames
-            # in well under a second and gRPC ships them all to the hub at
-            # full speed; the hub forwards them at full speed to WebRTC; the
-            # audio client receives them in a burst far faster than the 50
-            # frames/sec real-time playback rate. Its bounded speaker queue
-            # then overflows and drops frames mid-response, which sounds like
-            # "speeding up" to the listener.
-            #
-            # Strategy: send the first INITIAL_BURST_FRAMES as fast as we can
-            # so the receiver has a small jitter buffer to start with, then
-            # pace the remainder so each frame leaves at its real-time slot.
-            # The math: target_time for frame N = start + N * 20ms. If we're
-            # ahead, sleep until then; if behind, send immediately.
-            INITIAL_BURST_FRAMES = 10  # 200ms head-start for jitter buffer
-            pacing_start = time.monotonic()
+            opus_enc = delivery_state["encoder"]
+            pacing_start = delivery_state["pacing_start"]
 
             # Opus is a buffered encoder: encode(frame) may yield 0+ packets,
             # and encode(None) flushes any remaining. We can't know during the
             # loop which packet will be the actual last one, so we hold a
             # one-packet lookahead — the previous packet flushes out as
             # is_final=False once we have a successor, and only the truly
-            # final packet (after the encoder is fully flushed) carries
-            # is_final=is_final. Without this, multiple packets ended up
-            # tagged is_final=True (the last in-loop packet plus every flush
-            # packet), which silently violated the "last frame of this
-            # response" contract documented in hub::audio.
+            # final packet of the utterance carries is_final=True. Without
+            # this, multiple packets ended up tagged is_final=True (the last
+            # in-loop packet plus every flush packet), which silently violated
+            # the "last frame of this response" contract documented in
+            # hub::audio.
             pending: Optional[bytes] = None
 
             async def _send_packet(payload: bytes, final: bool) -> None:
-                nonlocal seq
+                seq = delivery_state["cumulative_seq"]
                 await tts_queue.put(naila_pb2.AudioOutput(
                     device_id=device_id,
                     conversation_id=conversation_id,
@@ -556,36 +588,54 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                     sample_rate=48000,
                     sequence_num=seq,
                     is_final=final,
+                    # Send the STT transcription only on the very first packet of
+                    # the entire utterance — not the first packet of each chunk.
                     final_stt=transcription if seq == 0 else "",
                 ))
-                seq += 1
-                if seq > INITIAL_BURST_FRAMES:
-                    target = pacing_start + seq * frame_duration_s
+                delivery_state["cumulative_seq"] = seq + 1
+                if (
+                    delivery_state["cumulative_seq"] > INITIAL_BURST_FRAMES
+                    and pacing_start is not None
+                ):
+                    target = pacing_start + delivery_state["cumulative_seq"] * FRAME_DURATION_S
                     delay = target - time.monotonic()
                     if delay > 0:
                         await asyncio.sleep(delay)
 
-            for i in range(0, len(pcm_48k) - frame_size + 1, frame_size):
-                chunk = pcm_48k[i : i + frame_size]
-                frame = av.AudioFrame.from_ndarray(
-                    chunk.reshape(1, -1), format='s16', layout='mono',
-                )
-                frame.sample_rate = 48000
-                frame.pts = i
-                frame.time_base = Fraction(1, 48000)
+            # Encode this call's audio frames. The encoder retains state across
+            # calls within the utterance (no flush here on intermediate calls).
+            if has_audio and opus_enc is not None and pcm_48k is not None:
+                for i in range(0, len(pcm_48k) - FRAME_SIZE + 1, FRAME_SIZE):
+                    chunk = pcm_48k[i : i + FRAME_SIZE]
+                    frame = av.AudioFrame.from_ndarray(
+                        chunk.reshape(1, -1), format='s16', layout='mono',
+                    )
+                    frame.sample_rate = 48000
+                    frame.pts = i
+                    frame.time_base = Fraction(1, 48000)
 
-                for pkt in opus_enc.encode(frame):
+                    for pkt in opus_enc.encode(frame):
+                        if pending is not None:
+                            await _send_packet(pending, final=False)
+                        pending = bytes(pkt)
+
+            # Flush + drop the encoder ONLY on the final call of the utterance.
+            # Skipping flush on intermediate streaming calls is what gives us
+            # the cross-sentence prediction state continuity. Setting the slot
+            # back to None ensures the next utterance starts with a fresh
+            # encoder — important when the same _process_utterance is reused
+            # for back-to-back conversations.
+            if is_final and delivery_state["encoder"] is not None:
+                for pkt in delivery_state["encoder"].encode(None):
                     if pending is not None:
                         await _send_packet(pending, final=False)
                     pending = bytes(pkt)
+                delivery_state["encoder"] = None
 
-            # Flush encoder
-            for pkt in opus_enc.encode(None):
-                if pending is not None:
-                    await _send_packet(pending, final=False)
-                pending = bytes(pkt)
-
-            # Send the genuinely-last packet (or nothing if no audio was produced).
+            # Send the last packet of THIS call. is_final propagates through:
+            # streaming intermediate calls send their tail with final=False,
+            # the final call sends with final=True (the only packet in the
+            # whole utterance that carries the true is_final).
             if pending is not None:
                 await _send_packet(pending, final=is_final)
 

@@ -112,16 +112,29 @@ bash download_models.sh
 
 ### GPU Acceleration (Optional)
 
-CPU works but is slow (~2 tokens/s). For NVIDIA GPU with WSL2 CUDA:
+CPU works but is slow (~2 tokens/s for the LLM). For NVIDIA GPU with WSL2
+CUDA, rebuild llama-cpp-python with CUDA support:
 
 ```bash
-CMAKE_ARGS="-DGGML_CUDA=on" uv pip install llama-cpp-python \
-  --no-binary llama-cpp-python --force-reinstall --no-cache-dir
+./scripts/rebuild-llama-cuda.sh
 ```
 
-Verify: `python -c "import llama_cpp; print(llama_cpp.llama_supports_gpu_offload())"`
+(Or manually: `CMAKE_ARGS="-DGGML_CUDA=on" uv pip install llama-cpp-python --no-binary llama-cpp-python --force-reinstall --no-cache-dir`)
 
-**Note:** Even with CUDA for the LLM, the STT (faster-whisper) requires cuDNN. If you don't have cuDNN installed, force STT to CPU to avoid crashes (see Section 5).
+Verify: `.venv/bin/python -c "import llama_cpp; print(llama_cpp.llama_supports_gpu_offload())"`
+
+Should print `True` and `ggml_cuda_init: found 1 CUDA devices` lines.
+
+**Important caveat — `uv sync` will silently undo this rebuild.** Any time
+you run `uv sync` (or `uv pip install` something that re-resolves), uv
+replaces your CUDA-built llama-cpp with the PyPI CPU wheel — and the AI
+server silently regresses to ~2 tok/s with no error. After any sync, re-run
+`./scripts/rebuild-llama-cuda.sh`. The `dev-up.sh` script uses
+`uv run --no-sync` for AI server startup specifically to avoid this.
+
+**Note:** Even with CUDA for the LLM, STT (faster-whisper) requires cuDNN.
+If you don't have cuDNN installed, force STT to CPU to avoid crashes
+(see Section 5).
 
 ## 4. Hub Setup
 
