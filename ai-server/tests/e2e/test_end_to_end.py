@@ -48,7 +48,7 @@ class TestEndToEndWorkflow:
             # Create orchestrator
             with patch('graphs.orchestration.InputProcessor', return_value=input_processor), \
                  patch('graphs.orchestration.ResponseGenerator', return_value=response_generator):
-                orchestrator = NAILAOrchestrationGraph()
+                orchestrator = NAILAOrchestrationGraph(memory=memory)
             
             yield {
                 "orchestrator": orchestrator,
@@ -136,30 +136,26 @@ class TestEndToEndWorkflow:
             ("Thank you for the help", "gratitude")
         ]
         
-        conversation_history = []
-        
         for turn_idx, (user_input, expected_intent_category) in enumerate(conversation_turns):
             task_id = f"multiturn_{turn_idx + 1}"
-            
-            # Create state with accumulated history
+
+            # The graph's retrieve_context node reads history from memory now,
+            # so we don't thread conversation_history through the state manually —
+            # the previous turn's commit below is what shows up next iteration.
             state = {
                 "task_id": task_id,
                 "device_id": device_id,
                 "input_type": "text",
                 "raw_input": user_input,
                 "confidence": 0.9,
-                "conversation_history": conversation_history.copy()
             }
-            
-            # Process turn
+
             result = await orchestrator.run(state)
-            
-            # Verify processing
+
             assert result["task_id"] == task_id
             assert "response_text" in result
             assert result["intent"] in ["time_query", "gratitude", "general", "question", "greeting"]
-            
-            # Add to memory and history
+
             memory.commit_exchange(
                 device_id,
                 user_input,
@@ -167,14 +163,6 @@ class TestEndToEndWorkflow:
                 intent=result["intent"],
                 metadata={"turn": turn_idx + 1},
             )
-
-            conversation_history.append({
-                "user": user_input,
-                "assistant": result["response_text"],
-                "timestamp": result.get("timestamp", datetime.now(timezone.utc).isoformat()),
-                "intent": result["intent"],
-                "metadata": {},
-            })
 
         # Verify conversation continuity
         final_history = memory.recall_recent(device_id, n=10)
@@ -295,19 +283,16 @@ class TestEndToEndWorkflow:
                 metadata={},
             )
 
-        # Continue conversations with context
+        # Continue conversations — the graph now reads history from memory,
+        # so we don't need to pass ``conversation_history`` ourselves.
         second_tasks = []
         for i, device_id in enumerate(devices):
-            # ``recall_recent`` returns newest-first; the LLM message builder
-            # expects chronological history, so reverse for ``conversation_history``.
-            history = list(reversed(memory.recall_recent(device_id, n=10)))
             state = {
                 "task_id": f"concurrent_{device_id}_2",
                 "device_id": device_id,
                 "input_type": "text",
                 "raw_input": conversations[device_id][1],
                 "confidence": 0.9,
-                "conversation_history": history,
             }
             second_tasks.append(orchestrator.run(state))
 
@@ -441,15 +426,12 @@ class TestEndToEndWorkflow:
         ]
 
         for i, message in enumerate(session2_messages):
-            history = list(reversed(memory.recall_recent(device_id, n=10)))
-
             state = {
                 "task_id": f"persist_s2_{i}",
                 "device_id": device_id,
                 "input_type": "text",
                 "raw_input": message,
                 "confidence": 0.9,
-                "conversation_history": history,
             }
 
             result = await orchestrator.run(state)
@@ -481,11 +463,12 @@ class TestEndToEndWorkflow:
             input_processor = InputProcessor()
             response_generator = ResponseGenerator()
 
+            memory_before = ConversationMemory(db_path=str(db_file))
+
             with patch("graphs.orchestration.InputProcessor", return_value=input_processor), \
                  patch("graphs.orchestration.ResponseGenerator", return_value=response_generator):
-                orchestrator = NAILAOrchestrationGraph()
+                orchestrator = NAILAOrchestrationGraph(memory=memory_before)
 
-            memory_before = ConversationMemory(db_path=str(db_file))
             active_devices = ["shutdown_test_001", "shutdown_test_002"]
 
             for device_id in active_devices:

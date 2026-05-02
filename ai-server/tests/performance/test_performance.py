@@ -198,8 +198,8 @@ class TestPerformance:
                 "response_metadata": {"intent": "greeting"}
             })
             mock_response.return_value = response_generator
-            
-            orchestrator = NAILAOrchestrationGraph()
+
+            orchestrator = NAILAOrchestrationGraph(memory=ConversationMemory(db_path=":memory:"))
             
             # Test pipeline latency
             test_states = [
@@ -247,8 +247,8 @@ class TestPerformance:
             response_generator = Mock()
             response_generator.process = AsyncMock(side_effect=fast_process)
             mock_response.return_value = response_generator
-            
-            orchestrator = NAILAOrchestrationGraph()
+
+            orchestrator = NAILAOrchestrationGraph(memory=ConversationMemory(db_path=":memory:"))
             
             # Create concurrent requests
             concurrent_requests = 20

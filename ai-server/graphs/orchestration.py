@@ -1,22 +1,30 @@
 """Main orchestration graph for NAILA using LangGraph"""
 
-from datetime import datetime
 from typing import Any, Dict, Optional
 from langgraph.graph import StateGraph, END
 from langchain_core.runnables import RunnableConfig
 from graphs.states import NAILAState
 from agents.input_processor import InputProcessor
 from agents.response_generator import ResponseGenerator
+from memory.conversation import ConversationMemory
 from utils import get_logger
 
 
 logger = get_logger(__name__)
 
+# Intents that don't benefit from history when we're already confident.
+# ``time_query`` doesn't depend on prior turns; ``greeting`` is the same.
+# Skipping recall for these saves a SQLite roundtrip per turn.
+_RECALL_SKIP_INTENTS = frozenset({"time_query", "greeting"})
+_RECALL_SKIP_CONFIDENCE = 0.8
+_HISTORY_LIMIT = 10
+
 
 class NAILAOrchestrationGraph:
     """Main orchestration workflow for NAILA"""
 
-    def __init__(self, llm_service=None, tts_service=None, vision_service=None):
+    def __init__(self, memory: ConversationMemory, llm_service=None, tts_service=None, vision_service=None):
+        self.memory = memory
         self.llm_service = llm_service
         self.tts_service = tts_service
         self.vision_service = vision_service
@@ -83,33 +91,40 @@ class NAILAOrchestrationGraph:
         return state
 
     async def _retrieve_context(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Retrieve additional context safely"""
+        """Load recent exchanges from memory into ``state["conversation_history"]``.
+
+        Memory returns newest-first (``ts DESC``); LLM consumers want
+        chronological order, so we reverse before storing. Memory is canonical
+        — every path here writes ``conversation_history`` directly so a stale
+        caller-provided value can never leak into the turn.
+        """
         device_id = state.get("device_id", "")
         intent = state.get("intent", "")
         confidence = state.get("confidence", 1.0)
 
-        # Skip context retrieval for simple, high-confidence queries (performance optimization)
-        if intent in ["time_query", "greeting"] and confidence > 0.8:
-            logger.debug("skipping_context_retrieval", intent=intent, reason="simple_query")
+        # Skip recall for high-confidence simple intents — they don't benefit
+        # from history and the SQLite roundtrip is wasted work.
+        if intent in _RECALL_SKIP_INTENTS and confidence > _RECALL_SKIP_CONFIDENCE:
+            logger.debug("skipping_recall", intent=intent, reason="simple_query")
+            state["conversation_history"] = []
+            return state
+
+        if not device_id:
+            state["conversation_history"] = []
             return state
 
         try:
-            # Safe context enhancement - create new dict to avoid mutation race conditions
-            enhanced_context = dict(state.get("context", {}))
-            enhanced_context["context_retrieved"] = True
-            enhanced_context["retrieval_timestamp"] = datetime.now().isoformat()
-
-            # Could add more context sources here:
-            # - Recent device interactions
-            # - User preferences
-            # - Environmental context
-
-            state["context"] = enhanced_context
-            logger.debug("context_enhanced", device_id=device_id)
-
+            recent = self.memory.recall_recent(device_id, n=_HISTORY_LIMIT)
+            state["conversation_history"] = list(reversed(recent))
+            logger.debug("history_recalled", device_id=device_id, count=len(recent))
         except Exception as e:
-            logger.error("context_retrieval_error", device_id=device_id, error=str(e), error_type=type(e).__name__)
-            # Don't fail the whole pipeline for context issues
+            logger.error(
+                "context_retrieval_error",
+                device_id=device_id,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            state["conversation_history"] = []
 
         return state
     

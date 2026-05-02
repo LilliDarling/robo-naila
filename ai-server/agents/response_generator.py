@@ -117,7 +117,7 @@ class ResponseGenerator(BaseAgent):
             "intent": intent,
             "confidence": confidence,
             "generation_time_ms": int((time.time() - start_time) * 1000),
-            "context_used": bool(context.get("recent_exchanges")),
+            "context_used": bool(conversation_history),
             "device_id": device_id,
             "streamed": streamed,
         }
@@ -302,14 +302,14 @@ class ResponseGenerator(BaseAgent):
         # Use cached response for repeated queries (speed optimization)
         cache_key = f"{intent}:{text.lower().strip()}"
         if cached_response := self._get_cached_response(cache_key):
-            return self._personalize_response(cached_response, context)
+            return self._personalize_response(cached_response, history)
 
         # Generate new response
         response = self._generate_base_response(intent, text, context, history)
         self._cache_response(cache_key, response)
 
         # Apply personalization to new responses too
-        return self._personalize_response(response, context)
+        return self._personalize_response(response, history)
 
     async def _generate_llm_response(
         self,
@@ -379,17 +379,17 @@ class ResponseGenerator(BaseAgent):
         """Cache response (TTLCache handles eviction and TTL automatically)"""
         self._response_cache[cache_key] = response
     
-    def _personalize_response(self, base_response: str, context: Dict[str, Any]) -> str:
-        """Add personalization based on context"""
-        history_count = context.get("history_count", 0)
-        
+    def _personalize_response(self, base_response: str, history: List[Dict]) -> str:
+        """Tweak response wording based on how deep into the conversation we are."""
+        history_count = len(history)
+
         if history_count > 5:
             # Long conversation - be more casual
             return base_response.replace("How can I help you", "What else can I do for you")
         elif history_count == 0:
             # First interaction - be welcoming
             return base_response.replace("Hello!", "Hello there! Nice to meet you.")
-        
+
         return base_response
     
     def _generate_base_response(self, intent: str, text: str, context: Dict, history: List) -> str:

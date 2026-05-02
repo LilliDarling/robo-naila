@@ -24,10 +24,11 @@ class NAILAState(TypedDict):
 
     # Response
     response_text: Optional[str]
-    
+    response_metadata: Dict[str, Any]
+
     # Memory
-    conversation_history: List[Dict[str, str]]
-    
+    conversation_history: List[Dict[str, Any]]
+
     # Metadata
     timestamp: str
     errors: List[str]

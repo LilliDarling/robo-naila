@@ -1,8 +1,9 @@
 """Unit tests for NAILAOrchestrator's memory wiring.
 
 Locks in the DI contract: orchestrator receives a ConversationMemory via
-constructor, calls ``recall_recent`` before the graph runs, and
-``commit_exchange`` after.
+constructor and calls ``commit_exchange`` after the graph completes a turn.
+Recall now happens inside the graph's ``retrieve_context`` node — see
+``test_orchestration_graph.py``.
 """
 
 from unittest.mock import AsyncMock, Mock
@@ -46,11 +47,13 @@ class TestOrchestratorMemoryWiring:
             NAILAOrchestrator()
 
     @pytest.mark.asyncio
-    async def test_recall_called_before_graph_runs(self, orchestrator, memory):
+    async def test_orchestrator_does_not_recall_before_graph(self, orchestrator, memory):
+        # Recall is the graph's job now (see retrieve_context node). The
+        # orchestrator stays out of the way so we don't double-fetch.
         await orchestrator.process_task_with_callback(
             {"task_id": "t1", "device_id": "dev-x", "transcription": "hello"}
         )
-        memory.recall_recent.assert_called_once_with("dev-x", n=10)
+        memory.recall_recent.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_commit_called_after_graph_with_intent_split_out(
@@ -84,12 +87,58 @@ class TestOrchestratorMemoryWiring:
         memory.commit_exchange.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_recalled_history_seeds_initial_state(
+    async def test_response_metadata_round_trips_to_committed_exchange(
+        self, memory
+    ):
+        """LangGraph's typed state must declare ``response_metadata`` or the field
+        gets dropped before the orchestrator can read it. If that happens, every
+        committed exchange ends up with empty metadata — losing the per-turn
+        debugging fields the response_generator carefully assembles."""
+        # Use the real graph (no monkeypatched run) so this test exercises
+        # LangGraph's actual schema filtering. Stub out the agents inside.
+        from unittest.mock import AsyncMock, patch
+
+        async def fake_input(state):
+            state["processed_text"] = state.get("raw_input", "")
+            state["intent"] = "general"
+            return state
+
+        async def fake_response(state, config=None):
+            state["response_text"] = "ok"
+            state["response_metadata"] = {
+                "intent": "general",
+                "generation_time_ms": 42,
+                "context_used": True,
+                "streamed": False,
+                "marker": "should_survive_graph",
+            }
+            return state
+
+        orch = NAILAOrchestrator(memory=memory)
+        with patch.object(orch.graph.input_processor, "process",
+                          side_effect=fake_input), \
+             patch.object(orch.graph.response_generator, "process",
+                          side_effect=fake_response):
+            await orch.process_task_with_callback(
+                {"task_id": "t1", "device_id": "dev-meta", "transcription": "hi"}
+            )
+
+        # The orchestrator commits ``metadata=result.get("response_metadata", {})``.
+        # If LangGraph dropped the field, the call args would have ``metadata={}``.
+        memory.commit_exchange.assert_called_once()
+        committed = memory.commit_exchange.call_args.kwargs["metadata"]
+        assert committed.get("marker") == "should_survive_graph", (
+            f"response_metadata was dropped by LangGraph schema; got {committed!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_initial_state_seeds_empty_history_for_graph(
         self, memory, monkeypatch
     ):
-        memory.recall_recent.return_value = [
-            {"user": "earlier", "assistant": "yes", "intent": None, "ts": 1, "metadata": {}}
-        ]
+        # The orchestrator passes an empty conversation_history into the graph;
+        # retrieve_context fills it from memory. Asserting the seed protects
+        # the contract — if someone ever puts data here pre-graph again, the
+        # node would clobber it (or worse, double-fetch).
         orch = NAILAOrchestrator(memory=memory)
 
         captured = {}
@@ -107,8 +156,5 @@ class TestOrchestratorMemoryWiring:
             {"task_id": "t1", "device_id": "dev-x", "transcription": "now"}
         )
 
-        # Recall result is exposed in the initial state so the graph nodes
-        # (and downstream LLM message builder) can use it.
-        history = captured["initial_state"]["context"]["recent_exchanges"]
-        assert len(history) == 1
-        assert history[0]["user"] == "earlier"
+        assert captured["initial_state"]["conversation_history"] == []
+        assert captured["initial_state"]["context"] == {}

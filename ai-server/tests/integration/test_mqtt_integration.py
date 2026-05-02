@@ -6,12 +6,18 @@ import json
 from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime, timezone
 from graphs.orchestration import NAILAOrchestrationGraph
+from memory.conversation import ConversationMemory
 from mqtt.core.models import MQTTMessage, TopicCategory
 
 
 class TestMQTTIntegration:
     """Integration tests for MQTT message processing flow"""
-    
+
+    @pytest.fixture
+    def memory(self):
+        """Per-test in-memory conversation store."""
+        return ConversationMemory(db_path=":memory:")
+
     @pytest.fixture
     def mock_mqtt_service(self):
         """Mock MQTT service for integration testing"""
@@ -32,17 +38,8 @@ class TestMQTTIntegration:
         service.publish.side_effect = capture_publish
         return service
     
-    @pytest.fixture
-    def orchestrator_with_mqtt(self, mock_mqtt_service):
-        """Orchestrator configured with mocked MQTT service"""
-        with patch('agents.input_processor.InputProcessor'), \
-             patch('agents.response_generator.ResponseGenerator'):
-            orchestrator = NAILAOrchestrationGraph()
-            orchestrator.mqtt_service = mock_mqtt_service
-            return orchestrator
-
     @pytest.mark.asyncio
-    async def test_stt_to_ai_response_flow(self, mock_mqtt_service):
+    async def test_stt_to_ai_response_flow(self, memory, mock_mqtt_service):
         """Test complete STT -> AI processing -> response flow"""
         # Incoming STT message
         stt_message = MQTTMessage(
@@ -101,7 +98,7 @@ class TestMQTTIntegration:
             })
             mock_response.return_value = response_generator
             
-            orchestrator = NAILAOrchestrationGraph()
+            orchestrator = NAILAOrchestrationGraph(memory=memory)
             
             # Convert MQTT message to orchestration state
             initial_state = {
@@ -159,7 +156,7 @@ class TestMQTTIntegration:
         assert published["qos"] == 1
 
     @pytest.mark.asyncio
-    async def test_vision_and_text_multimodal_flow(self, mock_mqtt_service):
+    async def test_vision_and_text_multimodal_flow(self, memory, mock_mqtt_service):
         """Test processing flow with both vision and text inputs"""
         # Vision message
         vision_message = MQTTMessage(
@@ -229,7 +226,7 @@ class TestMQTTIntegration:
             })
             mock_response.return_value = response_generator
             
-            orchestrator = NAILAOrchestrationGraph()
+            orchestrator = NAILAOrchestrationGraph(memory=memory)
             result = await orchestrator.run(multimodal_state)
             
             # Verify multimodal processing (integration test uses real components)
@@ -294,7 +291,7 @@ class TestMQTTIntegration:
         assert validate_orchestration_message(invalid_message) == False
 
     @pytest.mark.asyncio
-    async def test_concurrent_device_processing(self, mock_mqtt_service):
+    async def test_concurrent_device_processing(self, memory, mock_mqtt_service):
         """Test processing messages from multiple devices concurrently"""
         # Messages from different devices
         device_messages = [
@@ -335,7 +332,7 @@ class TestMQTTIntegration:
             mock_input.return_value = input_processor
             mock_response.return_value = response_generator
             
-            orchestrator = NAILAOrchestrationGraph()
+            orchestrator = NAILAOrchestrationGraph(memory=memory)
             
             # Process all messages concurrently
             tasks = [orchestrator.run(msg) for msg in device_messages]
@@ -413,7 +410,7 @@ class TestMQTTIntegration:
         assert last_published["payload"]["response_text"] == "You're welcome!"
 
     @pytest.mark.asyncio
-    async def test_graceful_degradation_on_service_failure(self):
+    async def test_graceful_degradation_on_service_failure(self, memory):
         """Test system behavior when MQTT service is unavailable"""
         # Mock failed MQTT service
         failed_service = Mock()
@@ -423,7 +420,7 @@ class TestMQTTIntegration:
         with patch('agents.input_processor.InputProcessor'), \
              patch('agents.response_generator.ResponseGenerator'):
             
-            orchestrator = NAILAOrchestrationGraph()
+            orchestrator = NAILAOrchestrationGraph(memory=memory)
             
             # Processing should still work
             result = await orchestrator.run({

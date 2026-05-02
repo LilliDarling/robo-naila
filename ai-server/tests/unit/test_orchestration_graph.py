@@ -6,29 +6,40 @@ from datetime import datetime
 from graphs.orchestration import NAILAOrchestrationGraph
 
 
+def _mock_memory(history=None):
+    """Memory double whose ``recall_recent`` returns the given (newest-first) list."""
+    mem = Mock()
+    mem.recall_recent.return_value = history or []
+    return mem
+
+
 class TestNAILAOrchestrationGraph:
     """Test cases for NAILA orchestration workflow"""
-    
+
     @pytest.fixture
     def mock_processors(self):
         """Mock input processor and response generator"""
         input_processor = Mock()
         response_generator = Mock()
-        
+
         # Setup async mocks
         input_processor.process = AsyncMock()
         response_generator.process = AsyncMock()
-        
+
         return input_processor, response_generator
-    
+
     @pytest.fixture
-    def orchestrator(self, mock_processors):
+    def memory(self):
+        return _mock_memory()
+
+    @pytest.fixture
+    def orchestrator(self, mock_processors, memory):
         """Create orchestrator with mocked components"""
         input_proc, response_gen = mock_processors
-        
+
         with patch('graphs.orchestration.InputProcessor', return_value=input_proc), \
              patch('graphs.orchestration.ResponseGenerator', return_value=response_gen):
-            return NAILAOrchestrationGraph()
+            return NAILAOrchestrationGraph(memory=memory)
 
     def test_initialization(self, orchestrator):
         """Test orchestrator initialization"""
@@ -83,54 +94,122 @@ class TestNAILAOrchestrationGraph:
         assert "Processing failed" in result["errors"]
 
     @pytest.mark.asyncio
-    async def test_retrieve_context_simple_query(self, orchestrator):
-        """Test context retrieval skip for simple queries"""
+    async def test_retrieve_context_skip_for_high_confidence_time_query(
+        self, orchestrator, memory
+    ):
+        """High-confidence ``time_query`` skips recall — it doesn't need history."""
         state = {
             "intent": "time_query",
             "confidence": 0.9,
             "device_id": "robot_001",
-            "context": {}
+            "context": {},
         }
-        
+
         result = await orchestrator._retrieve_context(state)
-        
-        # Should skip enhancement for simple, high-confidence queries
-        assert result == state
+
+        memory.recall_recent.assert_not_called()
+        assert result["conversation_history"] == []
 
     @pytest.mark.asyncio
-    async def test_retrieve_context_complex_query(self, orchestrator):
-        """Test context retrieval for complex queries"""
+    async def test_retrieve_context_skip_for_high_confidence_greeting(
+        self, orchestrator, memory
+    ):
+        """High-confidence ``greeting`` skips recall too."""
+        state = {
+            "intent": "greeting",
+            "confidence": 0.95,
+            "device_id": "robot_001",
+            "context": {},
+        }
+
+        result = await orchestrator._retrieve_context(state)
+
+        memory.recall_recent.assert_not_called()
+        assert result["conversation_history"] == []
+
+    @pytest.mark.asyncio
+    async def test_retrieve_context_calls_recall_for_complex_intents(
+        self, orchestrator, memory
+    ):
+        """Non-trivial intents pull history from memory."""
         state = {
             "intent": "question",
             "confidence": 0.7,
             "device_id": "robot_001",
-            "context": {"existing": "data"}
+            "context": {},
         }
-        
-        with patch('graphs.orchestration.datetime') as mock_dt:
-            mock_dt.now.return_value.isoformat.return_value = "2025-01-15T10:30:00"
-            
-            result = await orchestrator._retrieve_context(state)
-        
-        assert result["context"]["context_retrieved"] == True
-        assert result["context"]["retrieval_timestamp"] == "2025-01-15T10:30:00"
-        assert result["context"]["existing"] == "data"
+
+        await orchestrator._retrieve_context(state)
+
+        memory.recall_recent.assert_called_once_with("robot_001", n=10)
 
     @pytest.mark.asyncio
-    async def test_retrieve_context_error_handling(self, orchestrator):
-        """Test context retrieval graceful error handling"""
+    async def test_retrieve_context_runs_for_low_confidence_simple_intents(
+        self, orchestrator, memory
+    ):
+        """The skip is gated on confidence — a low-confidence ``time_query`` still recalls."""
         state = {
-            "intent": "question",
+            "intent": "time_query",
             "confidence": 0.5,
-            "device_id": "robot_001"
+            "device_id": "robot_001",
+            "context": {},
         }
-        
-        # Mock datetime to raise error
-        with patch('graphs.orchestration.datetime', side_effect=Exception("Time error")):
-            result = await orchestrator._retrieve_context(state)
-        
-        # Should not crash the pipeline
-        assert result == state
+
+        await orchestrator._retrieve_context(state)
+
+        memory.recall_recent.assert_called_once_with("robot_001", n=10)
+
+    @pytest.mark.asyncio
+    async def test_retrieve_context_returns_chronological_history(
+        self, mock_processors
+    ):
+        """``recall_recent`` returns newest-first; state must hold chronological order
+        because ``build_chat_messages`` slices the tail and assumes that orientation."""
+        input_proc, response_gen = mock_processors
+        memory = _mock_memory(history=[
+            {"user": "third", "assistant": "3", "intent": None, "ts": 3, "metadata": {}},
+            {"user": "second", "assistant": "2", "intent": None, "ts": 2, "metadata": {}},
+            {"user": "first", "assistant": "1", "intent": None, "ts": 1, "metadata": {}},
+        ])
+        with patch('graphs.orchestration.InputProcessor', return_value=input_proc), \
+             patch('graphs.orchestration.ResponseGenerator', return_value=response_gen):
+            graph = NAILAOrchestrationGraph(memory=memory)
+
+        state = {"intent": "question", "confidence": 0.7, "device_id": "d"}
+        result = await graph._retrieve_context(state)
+
+        assert [r["user"] for r in result["conversation_history"]] == [
+            "first", "second", "third",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_retrieve_context_memory_error_does_not_crash(
+        self, mock_processors
+    ):
+        """A flaky memory layer must not break the turn — fall back to empty history."""
+        input_proc, response_gen = mock_processors
+        memory = Mock()
+        memory.recall_recent.side_effect = RuntimeError("db on fire")
+        with patch('graphs.orchestration.InputProcessor', return_value=input_proc), \
+             patch('graphs.orchestration.ResponseGenerator', return_value=response_gen):
+            graph = NAILAOrchestrationGraph(memory=memory)
+
+        state = {"intent": "question", "confidence": 0.7, "device_id": "d"}
+        result = await graph._retrieve_context(state)
+
+        assert result["conversation_history"] == []
+
+    @pytest.mark.asyncio
+    async def test_retrieve_context_missing_device_id_returns_empty_history(
+        self, orchestrator, memory
+    ):
+        """No device_id → no recall, default to empty history."""
+        state = {"intent": "question", "confidence": 0.7}
+
+        result = await orchestrator._retrieve_context(state)
+
+        memory.recall_recent.assert_not_called()
+        assert result["conversation_history"] == []
 
     @pytest.mark.asyncio
     async def test_generate_response_node(self, orchestrator):
@@ -253,50 +332,88 @@ class TestNAILAOrchestrationGraph:
         assert any("Input error" in error for error in result["errors"])
 
     @pytest.mark.asyncio
-    async def test_state_immutability_in_context_retrieval(self, orchestrator):
-        """Test that context retrieval doesn't mutate original state unsafely"""
-        original_context = {"original": "data"}
+    async def test_retrieve_context_does_not_touch_context_dict(
+        self, orchestrator, memory
+    ):
+        """``_retrieve_context`` writes to ``conversation_history`` only; the
+        ``context`` dict is for unrelated per-turn metadata (visual context, etc.)
+        and must come out identical to what went in."""
+        original_context = {"original": "data", "visual_flag": True}
         state = {
             "intent": "question",
             "confidence": 0.5,
-            "context": original_context.copy()
+            "device_id": "robot_001",
+            "context": dict(original_context),
         }
-        
-        with patch('graphs.orchestration.datetime') as mock_dt:
-            mock_dt.now.return_value.isoformat.return_value = "2025-01-15T10:30:00"
-            
-            result = await orchestrator._retrieve_context(state)
-        
-        # Original context should be preserved
-        assert result["context"]["original"] == "data"
-        # New fields should be added
-        assert result["context"]["context_retrieved"] == True
+
+        result = await orchestrator._retrieve_context(state)
+
+        assert result["context"] == original_context
 
     @pytest.mark.asyncio
-    async def test_confidence_based_context_skip(self, orchestrator):
-        """Test context skip logic for different confidence levels"""
-        # High confidence greeting - should skip
-        high_conf_state = {
-            "intent": "greeting",
-            "confidence": 0.9,
-            "context": {"test": True}
+    async def test_retrieve_context_skip_overwrites_stale_history(
+        self, orchestrator, memory
+    ):
+        """Memory is canonical even on the skip path. If a stale
+        ``conversation_history`` floats in from somewhere, the skip branch must
+        still clear it so downstream consumers don't see ghost turns."""
+        state = {
+            "intent": "time_query",
+            "confidence": 0.95,
+            "device_id": "robot_001",
+            "conversation_history": [
+                {"user": "stale", "assistant": "ghost", "intent": None, "ts": 0, "metadata": {}}
+            ],
         }
-        
-        result = await orchestrator._retrieve_context(high_conf_state)
-        assert "context_retrieved" not in result.get("context", {})
-        
-        # Low confidence greeting - should enhance
-        low_conf_state = {
-            "intent": "greeting", 
-            "confidence": 0.5,
-            "context": {"test": True}
+
+        result = await orchestrator._retrieve_context(state)
+
+        memory.recall_recent.assert_not_called()
+        assert result["conversation_history"] == []
+
+    @pytest.mark.asyncio
+    async def test_retrieve_context_recall_failure_overwrites_stale_history(
+        self, mock_processors
+    ):
+        """Same canonical-memory rule on the error path: don't fall back to
+        a caller-provided history just because recall blew up."""
+        input_proc, response_gen = mock_processors
+        memory = Mock()
+        memory.recall_recent.side_effect = RuntimeError("db on fire")
+        with patch('graphs.orchestration.InputProcessor', return_value=input_proc), \
+             patch('graphs.orchestration.ResponseGenerator', return_value=response_gen):
+            graph = NAILAOrchestrationGraph(memory=memory)
+
+        state = {
+            "intent": "question",
+            "confidence": 0.7,
+            "device_id": "d",
+            "conversation_history": [
+                {"user": "stale", "assistant": "ghost", "intent": None, "ts": 0, "metadata": {}}
+            ],
         }
-        
-        with patch('graphs.orchestration.datetime') as mock_dt:
-            mock_dt.now.return_value.isoformat.return_value = "2025-01-15T10:30:00"
-            result = await orchestrator._retrieve_context(low_conf_state)
-        
-        assert result["context"]["context_retrieved"] == True
+
+        result = await graph._retrieve_context(state)
+
+        assert result["conversation_history"] == []
+
+    @pytest.mark.asyncio
+    async def test_retrieve_context_missing_device_id_overwrites_stale_history(
+        self, orchestrator, memory
+    ):
+        """Same canonical rule when device_id is missing — clear, don't preserve."""
+        state = {
+            "intent": "question",
+            "confidence": 0.7,
+            "conversation_history": [
+                {"user": "stale", "assistant": "ghost", "intent": None, "ts": 0, "metadata": {}}
+            ],
+        }
+
+        result = await orchestrator._retrieve_context(state)
+
+        memory.recall_recent.assert_not_called()
+        assert result["conversation_history"] == []
 
     @pytest.mark.asyncio
     async def test_workflow_with_empty_state(self, orchestrator):
@@ -334,7 +451,7 @@ class TestConfigPassthrough:
         input_proc, response_gen = mock_processors
         with patch('graphs.orchestration.InputProcessor', return_value=input_proc), \
              patch('graphs.orchestration.ResponseGenerator', return_value=response_gen):
-            return NAILAOrchestrationGraph()
+            return NAILAOrchestrationGraph(memory=_mock_memory())
 
     @pytest.mark.asyncio
     async def test_config_forwarded_to_generate_response(self, orchestrator):

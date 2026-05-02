@@ -27,9 +27,14 @@ class NAILAOrchestrator:
         tts_service=None,
         vision_service=None,
     ):
-        self.graph = NAILAOrchestrationGraph(llm_service=llm_service, tts_service=tts_service, vision_service=vision_service)
-        self.mqtt_service = mqtt_service
         self.memory = memory
+        self.graph = NAILAOrchestrationGraph(
+            memory=memory,
+            llm_service=llm_service,
+            tts_service=tts_service,
+            vision_service=vision_service,
+        )
+        self.mqtt_service = mqtt_service
 
     def set_llm_service(self, llm_service):
         """Set LLM service for the orchestration graph"""
@@ -82,24 +87,16 @@ class NAILAOrchestrator:
 
         logger.info("processing_task", task_id=task_id, device_id=device_id, transport=transport)
 
-        # Pull recent history from the memory store. ``recall_recent`` returns
-        # newest-first; the LLM message builder wants chronological (oldest-first)
-        # so reverse for ``conversation_history`` while the raw newest-first list
-        # stays available under ``context.recent_exchanges`` for any consumer that
-        # wants a feed view.
-        recent = self.memory.recall_recent(device_id, n=10)
-        chronological_history = list(reversed(recent))
-
+        # The graph's ``retrieve_context`` node is the single write site for
+        # ``conversation_history`` — we initialize empty here and let the graph
+        # populate from memory.
         initial_state = {
             "device_id": device_id,
             "task_id": task_id,
             "input_type": message_data.get("input_type", "text"),
             "raw_input": message_data.get("transcription", message_data.get("query", "")),
-            "context": {
-                "recent_exchanges": recent,
-                "history_count": len(recent),
-            },
-            "conversation_history": chronological_history,
+            "context": {},
+            "conversation_history": [],
             "confidence": message_data.get("confidence", 1.0),
             "image_data": message_data.get("image_data"),
             "visual_context": None,
