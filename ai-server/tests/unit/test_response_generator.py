@@ -29,7 +29,10 @@ class TestResponseGenerator:
     @pytest.mark.asyncio
     async def test_intent_based_responses(self, generator):
         """Test responses vary by intent"""
-        intents = ["greeting", "time_query", "weather_query", "question", "gratitude", "goodbye"]
+        # ``time_query`` is action-handled before response_generator runs
+        # (see agents.actions.time_handler), so it's no longer represented
+        # in the pattern dict. ``weather_query`` will join it in chunk 4.
+        intents = ["greeting", "weather_query", "question", "gratitude", "goodbye"]
         responses = []
         
         for intent in intents:
@@ -134,40 +137,32 @@ class TestResponseGenerator:
     @pytest.mark.asyncio
     async def test_response_caching(self, generator):
         """Test response caching for identical inputs"""
+        # Use ``greeting`` rather than ``time_query`` — the latter is now
+        # action-handled and never reaches the pattern-cache codepath.
+        # Deep-copy so the two calls don't share the conversation_history list
+        # (the first ``process`` mutates it via append, which would shift
+        # personalization behavior on the second call).
+        import copy
+
         state1 = {
-            "intent": "time_query",
-            "processed_text": "what time is it",
+            "intent": "greeting",
+            "processed_text": "hello there",
             "context": {},
             "conversation_history": [],
             "confidence": 0.9,
             "device_id": "test"
         }
-        
-        state2 = state1.copy()
-        
+
+        state2 = copy.deepcopy(state1)
+
         result1 = await generator.process(state1)
         result2 = await generator.process(state2)
-        
+
         # Responses should be similar (may have timestamp differences)
         assert result1["response_text"].split()[0:3] == result2["response_text"].split()[0:3]
 
-    @pytest.mark.asyncio
-    @freeze_time("2025-01-15 14:30:00")
-    async def test_time_query_accuracy(self, generator):
-        """Test time query returns accurate time"""
-        state = {
-            "intent": "time_query",
-            "processed_text": "What time is it?",
-            "context": {},
-            "conversation_history": [],
-            "confidence": 0.9,
-            "device_id": "test"
-        }
-        
-        result = await generator.process(state)
-        
-        # Should contain current time
-        assert "2:30 PM" in result["response_text"]
+    # Removed ``test_time_query_accuracy`` — time formatting is now the time
+    # handler's responsibility (see tests/unit/test_time_handler.py).
 
     @pytest.mark.asyncio
     async def test_conversation_history_update(self, generator):
@@ -409,3 +404,129 @@ class TestLLMTimeout:
         result = await generator._generate_llm_response("hello", [])
 
         assert result == ""
+
+class TestResponseTextShortCircuit:
+    """When a prior graph node (``dispatch_action``) has already populated
+    ``state["response_text"]``, the response generator must skip both the
+    streaming and LLM paths entirely. The doc warns this short-circuit must
+    happen before any streaming setup or the audio/is_final callbacks fire
+    incorrectly on text that has no LLM stream behind it.
+    """
+
+    @pytest.fixture
+    def llm_service(self):
+        llm = Mock()
+        llm.is_ready = True
+        llm.generate_chat = AsyncMock(return_value="LLM should NOT have been called")
+        llm.generate_chat_stream = AsyncMock()
+        llm.build_chat_messages = Mock(return_value=[])
+        return llm
+
+    @pytest.mark.asyncio
+    async def test_short_circuits_when_response_text_set(self, llm_service):
+        """LLM never invoked when the action layer already provided a response."""
+        gen = ResponseGenerator(llm_service=llm_service)
+        state = {
+            "intent": "time_query",
+            "processed_text": "what time is it",
+            "response_text": "It's 3:47 PM.",
+            "action_handled": True,
+            "context": {},
+            "conversation_history": [],
+            "confidence": 0.9,
+            "device_id": "test",
+        }
+
+        result = await gen.process(state)
+
+        llm_service.generate_chat.assert_not_called()
+        llm_service.generate_chat_stream.assert_not_called()
+        assert result["response_text"] == "It's 3:47 PM."
+
+    @pytest.mark.asyncio
+    async def test_short_circuit_does_not_enter_streaming_path(self, llm_service):
+        """The streaming path delivers audio sentence-by-sentence with
+        ``is_final`` markers. If we entered it for action text, the callback
+        would fire on text that has no underlying LLM stream — corrupting the
+        ``is_final`` lookahead."""
+        gen = ResponseGenerator(llm_service=llm_service)
+
+        delivered = []
+
+        async def audio_delivery(audio_data, text, is_final):
+            delivered.append((text, is_final))
+
+        config = {
+            "configurable": {
+                "transport": "grpc",
+                "audio_delivery": audio_delivery,
+            }
+        }
+
+        state = {
+            "intent": "time_query",
+            "processed_text": "what time is it",
+            "response_text": "It's 3:47 PM.",
+            "action_handled": True,
+            "context": {},
+            "conversation_history": [],
+            "confidence": 0.9,
+            "device_id": "test",
+            "input_type": "audio",
+        }
+
+        # Stub TTS so the test doesn't pull a real model.
+        gen.tts_service = Mock()
+        gen.tts_service.is_ready = True
+        fake_audio = Mock(duration_ms=500, format="raw")
+        gen.tts_service.synthesize = AsyncMock(return_value=fake_audio)
+
+        await gen.process(state, config=config)
+
+        # Action text gets delivered exactly once with is_final=True — the
+        # non-streaming TTS path. Streaming would have fired multiple chunks.
+        assert len(delivered) == 1
+        assert delivered[0] == ("It's 3:47 PM.", True)
+
+    @pytest.mark.asyncio
+    async def test_short_circuit_records_metadata(self, llm_service):
+        """Even on the action path we want response_metadata so the orchestrator
+        can persist it (intent, streamed=False, etc.)."""
+        gen = ResponseGenerator(llm_service=llm_service)
+        state = {
+            "intent": "time_query",
+            "processed_text": "what time is it",
+            "response_text": "It's 3:47 PM.",
+            "action_handled": True,
+            "context": {},
+            "conversation_history": [],
+            "confidence": 0.9,
+            "device_id": "test",
+        }
+
+        result = await gen.process(state)
+
+        meta = result["response_metadata"]
+        assert meta["intent"] == "time_query"
+        assert meta["streamed"] is False
+
+    @pytest.mark.asyncio
+    async def test_no_short_circuit_when_response_text_unset(self, llm_service):
+        """Sanity: the short-circuit must only fire when response_text is set.
+        Normal LLM/pattern path runs otherwise."""
+        gen = ResponseGenerator(llm_service=None)  # no LLM → falls to pattern
+        state = {
+            "intent": "greeting",
+            "processed_text": "hi",
+            "context": {},
+            "conversation_history": [],
+            "confidence": 0.9,
+            "device_id": "test",
+        }
+
+        result = await gen.process(state)
+
+        # Pattern path produced a non-empty response.
+        assert result["response_text"]
+        # And we explicitly did not short-circuit something pre-set.
+        assert result["response_text"] != "It's 3:47 PM."

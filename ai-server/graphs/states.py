@@ -25,6 +25,10 @@ class NAILAState(TypedDict):
     # Response
     response_text: Optional[str]
     response_metadata: Dict[str, Any]
+    # Set by dispatch_action when a registered handler answered the intent.
+    # response_generator uses this (and response_text presence) to short-circuit
+    # the LLM/streaming path.
+    action_handled: bool
 
     # Memory
     conversation_history: List[Dict[str, Any]]

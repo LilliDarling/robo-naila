@@ -6,6 +6,10 @@ from langchain_core.runnables import RunnableConfig
 from graphs.states import NAILAState
 from agents.input_processor import InputProcessor
 from agents.response_generator import ResponseGenerator
+from agents.actions import registry as action_registry
+# Import handler modules so their module-level ``register`` calls run on graph
+# construction. Add new handlers here when they ship.
+from agents.actions import time_handler  # noqa: F401  (registered via import)
 from memory.conversation import ConversationMemory
 from utils import get_logger
 
@@ -18,6 +22,10 @@ logger = get_logger(__name__)
 _RECALL_SKIP_INTENTS = frozenset({"time_query", "greeting"})
 _RECALL_SKIP_CONFIDENCE = 0.8
 _HISTORY_LIMIT = 10
+
+# Below this confidence we don't trust the intent classifier enough to fire
+# a real action. Falls through to the response_generator's clarification path.
+_ACTION_CONFIDENCE_FLOOR = 0.3
 
 
 class NAILAOrchestrationGraph:
@@ -45,6 +53,7 @@ class NAILAOrchestrationGraph:
         workflow.add_node("process_input", self._process_input)
         workflow.add_node("process_vision", self._process_vision)
         workflow.add_node("retrieve_context", self._retrieve_context)
+        workflow.add_node("dispatch_action", self._dispatch_action)
         workflow.add_node("generate_response", self._generate_response)
         workflow.add_node("execute_actions", self._execute_actions)
 
@@ -52,7 +61,11 @@ class NAILAOrchestrationGraph:
         workflow.set_entry_point("process_input")
         workflow.add_edge("process_input", "process_vision")
         workflow.add_edge("process_vision", "retrieve_context")
-        workflow.add_edge("retrieve_context", "generate_response")
+        # dispatch_action runs between context retrieval and response generation
+        # so action handlers can short-circuit the LLM path while still using
+        # any context the previous nodes loaded.
+        workflow.add_edge("retrieve_context", "dispatch_action")
+        workflow.add_edge("dispatch_action", "generate_response")
         workflow.add_edge("generate_response", "execute_actions")
         workflow.add_edge("execute_actions", END)
 
@@ -136,6 +149,43 @@ class NAILAOrchestrationGraph:
             logger.error("input_processing_error", error=str(e), error_type=type(e).__name__)
             state.setdefault("errors", []).append(str(e))
             return state
+
+    async def _dispatch_action(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Look up the intent in the action registry and run the handler if found.
+
+        On success, sets ``state["response_text"]`` and ``state["action_handled"]``;
+        the response_generator's short-circuit then skips the LLM/streaming path.
+        On no-handler / low-confidence / handler error, passes through unchanged
+        so the LLM path can take over.
+        """
+        intent = state.get("intent")
+        confidence = state.get("confidence", 1.0)
+
+        if confidence < _ACTION_CONFIDENCE_FLOOR:
+            return state
+
+        handler = action_registry.get(intent)
+        if handler is None:
+            return state
+
+        try:
+            response = await handler(
+                state.get("processed_text", ""),
+                {"device_id": state.get("device_id", "")},
+            )
+            state["response_text"] = response
+            state["action_handled"] = True
+            logger.info("action_dispatched", intent=intent)
+        except Exception as e:
+            # Don't abort the turn — let the LLM path fall through and answer.
+            logger.error(
+                "action_handler_error",
+                intent=intent,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+
+        return state
 
     async def _generate_response(self, state: Dict[str, Any], config: RunnableConfig = None) -> Dict[str, Any]:
         """Generate response node — passes LangGraph config through for transport callbacks"""

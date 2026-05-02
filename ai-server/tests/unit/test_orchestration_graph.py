@@ -51,15 +51,18 @@ class TestNAILAOrchestrationGraph:
     def test_graph_structure(self, orchestrator):
         """Test that graph nodes and edges are properly configured"""
         workflow = orchestrator.workflow
-        
+
         # Check nodes exist
         assert "process_input" in workflow.nodes
-        assert "retrieve_context" in workflow.nodes 
+        assert "retrieve_context" in workflow.nodes
+        # Action dispatch sits between context retrieval and response generation:
+        # if a registered handler can answer the intent, we short-circuit the LLM.
+        assert "dispatch_action" in workflow.nodes
         assert "generate_response" in workflow.nodes
         assert "execute_actions" in workflow.nodes
-        
+
         # Check that workflow has proper structure
-        assert len(workflow.nodes) >= 4
+        assert len(workflow.nodes) >= 5
 
     @pytest.mark.asyncio
     async def test_process_input_node(self, orchestrator):
@@ -210,6 +213,159 @@ class TestNAILAOrchestrationGraph:
 
         memory.recall_recent.assert_not_called()
         assert result["conversation_history"] == []
+
+    # ── dispatch_action node ─────────────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_dispatch_action_invokes_registered_handler(
+        self, orchestrator, monkeypatch
+    ):
+        """When the intent has a registered handler, dispatch awaits it and
+        writes its return value into ``state["response_text"]``."""
+        from agents.actions import registry
+
+        monkeypatch.setattr(registry, "_HANDLERS", {})
+
+        async def stub(utterance, context):
+            return "It's 3:47 PM."
+
+        registry.register("time_query", stub)
+
+        state = {
+            "intent": "time_query",
+            "processed_text": "what time is it",
+            "confidence": 0.9,
+            "device_id": "robot_001",
+        }
+
+        result = await orchestrator._dispatch_action(state)
+
+        assert result["response_text"] == "It's 3:47 PM."
+        assert result["action_handled"] is True
+
+    @pytest.mark.asyncio
+    async def test_dispatch_action_passthrough_when_no_handler(
+        self, orchestrator, monkeypatch
+    ):
+        """Unregistered intents pass through unchanged so the LLM path can run."""
+        from agents.actions import registry
+
+        monkeypatch.setattr(registry, "_HANDLERS", {})
+
+        state = {
+            "intent": "question",
+            "processed_text": "what is gravity",
+            "confidence": 0.9,
+        }
+
+        result = await orchestrator._dispatch_action(state)
+
+        assert "response_text" not in result
+        assert result.get("action_handled", False) is False
+
+    @pytest.mark.asyncio
+    async def test_dispatch_action_skips_below_confidence_floor(
+        self, orchestrator, monkeypatch
+    ):
+        """Below 0.3 confidence we don't trust the intent classification enough
+        to fire a real action — let the clarification path handle it."""
+        from agents.actions import registry
+
+        monkeypatch.setattr(registry, "_HANDLERS", {})
+
+        called = {"hit": False}
+
+        async def stub(utterance, context):
+            called["hit"] = True
+            return "It's 3:47 PM."
+
+        registry.register("time_query", stub)
+
+        state = {
+            "intent": "time_query",
+            "processed_text": "what time is it",
+            "confidence": 0.2,
+        }
+
+        result = await orchestrator._dispatch_action(state)
+
+        assert called["hit"] is False
+        assert "response_text" not in result
+        assert result.get("action_handled", False) is False
+
+    @pytest.mark.asyncio
+    async def test_dispatch_action_passes_utterance_and_context_to_handler(
+        self, orchestrator, monkeypatch
+    ):
+        """The handler signature is ``(utterance, context) -> str``. Verify the
+        wiring carries both, with context including at least ``device_id``."""
+        from agents.actions import registry
+
+        monkeypatch.setattr(registry, "_HANDLERS", {})
+        captured = {}
+
+        async def stub(utterance, context):
+            captured["utterance"] = utterance
+            captured["context"] = context
+            return "ok"
+
+        registry.register("time_query", stub)
+
+        state = {
+            "intent": "time_query",
+            "processed_text": "give me the time",
+            "confidence": 0.9,
+            "device_id": "dev-x",
+        }
+
+        await orchestrator._dispatch_action(state)
+
+        assert captured["utterance"] == "give me the time"
+        assert captured["context"]["device_id"] == "dev-x"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_action_handler_error_returns_clean_passthrough(
+        self, orchestrator, monkeypatch
+    ):
+        """A handler crash must not abort the turn — it falls through to the
+        LLM path so the user still gets a response. The error is logged but the
+        graph keeps running."""
+        from agents.actions import registry
+
+        monkeypatch.setattr(registry, "_HANDLERS", {})
+
+        async def crashy(utterance, context):
+            raise RuntimeError("weather API exploded")
+
+        registry.register("time_query", crashy)
+
+        state = {
+            "intent": "time_query",
+            "processed_text": "what time is it",
+            "confidence": 0.9,
+        }
+
+        result = await orchestrator._dispatch_action(state)
+
+        assert "response_text" not in result
+        assert result.get("action_handled", False) is False
+
+    @pytest.mark.asyncio
+    async def test_dispatch_action_passthrough_when_intent_missing(
+        self, orchestrator, monkeypatch
+    ):
+        """Defensive: if intent classification didn't run or returned None,
+        dispatch is a no-op rather than a registry lookup with None."""
+        from agents.actions import registry
+
+        monkeypatch.setattr(registry, "_HANDLERS", {})
+
+        state = {"processed_text": "x", "confidence": 0.9}
+
+        result = await orchestrator._dispatch_action(state)
+
+        assert "response_text" not in result
+        assert result.get("action_handled", False) is False
 
     @pytest.mark.asyncio
     async def test_generate_response_node(self, orchestrator):

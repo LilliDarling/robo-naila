@@ -49,6 +49,17 @@ class ResponseGenerator(BaseAgent):
         device_id = state.get("device_id", "")
         visual_context = state.get("visual_context")
 
+        # ── Action-handler short-circuit ──────────────────────────────────────
+        # When ``dispatch_action`` already produced a response, skip the LLM and
+        # streaming paths entirely. Per docs/INTELLIGENCE_ARCHITECTURE.md §3.1
+        # this MUST be checked BEFORE any streaming flags are wired, otherwise
+        # the audio_delivery callback / is_final lookahead fire on text that
+        # has no LLM stream behind it. The non-streaming TTS block at the
+        # bottom still runs on the action text (action responses still need
+        # audio output on gRPC / audio-input transports).
+        action_handled = bool(state.get("action_handled"))
+        # ─────────────────────────────────────────────────────────────────────
+
         # Check LLM readiness dynamically
         use_llm = self.llm_service is not None and self.llm_service.is_ready
 
@@ -74,18 +85,24 @@ class ResponseGenerator(BaseAgent):
         visual_short_circuit = bool(
             visual_context and (visual_context.get("answer") or visual_context.get("description"))
         )
+        # Streaming is forbidden when an action handler already answered: it
+        # would invoke the LLM/streaming callbacks against text that has no
+        # underlying token stream. Recompute can_stream with that veto baked in.
         can_stream = (
             use_llm
             and needs_audio
             and audio_delivery is not None
             and tts_ready
             and not visual_short_circuit
+            and not action_handled
             and confidence >= 0.3
         )
 
         response = ""
         streamed = False
-        if can_stream:
+        if action_handled:
+            response = state.get("response_text", "") or ""
+        elif can_stream:
             try:
                 response = await self._stream_response_to_audio(
                     processed_text,
@@ -104,7 +121,7 @@ class ResponseGenerator(BaseAgent):
                 )
                 response = ""
 
-        if not response:
+        if not response and not action_handled:
             # Non-streaming fallback: visual short-circuit, low confidence,
             # streaming-disabled, or streaming returned no text.
             response = await self._generate_response(
@@ -393,10 +410,15 @@ class ResponseGenerator(BaseAgent):
         return base_response
     
     def _generate_base_response(self, intent: str, text: str, context: Dict, history: List) -> str:
-        """Generate base response for intent"""
+        """Generate base response for intent.
+
+        ``time_query`` is intentionally absent — it's action-handled by
+        ``agents.actions.time_handler`` before this code runs (chunk 3).
+        ``weather_query`` will move out the same way in chunk 4; until then
+        it stays here as a placeholder.
+        """
         responses = {
             "greeting": self._generate_greeting_response(context, history),
-            "time_query": f"The current time is {datetime.now().strftime('%I:%M %p')}",
             "weather_query": "I don't have weather data access yet, but I'm working on it!",
             "question": self._generate_question_response(text, context),
             "gratitude": self._generate_gratitude_response(history),

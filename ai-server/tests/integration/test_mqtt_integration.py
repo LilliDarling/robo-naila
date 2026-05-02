@@ -112,10 +112,14 @@ class TestMQTTIntegration:
             # Process through orchestration
             result = await orchestrator.run(initial_state)
             
-            # Verify processing results (actual response generator returns current time)
-            assert "current time is" in result["response_text"].lower()
-            assert result["intent"] == "time_query" 
+            # Verify processing results: ``time_query`` is action-handled
+            # (see agents.actions.time_handler) and produces a templated reply
+            # like "It's 3:47 PM." — pin on AM/PM since the exact hour shifts.
+            assert "AM" in result["response_text"] or "PM" in result["response_text"]
+            assert result["intent"] == "time_query"
             assert result["device_id"] == "robot_001"
+            # Confirm the action substrate fired (not the LLM/pattern path).
+            assert result.get("action_handled") is True
             
             # Verify basic processing completed successfully (integration test)
             assert "task_id" in result
