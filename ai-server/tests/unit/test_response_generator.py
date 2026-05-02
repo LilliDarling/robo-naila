@@ -101,14 +101,14 @@ class TestResponseGenerator:
         state = {
             "intent": "greeting",
             "processed_text": "Hello",
-            "context": {"history_count": 0, "is_returning_user": False},
+            "context": {"history_count": 0},
             "conversation_history": [],
             "confidence": 0.9,
             "device_id": "new_user"
         }
-        
+
         result = await generator.process(state)
-        
+
         # Should be welcoming for new user
         assert "nice to meet you" in result["response_text"].lower() or \
                "hello there" in result["response_text"].lower()
@@ -117,9 +117,9 @@ class TestResponseGenerator:
     async def test_personalization_returning_user(self, generator):
         """Test response personalization for returning users"""
         state = {
-            "intent": "greeting", 
+            "intent": "greeting",
             "processed_text": "Hi again",
-            "context": {"history_count": 5, "is_returning_user": True},
+            "context": {"history_count": 5},
             "conversation_history": [{"user": "prev", "assistant": "prev"}],
             "confidence": 0.9,
             "device_id": "returning_user"

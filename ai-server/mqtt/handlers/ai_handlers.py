@@ -2,7 +2,6 @@ import base64
 from datetime import datetime, timezone
 from mqtt.core.models import MQTTMessage
 from .base import BaseHandler
-from agents.orchestrator import NAILAOrchestrator
 
 
 # Topic patterns for AI processing and orchestration
@@ -16,9 +15,9 @@ TOPIC_AI_PERSONALITY_RESPONSE = "naila/ai/orchestration/personality/response"
 class AIHandlers(BaseHandler):
     """Handlers for AI processing and orchestration messages"""
 
-    def __init__(self, mqtt_service, orchestrator=None):
+    def __init__(self, mqtt_service, orchestrator):
         super().__init__(mqtt_service)
-        self.orchestrator = orchestrator or NAILAOrchestrator(mqtt_service)
+        self.orchestrator = orchestrator
         self.stt_service = None
         self.tts_service = None
         self.vision_service = None

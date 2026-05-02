@@ -47,6 +47,7 @@ class ShutdownStage(Enum):
     STOP_GRPC = "Stopping gRPC server"
     STOP_MQTT = "Stopping MQTT service"
     UNLOAD_AI_MODELS = "Unloading AI models"
+    CLOSE_MEMORY = "Closing memory store"
 
 
 class ServerLifecycleManager:
@@ -298,8 +299,23 @@ class ServerLifecycleManager:
 
         except Exception as e:
             logger.error("shutdown_error", error=str(e), error_type=type(e).__name__)
-        
+        finally:
+            # Close the memory store last, after all consumers (MQTT/gRPC) have
+            # stopped. Runs even on earlier shutdown errors — leaking the SQLite
+            # connection and WAL files would defeat the durability guarantee.
+            self._close_memory()
+
         logger.info("shutdown_complete", server="NAILA AI Server")
+
+    def _close_memory(self):
+        memory = getattr(self.orchestrator, "memory", None) if self.orchestrator else None
+        if memory is None:
+            return
+        logger.info("shutdown_stage", stage=ShutdownStage.CLOSE_MEMORY.value)
+        try:
+            memory.close()
+        except Exception as e:
+            logger.error("memory_close_error", error=str(e), error_type=type(e).__name__)
 
     async def _emergency_shutdown(self):
         """Emergency shutdown for critical errors"""

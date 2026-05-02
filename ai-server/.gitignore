@@ -129,3 +129,9 @@ dmypy.json
 Thumbs.db
 
 models/
+
+# Conversation memory store (SQLite + WAL/SHM sidecars)
+data/
+*.db
+*.db-wal
+*.db-shm

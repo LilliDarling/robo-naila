@@ -7,6 +7,27 @@
 # from ~50 tok/s back to ~3 tok/s. This script does the rebuild in one
 # command so recovery is trivial.
 #
+# ─── FOLLOW-UP: retire this script ────────────────────────────────────────
+# This whole rebuild dance is a workaround. The proper fix is to consume
+# llama-cpp-python's prebuilt CUDA wheels via `[tool.uv.sources]` in
+# ai-server/pyproject.toml, e.g.:
+#
+#   [tool.uv.sources]
+#   llama-cpp-python = { index = "llama-cpp-cuda" }
+#
+#   [[tool.uv.index]]
+#   name = "llama-cpp-cuda"
+#   url = "https://abetlen.github.io/llama-cpp-python/whl/cu121"
+#   explicit = true
+#
+# That makes `uv sync` install the GPU wheel directly — no rebuild script,
+# no `--no-sync` dance in dev-up.sh, fully reproducible. The reason we
+# haven't done it yet is that prebuilt wheels are pinned to a specific CUDA
+# runtime (cu121, cu122, ...) and we want to validate compat with the
+# current toolkit before committing. When you take that on, delete this
+# script and remove the `--no-sync` workaround from scripts/dev-up.sh.
+# ──────────────────────────────────────────────────────────────────────────
+#
 # Usage (from repo root or anywhere):
 #   ./scripts/rebuild-llama-cuda.sh
 #
@@ -46,9 +67,15 @@ cd "$AI_SERVER_DIR"
 # shellcheck disable=SC1091
 source .venv/bin/activate
 
+# ``--no-deps`` is load-bearing: without it, ``uv pip install --force-reinstall``
+# re-resolves transitive deps from PyPI's latest (bypassing uv.lock), which has
+# already broken us once by bumping numpy to 2.4 and crashing numba. The
+# rebuild only needs to swap llama-cpp-python's binary; numpy/typing-extensions/
+# diskcache/jinja2 must stay at the lock versions installed by ``uv sync``.
 CMAKE_ARGS="-DGGML_CUDA=on" uv pip install llama-cpp-python \
     --no-binary llama-cpp-python \
     --force-reinstall \
+    --no-deps \
     --no-cache-dir
 
 echo

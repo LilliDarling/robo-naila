@@ -51,12 +51,21 @@ def conversation_state():
                 "user": "What time is it?",
                 "assistant": "The current time is 10:30 AM",
                 "timestamp": "2025-01-15T10:30:00Z",
-                "metadata": {"intent": "time_query"}
+                "intent": "time_query",
+                "metadata": {},
             }
         ],
         context={
             "history_count": 1,
-            "is_returning_user": True
+            "recent_exchanges": [
+                {
+                    "user": "What time is it?",
+                    "assistant": "The current time is 10:30 AM",
+                    "intent": "time_query",
+                    "ts": 1_700_000_000_000,
+                    "metadata": {},
+                }
+            ],
         }
     )
 

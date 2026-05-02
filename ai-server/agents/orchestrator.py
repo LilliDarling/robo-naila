@@ -4,7 +4,7 @@ import base64
 from typing import Any, Callable, Dict, Optional
 from datetime import datetime, timezone
 from graphs.orchestration import NAILAOrchestrationGraph
-from memory.conversation import memory_manager
+from memory.conversation import ConversationMemory
 from config.mqtt_topics import OUTPUT
 from utils import get_logger
 
@@ -19,10 +19,17 @@ class NAILAOrchestrator:
     LangGraph pipeline, conversation memory, and AI services.
     """
 
-    def __init__(self, mqtt_service=None, llm_service=None, tts_service=None, vision_service=None):
+    def __init__(
+        self,
+        memory: ConversationMemory,
+        mqtt_service=None,
+        llm_service=None,
+        tts_service=None,
+        vision_service=None,
+    ):
         self.graph = NAILAOrchestrationGraph(llm_service=llm_service, tts_service=tts_service, vision_service=vision_service)
         self.mqtt_service = mqtt_service
-        self.memory = memory_manager
+        self.memory = memory
 
     def set_llm_service(self, llm_service):
         """Set LLM service for the orchestration graph"""
@@ -75,17 +82,24 @@ class NAILAOrchestrator:
 
         logger.info("processing_task", task_id=task_id, device_id=device_id, transport=transport)
 
-        # Get conversation context from shared memory
-        context = self.memory.get_context(device_id)
+        # Pull recent history from the memory store. ``recall_recent`` returns
+        # newest-first; the LLM message builder wants chronological (oldest-first)
+        # so reverse for ``conversation_history`` while the raw newest-first list
+        # stays available under ``context.recent_exchanges`` for any consumer that
+        # wants a feed view.
+        recent = self.memory.recall_recent(device_id, n=10)
+        chronological_history = list(reversed(recent))
 
-        # Build initial state
         initial_state = {
             "device_id": device_id,
             "task_id": task_id,
             "input_type": message_data.get("input_type", "text"),
             "raw_input": message_data.get("transcription", message_data.get("query", "")),
-            "context": context,
-            "conversation_history": context.get("recent_exchanges", []),
+            "context": {
+                "recent_exchanges": recent,
+                "history_count": len(recent),
+            },
+            "conversation_history": chronological_history,
             "confidence": message_data.get("confidence", 1.0),
             "image_data": message_data.get("image_data"),
             "visual_context": None,
@@ -104,13 +118,14 @@ class NAILAOrchestrator:
         # Run orchestration graph
         result = await self.graph.run(initial_state, config=config)
 
-        # Update shared memory
+        # Persist the completed turn.
         if result.get("processed_text") and result.get("response_text"):
-            self.memory.add_exchange(
+            self.memory.commit_exchange(
                 device_id,
                 result["processed_text"],
                 result["response_text"],
-                metadata={"intent": result.get("intent")},
+                intent=result.get("intent"),
+                metadata=result.get("response_metadata", {}),
             )
 
         return result
@@ -174,7 +189,3 @@ class NAILAOrchestrator:
             )
 
         logger.info("published_ai_response", task_id=task_id)
-
-    def cleanup(self):
-        """Cleanup old conversations"""
-        self.memory.cleanup_old_conversations()

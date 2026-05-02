@@ -380,48 +380,37 @@ class TestMQTTIntegration:
     async def test_conversation_memory_integration(self, mock_mqtt_service):
         """Test integration between MQTT flow and conversation memory"""
         from memory.conversation import ConversationMemory
-        
-        memory = ConversationMemory(max_history=3, ttl_hours=1)
-        # Disable background task for testing
-        if memory._cleanup_task and not memory._cleanup_task.done():
-            memory._cleanup_task.cancel()
-            memory._cleanup_task = None
+
+        memory = ConversationMemory(db_path=":memory:")
         device_id = "robot_001"
-        
-        # Simulate conversation flow through MQTT
+
         conversation_turns = [
             ("Hello", "Hi there! How can I help?"),
             ("What time is it?", "The current time is 2:30 PM"),
-            ("Thank you", "You're welcome!")
+            ("Thank you", "You're welcome!"),
         ]
-        
+
         for user_msg, assistant_msg in conversation_turns:
-            # Add to memory (simulating orchestration result)
-            memory.add_exchange(device_id, user_msg, assistant_msg, {"intent": "test"})
-            
-            # Publish response via MQTT
+            memory.commit_exchange(
+                device_id, user_msg, assistant_msg, intent="test", metadata={}
+            )
             await mock_mqtt_service.publish(
                 "naila/ai/responses/text",
                 {
                     "device_id": device_id,
                     "response_text": assistant_msg,
-                    "user_input": user_msg
-                }
+                    "user_input": user_msg,
+                },
             )
-        
-        # Verify memory state
-        history = memory.get_history(device_id, limit=10)
+
+        # ``recall_recent`` returns newest-first.
+        history = memory.recall_recent(device_id, n=10)
         assert len(history) == 3
-        assert history[-1]["assistant"] == "You're welcome!"
-        
-        # Verify MQTT messages
+        assert history[0]["assistant"] == "You're welcome!"
+
         assert len(mock_mqtt_service.published_messages) == 3
         last_published = mock_mqtt_service.published_messages[-1]
         assert last_published["payload"]["response_text"] == "You're welcome!"
-        
-        # Cleanup
-        if hasattr(memory, '_cleanup_task') and memory._cleanup_task and not memory._cleanup_task.done():
-            memory._cleanup_task.cancel()
 
     @pytest.mark.asyncio
     async def test_graceful_degradation_on_service_failure(self):

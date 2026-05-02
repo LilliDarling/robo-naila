@@ -1,92 +1,82 @@
-"""Test fixtures for memory components"""
+"""Test fixtures for memory components."""
 
 import pytest
-from unittest.mock import Mock
-from memory.conversation import ConversationMemory
 import factory
+
+from memory.conversation import ConversationMemory
 
 
 @pytest.fixture
 def clean_memory():
-    """Fresh conversation memory instance"""
-    memory = ConversationMemory(max_history=5, ttl_hours=1)
-    # Disable background cleanup for tests
-    if memory._cleanup_task:
-        memory._cleanup_task.cancel()
-        memory._cleanup_task = None
-    return memory
+    """Fresh in-memory conversation store. Per-test isolation."""
+    return ConversationMemory(db_path=":memory:")
 
 
 @pytest.fixture
 def populated_memory():
-    """Memory instance with test data"""
-    memory = ConversationMemory(max_history=5, ttl_hours=1)
-    if memory._cleanup_task:
-        memory._cleanup_task.cancel()
-        memory._cleanup_task = None
-
-    memory.add_exchange(
+    """Memory pre-seeded with two devices' worth of test exchanges."""
+    memory = ConversationMemory(db_path=":memory:")
+    memory.commit_exchange(
         "robot_001",
         "Hello",
         "Hi there! How can I help you?",
-        {"intent": "greeting"}
+        intent="greeting",
+        metadata={},
     )
-    memory.add_exchange(
-        "robot_001", 
+    memory.commit_exchange(
+        "robot_001",
         "What time is it?",
         "The current time is 10:30 AM",
-        {"intent": "time_query"}
+        intent="time_query",
+        metadata={},
     )
-    memory.add_exchange(
+    memory.commit_exchange(
         "robot_002",
         "Weather today?",
         "I don't have weather data yet",
-        {"intent": "weather_query"}
+        intent="weather_query",
+        metadata={},
     )
-    
     return memory
 
 
 @pytest.fixture
 def memory_with_history():
-    """Memory with extensive conversation history"""
-    memory = ConversationMemory(max_history=10, ttl_hours=1)
-    if memory._cleanup_task:
-        memory._cleanup_task.cancel()
-        memory._cleanup_task = None
-    
+    """Memory pre-seeded with a single device's longer conversation."""
+    memory = ConversationMemory(db_path=":memory:")
     device_id = "test_device"
 
     exchanges = [
         ("Hi", "Hello! How can I help?", "greeting"),
-        ("What's your name?", "I'm NAILA, your AI assistant", "question"), 
+        ("What's your name?", "I'm NAILA, your AI assistant", "question"),
         ("What time is it?", "The current time is 2:30 PM", "time_query"),
         ("Thank you", "You're welcome!", "gratitude"),
         ("How's the weather?", "I don't have weather access yet", "weather_query"),
         ("Can you help me?", "Of course! What do you need help with?", "question"),
         ("What can you do?", "I can answer questions and have conversations", "question"),
-        ("That's great", "I'm glad you think so!", "general")
+        ("That's great", "I'm glad you think so!", "general"),
     ]
-    
+
     for user_msg, assistant_msg, intent in exchanges:
-        memory.add_exchange(device_id, user_msg, assistant_msg, {"intent": intent})
-    
+        memory.commit_exchange(device_id, user_msg, assistant_msg, intent=intent, metadata={})
+
     return memory
 
 
 class ConversationExchangeFactory(factory.Factory):
-    """Factory for conversation exchanges"""
-    
+    """Factory for the dict shape returned by ``recall_recent``."""
+
     class Meta:
         model = dict
-    
+
     user = "Test user message"
-    assistant = "Test assistant response" 
-    timestamp = factory.LazyFunction(lambda: "2025-01-15T10:30:00Z")
-    metadata = factory.Dict({"intent": "general"})
+    assistant = "Test assistant response"
+    intent = "general"
+    ts = factory.Sequence(lambda n: 1_700_000_000_000 + n)
+    metadata = factory.Dict({})
 
 
 @pytest.fixture
 def sample_exchanges():
-    """Sample conversation exchanges"""
+    """Sample exchange dicts in the new ``recall_recent`` shape."""
     return ConversationExchangeFactory.build_batch(3)

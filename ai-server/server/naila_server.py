@@ -1,10 +1,14 @@
+import os
+
 from config.mqtt import MQTTConfig
 from config.grpc import GRPCConfig
+from config import memory as memory_config
 from mqtt.core.service_coordinator import NailaMQTTService
 from mqtt.handlers.coordinator import ProtocolHandler
 from rpc.server import GRPCServer
 from rpc.service import NailaAIServicer
 from agents.orchestrator import NAILAOrchestrator
+from memory.conversation import ConversationMemory
 from services.llm import LLMService
 from services.stt import STTService
 from services.tts import TTSService
@@ -30,8 +34,15 @@ class NailaAIServer:
         self.tts_service = TTSService()
         self.vision_service = VisionService()
 
+        # Conversation memory — single instance, injected into the orchestrator.
+        db_path = memory_config.DB_PATH
+        if db_path != ":memory:":
+            os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
+        self.memory = ConversationMemory(db_path=db_path)
+
         # Shared orchestrator — used by both MQTT and gRPC
         self.orchestrator = NAILAOrchestrator(
+            memory=self.memory,
             mqtt_service=self.mqtt_service,
             llm_service=self.llm_service,
             tts_service=self.tts_service,

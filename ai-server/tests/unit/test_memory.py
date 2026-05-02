@@ -1,290 +1,178 @@
-"""Unit tests for ConversationMemory system"""
+"""Unit tests for SQLite-backed ConversationMemory.
+
+The v1 API is intentionally narrow: ``commit_exchange`` and ``recall_recent``.
+Older tests covered the in-RAM deque/cleanup machinery — those are gone.
+"""
+
+import json
+import threading
 
 import pytest
-import time
-import threading
-from datetime import datetime, timedelta
-from unittest.mock import Mock
-from freezegun import freeze_time
+
 from memory.conversation import ConversationMemory
 
 
-class TestConversationMemory:
-    """Test cases for ConversationMemory"""
+@pytest.fixture
+def memory() -> ConversationMemory:
+    """Fresh in-memory database — fast, isolated, and the conftest default."""
+    return ConversationMemory(db_path=":memory:")
 
-    def test_initialization(self):
-        """Test memory initialization with custom parameters"""
-        from unittest.mock import patch
-        with patch('memory.conversation.ConversationMemory._start_background_cleanup'):
-            memory = ConversationMemory(max_history=10, ttl_hours=2)
-            memory._cleanup_task = None
 
-            assert memory.max_history == 10
-            assert memory.ttl == timedelta(hours=2)
-            assert len(memory.conversations) == 0
-            assert len(memory.device_metadata) == 0
+class TestConstruction:
+    def test_in_memory_db_is_usable_immediately(self, memory):
+        # Migrations should have run; commit must succeed without further setup.
+        memory.commit_exchange("dev1", "hi", "hello", intent="greeting", metadata={})
+        assert len(memory.recall_recent("dev1")) == 1
 
-    def test_add_exchange(self, clean_memory):
-        """Test adding conversation exchanges"""
-        clean_memory.add_exchange(
-            "device_001",
-            "Hello",
-            "Hi there!",
-            {"intent": "greeting"}
+    def test_file_path_persists_across_instances(self, tmp_path):
+        db_file = tmp_path / "naila.db"
+
+        first = ConversationMemory(db_path=str(db_file))
+        first.commit_exchange("dev1", "remember me", "ok", intent=None, metadata={})
+
+        second = ConversationMemory(db_path=str(db_file))
+        history = second.recall_recent("dev1")
+
+        assert len(history) == 1
+        assert history[0]["user"] == "remember me"
+        assert history[0]["assistant"] == "ok"
+
+
+class TestCommitExchange:
+    def test_persists_user_and_assistant_messages(self, memory):
+        memory.commit_exchange(
+            "dev1", "what time is it?", "It's 3pm.", intent="time_query", metadata={}
         )
-        
-        history = clean_memory.get_history("device_001", limit=10)
-        assert len(history) == 1
-        assert history[0]["user"] == "Hello"
-        assert history[0]["assistant"] == "Hi there!"
-        assert history[0]["metadata"]["intent"] == "greeting"
+        rows = memory.recall_recent("dev1")
+        assert len(rows) == 1
+        assert rows[0]["user"] == "what time is it?"
+        assert rows[0]["assistant"] == "It's 3pm."
 
-    def test_max_history_limit(self):
-        """Test that history respects max limit"""
-        from unittest.mock import patch
-        with patch('memory.conversation.ConversationMemory._start_background_cleanup'):
-            memory = ConversationMemory(max_history=3, ttl_hours=1)
-            memory._cleanup_task = None
+    def test_stores_intent_at_top_level(self, memory):
+        memory.commit_exchange(
+            "dev1", "hi", "hello", intent="greeting", metadata={}
+        )
+        assert memory.recall_recent("dev1")[0]["intent"] == "greeting"
 
-            # Add more than max
-            for i in range(5):
-                memory.add_exchange(
-                    "device_001",
-                    f"Message {i}",
-                    f"Response {i}",
-                    {}
-                )
+    def test_intent_can_be_none(self, memory):
+        memory.commit_exchange("dev1", "x", "y", intent=None, metadata={})
+        assert memory.recall_recent("dev1")[0]["intent"] is None
 
-            history = memory.get_history("device_001", limit=10)
-            assert len(history) == 3
-            assert history[0]["user"] == "Message 2"
-            assert history[-1]["user"] == "Message 4"
+    def test_metadata_roundtrip(self, memory):
+        meta = {"streamed": True, "generation_time_ms": 42, "nested": {"k": "v"}}
+        memory.commit_exchange(
+            "dev1", "x", "y", intent="general", metadata=meta
+        )
+        assert memory.recall_recent("dev1")[0]["metadata"] == meta
 
-    def test_get_context(self, populated_memory):
-        """Test context retrieval with metadata"""
-        context = populated_memory.get_context("robot_001")
-        
-        assert context["device_id"] == "robot_001"
-        assert context["history_count"] == 2
-        assert context["total_exchanges"] == 2
-        assert context["is_returning_user"] == True
-        assert len(context["recent_exchanges"]) == 2
-        assert context["last_intent"] == "time_query"
+    def test_metadata_can_be_none(self, memory):
+        memory.commit_exchange("dev1", "x", "y", intent=None, metadata=None)
+        # ``None`` and ``{}`` should both surface as an empty dict on read so
+        # callers don't have to guard.
+        assert memory.recall_recent("dev1")[0]["metadata"] == {}
 
-    def test_get_context_new_device(self, clean_memory):
-        """Test context for unknown device"""
-        context = clean_memory.get_context("unknown_device")
-        
-        assert context["device_id"] == "unknown_device"
-        assert context["history_count"] == 0
-        assert context["total_exchanges"] == 0
-        assert context["is_returning_user"] == False
-        assert len(context["recent_exchanges"]) == 0
-        assert "last_intent" not in context
+    def test_assigns_monotonically_increasing_timestamp(self, memory):
+        memory.commit_exchange("dev1", "a", "1", intent=None, metadata={})
+        memory.commit_exchange("dev1", "b", "2", intent=None, metadata={})
+        memory.commit_exchange("dev1", "c", "3", intent=None, metadata={})
+        rows = memory.recall_recent("dev1")
+        # newest first — timestamps decrease (or are equal, but never lower-than-older)
+        timestamps = [r["ts"] for r in rows]
+        assert timestamps == sorted(timestamps, reverse=True)
 
-    def test_device_metadata_tracking(self, clean_memory):
-        """Test device metadata is tracked correctly"""
-        # First exchange
-        clean_memory.add_exchange("device_001", "msg1", "resp1", {})
-        metadata = clean_memory.device_metadata["device_001"]
-        
-        assert metadata["total_exchanges"] == 1
-        assert metadata["total_sessions"] == 1
-        assert "first_seen" in metadata
-        assert "last_active" in metadata
-        
-        # Second exchange immediately
-        clean_memory.add_exchange("device_001", "msg2", "resp2", {})
-        metadata = clean_memory.device_metadata["device_001"]
-        
-        assert metadata["total_exchanges"] == 2
-        assert metadata["total_sessions"] == 1
 
-    def test_session_detection(self, clean_memory):
-        """Test new session detection after gap"""
-        # First exchange
-        clean_memory.add_exchange("device_001", "msg1", "resp1", {})
-        
-        # Simulate 31 minute gap (new session threshold is 30 min)
-        original_time = clean_memory.device_metadata["device_001"]["last_active"]
-        clean_memory.device_metadata["device_001"]["last_active"] = original_time - 1860
-        
-        # Second exchange
-        clean_memory.add_exchange("device_001", "msg2", "resp2", {})
-        
-        metadata = clean_memory.device_metadata["device_001"]
-        assert metadata["total_sessions"] == 2
+class TestRecallRecent:
+    def test_empty_for_unknown_device(self, memory):
+        assert memory.recall_recent("nobody") == []
 
-    def test_clear_device(self, populated_memory):
-        """Test clearing device history"""
-        populated_memory.clear_device("robot_001")
-        
-        history = populated_memory.get_history("robot_001", limit=10)
-        assert len(history) == 0
-        assert "robot_001" not in populated_memory.conversations
-        assert "robot_001" not in populated_memory.device_metadata
-        
-        # Other devices should remain
-        history = populated_memory.get_history("robot_002", limit=10)
-        assert len(history) == 1
+    def test_returns_newest_first(self, memory):
+        memory.commit_exchange("dev1", "first", "1", intent=None, metadata={})
+        memory.commit_exchange("dev1", "second", "2", intent=None, metadata={})
+        memory.commit_exchange("dev1", "third", "3", intent=None, metadata={})
 
-    def test_cleanup_old_conversations(self, clean_memory):
-        """Test cleanup of old conversations"""
-        current_time = time.time()
-        
-        # Add old exchange
-        clean_memory.add_exchange("old_device", "old msg", "old resp", {})
-        clean_memory.conversations["old_device"][0]["timestamp_unix"] = current_time - 90000
-        
-        # Add recent exchange
-        clean_memory.add_exchange("new_device", "new msg", "new resp", {})
-        
-        # Force cleanup
-        clean_memory.last_cleanup = 0  # Reset cleanup timer
-        clean_memory.cleanup_old_conversations()
-        
-        # Old device should be removed
-        assert "old_device" not in clean_memory.conversations
-        assert "new_device" in clean_memory.conversations
+        rows = memory.recall_recent("dev1")
+        assert [r["user"] for r in rows] == ["third", "second", "first"]
 
-    def test_thread_safety(self, clean_memory):
-        """Test thread-safe operations"""
-        errors = []
-        
-        def add_exchanges(device_id, count):
+    def test_default_limit_is_ten(self, memory):
+        for i in range(15):
+            memory.commit_exchange("dev1", f"u{i}", f"a{i}", intent=None, metadata={})
+        assert len(memory.recall_recent("dev1")) == 10
+
+    def test_respects_custom_limit(self, memory):
+        for i in range(5):
+            memory.commit_exchange("dev1", f"u{i}", f"a{i}", intent=None, metadata={})
+        assert len(memory.recall_recent("dev1", n=2)) == 2
+
+    def test_scopes_by_device_id(self, memory):
+        memory.commit_exchange("dev1", "alpha", "1", intent=None, metadata={})
+        memory.commit_exchange("dev2", "beta", "2", intent=None, metadata={})
+        memory.commit_exchange("dev1", "gamma", "3", intent=None, metadata={})
+
+        dev1 = memory.recall_recent("dev1")
+        dev2 = memory.recall_recent("dev2")
+
+        assert {r["user"] for r in dev1} == {"alpha", "gamma"}
+        assert {r["user"] for r in dev2} == {"beta"}
+
+    def test_returned_shape_has_required_keys(self, memory):
+        memory.commit_exchange("dev1", "x", "y", intent="general", metadata={"k": 1})
+        row = memory.recall_recent("dev1")[0]
+        assert set(row.keys()) >= {"user", "assistant", "intent", "ts", "metadata"}
+
+
+class TestFTSIntegration:
+    """The FTS5 trigger fires on insert; v1 doesn't expose recall_similar yet,
+    but we verify the index is wired so §5.4 can land additively."""
+
+    def test_fts_index_populated_on_commit(self, memory):
+        memory.commit_exchange(
+            "dev1",
+            "tell me about gardening",
+            "Sure — what do you want to grow?",
+            intent="question",
+            metadata={},
+        )
+        # Reach into the connection for verification — production code never
+        # queries FTS directly until §5.4.
+        rows = memory._conn.execute(
+            "SELECT user_msg, assistant_msg FROM exchanges_fts "
+            "WHERE exchanges_fts MATCH 'gardening'"
+        ).fetchall()
+        assert len(rows) == 1
+        assert "gardening" in rows[0][0]
+
+
+class TestConcurrentWrites:
+    """SQLite WAL + busy_timeout serializes writes; commit_exchange must be
+    safe to call from threads without manual locking on our side."""
+
+    def test_threads_committing_dont_corrupt(self, tmp_path):
+        # File-backed DB so all threads share a real filesystem journal.
+        db_file = tmp_path / "naila.db"
+        memory = ConversationMemory(db_path=str(db_file))
+
+        errors: list[Exception] = []
+
+        def writer(device_id: str, n: int) -> None:
             try:
-                for i in range(count):
-                    clean_memory.add_exchange(
-                        device_id,
-                        f"msg {i}",
-                        f"resp {i}",
-                        {"thread": device_id}
+                local = ConversationMemory(db_path=str(db_file))
+                for i in range(n):
+                    local.commit_exchange(
+                        device_id, f"u{i}", f"a{i}", intent=None, metadata={}
                     )
-            except Exception as e:
+            except Exception as e:  # pragma: no cover — surfaces below
                 errors.append(e)
-        
-        # Create multiple threads
-        threads = []
-        for i in range(5):
-            thread = threading.Thread(
-                target=add_exchanges,
-                args=(f"device_{i}", 10)
-            )
-            threads.append(thread)
-            thread.start()
-        
-        # Wait for all threads
-        for thread in threads:
-            thread.join()
-        
-        # Should have no errors
-        assert len(errors) == 0
-        
-        # Each device should have its exchanges (limited by max_history=5)
-        for i in range(5):
-            history = clean_memory.get_history(f"device_{i}", limit=10)
-            assert len(history) == 5
 
-    def test_memory_stats(self, populated_memory):
-        """Test memory statistics generation"""
-        stats = populated_memory.get_memory_stats()
-        
-        assert stats["total_devices"] == 2
-        assert stats["total_exchanges"] == 3
-        assert stats["average_exchanges_per_device"] == 1.5
-        assert "memory_cleanup_interval" in stats
-        assert "background_cleanup_active" in stats
+        threads = [
+            threading.Thread(target=writer, args=(f"dev{i}", 20)) for i in range(4)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
-    def test_deque_performance(self):
-        """Test deque maintains O(1) append performance"""
-        from unittest.mock import patch
-        with patch('memory.conversation.ConversationMemory._start_background_cleanup'):
-            memory = ConversationMemory(max_history=100, ttl_hours=1)
-            memory._cleanup_task = None
+        assert not errors, f"errors during concurrent writes: {errors}"
 
-            # Add many exchanges
-            start_time = time.time()
-            for i in range(200):
-                memory.add_exchange(
-                    "perf_device",
-                    f"msg {i}",
-                    f"resp {i}",
-                    {}
-                )
-            elapsed = time.time() - start_time
-
-            # Should be fast even with many exchanges
-            assert elapsed < 1.0
-
-            # Should only keep max_history
-            history = memory.get_history("perf_device", limit=1000)
-            assert len(history) == 100
-
-    def test_get_history_with_limit(self, memory_with_history):
-        """Test getting limited history"""
-        full_history = memory_with_history.get_history("test_device", limit=10)
-        limited_history = memory_with_history.get_history("test_device", limit=3)
-        
-        assert len(limited_history) == 3
-        assert limited_history == full_history[-3:]
-
-    def test_cleanup_interval_enforcement(self, clean_memory):
-        """Test cleanup doesn't run too frequently"""
-        clean_memory.cleanup_interval = 3600
-        clean_memory.last_cleanup = time.time() - 1800
-        
-        # Add old conversation
-        clean_memory.add_exchange("device", "msg", "resp", {})
-        clean_memory.conversations["device"][0]["timestamp_unix"] = 0
-        
-        # Try cleanup (should skip due to interval)
-        clean_memory.cleanup_old_conversations()
-        
-        # Old conversation should still exist
-        assert "device" in clean_memory.conversations
-
-    def test_active_device_tracking(self, clean_memory):
-        """Test active device tracking for optimization"""
-        # Add exchanges for multiple devices
-        clean_memory.add_exchange("active_1", "msg", "resp", {})
-        clean_memory.add_exchange("active_2", "msg", "resp", {})
-        
-        assert "active_1" in clean_memory._active_devices
-        assert "active_2" in clean_memory._active_devices
-        
-        # Clear one device
-        clean_memory.clear_device("active_1")
-        
-        assert "active_1" not in clean_memory._active_devices
-        assert "active_2" in clean_memory._active_devices
-
-    def test_shutdown(self, clean_memory):
-        """Test graceful shutdown"""
-        # Create mock cleanup task
-        mock_task = Mock()
-        mock_task.done.return_value = False
-        clean_memory._cleanup_task = mock_task
-        
-        # Shutdown should cancel task
-        clean_memory.shutdown()
-        
-        # Verify task was cancelled
-        mock_task.cancel.assert_called_once()
-        mock_task.done.assert_called_once()
-
-    @freeze_time("2025-01-15 10:30:00")
-    def test_timestamp_consistency(self, clean_memory):
-        """Test timestamp formats are consistent"""
-        clean_memory.add_exchange("device", "msg", "resp", {})
-        
-        exchange = clean_memory.get_history("device", limit=3)[0]
-        
-        # Should have both timestamp formats
-        assert "timestamp" in exchange
-        assert "timestamp_unix" in exchange
-        
-        # ISO timestamp should be parseable
-        parsed = datetime.fromisoformat(exchange["timestamp"])
-        assert parsed.year == 2025
-        assert parsed.month == 1
-        assert parsed.day == 15
+        # Each device should see exactly its own 20 rows.
+        for i in range(4):
+            assert len(memory.recall_recent(f"dev{i}", n=100)) == 20

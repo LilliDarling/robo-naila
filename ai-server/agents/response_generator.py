@@ -293,7 +293,7 @@ class ResponseGenerator(BaseAgent):
         # Check for conversation continuity
         if history:
             last_exchange = history[-1]
-            last_intent = last_exchange.get("metadata", {}).get("intent", "")
+            last_intent = last_exchange.get("intent") or last_exchange.get("metadata", {}).get("intent", "")
 
             # Handle follow-up questions
             if intent == "question" and last_intent in ["time_query", "weather_query"]:

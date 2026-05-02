@@ -18,12 +18,8 @@ class TestEndToEndWorkflow:
     @pytest.fixture
     def complete_system(self, disable_hardware_optimization):
         """Set up complete AI server system with real components"""
-        # Real memory system
-        with patch('memory.conversation.ConversationMemory._start_background_cleanup'):
-            memory = ConversationMemory(max_history=10, ttl_hours=1)
-            # Ensure cleanup task is None for testing
-            memory._cleanup_task = None
-        
+        memory = ConversationMemory(db_path=":memory:")
+
         # Mock MQTT service
         mqtt_service = Mock()
         mqtt_service.publish = AsyncMock()
@@ -94,11 +90,12 @@ class TestEndToEndWorkflow:
         assert result["intent"] in ["greeting", "general", "question", "time_query", "gratitude"]
         
         # Store in memory
-        memory.add_exchange(
+        memory.commit_exchange(
             device_id,
             initial_state["raw_input"],
             result["response_text"],
-            {"intent": result["intent"], "task_id": task_id}
+            intent=result["intent"],
+            metadata={"task_id": task_id},
         )
         
         # Simulate publishing response
@@ -120,7 +117,7 @@ class TestEndToEndWorkflow:
         assert published["payload"]["response_text"] == result["response_text"]
         
         # Verify memory state
-        history = memory.get_history(device_id, limit=10)
+        history = memory.recall_recent(device_id, n=10)
         assert len(history) == 1
         assert history[0]["user"] == "Hello, how are you today?"
         assert history[0]["assistant"] == result["response_text"]
@@ -163,29 +160,25 @@ class TestEndToEndWorkflow:
             assert result["intent"] in ["time_query", "gratitude", "general", "question", "greeting"]
             
             # Add to memory and history
-            memory.add_exchange(
+            memory.commit_exchange(
                 device_id,
                 user_input,
                 result["response_text"],
-                {"intent": result["intent"], "turn": turn_idx + 1}
+                intent=result["intent"],
+                metadata={"turn": turn_idx + 1},
             )
-            
+
             conversation_history.append({
                 "user": user_input,
                 "assistant": result["response_text"],
                 "timestamp": result.get("timestamp", datetime.now(timezone.utc).isoformat()),
-                "metadata": {"intent": result["intent"]}
+                "intent": result["intent"],
+                "metadata": {},
             })
-        
+
         # Verify conversation continuity
-        final_history = memory.get_history(device_id, limit=10)
+        final_history = memory.recall_recent(device_id, n=10)
         assert len(final_history) == 3
-        
-        # Context should show progression
-        context = memory.get_context(device_id)
-        assert context["history_count"] == 3
-        assert context["total_exchanges"] == 3
-        assert context["is_returning_user"] == True
 
     @pytest.mark.asyncio
     async def test_error_handling_and_recovery(self, complete_system):
@@ -294,50 +287,49 @@ class TestEndToEndWorkflow:
             assert "response_text" in result
             
             # Add to memory
-            memory.add_exchange(
+            memory.commit_exchange(
                 device_id,
                 conversations[device_id][0],
                 result["response_text"],
-                {"intent": result["intent"]}
+                intent=result["intent"],
+                metadata={},
             )
-        
+
         # Continue conversations with context
         second_tasks = []
         for i, device_id in enumerate(devices):
-            history = memory.get_history(device_id, limit=10)
+            # ``recall_recent`` returns newest-first; the LLM message builder
+            # expects chronological history, so reverse for ``conversation_history``.
+            history = list(reversed(memory.recall_recent(device_id, n=10)))
             state = {
                 "task_id": f"concurrent_{device_id}_2",
                 "device_id": device_id,
-                "input_type": "text", 
+                "input_type": "text",
                 "raw_input": conversations[device_id][1],
                 "confidence": 0.9,
-                "conversation_history": history
+                "conversation_history": history,
             }
             second_tasks.append(orchestrator.run(state))
-        
+
         second_results = await asyncio.gather(*second_tasks)
-        
+
         # Verify context maintained per device
         for i, result in enumerate(second_results):
             device_id = devices[i]
             assert result["device_id"] == device_id
-            
-            # Add to memory
-            memory.add_exchange(
+
+            memory.commit_exchange(
                 device_id,
                 conversations[device_id][1],
                 result["response_text"],
-                {"intent": result["intent"]}
+                intent=result["intent"],
+                metadata={},
             )
-        
+
         # Verify each device has independent context
         for device_id in devices:
-            history = memory.get_history(device_id, limit=10)
-            context = memory.get_context(device_id)
-            
+            history = memory.recall_recent(device_id, n=10)
             assert len(history) == 2
-            assert context["device_id"] == device_id
-            assert context["history_count"] == 2
 
     @pytest.mark.asyncio
     async def test_system_performance_under_load(self, complete_system):
@@ -423,35 +415,34 @@ class TestEndToEndWorkflow:
                 "device_id": device_id,
                 "input_type": "text",
                 "raw_input": message,
-                "confidence": 0.9
+                "confidence": 0.9,
             }
-            
+
             result = await orchestrator.run(state)
-            memory.add_exchange(
+            memory.commit_exchange(
                 device_id,
                 message,
                 result["response_text"],
-                {"intent": result["intent"], "session": 1}
+                intent=result["intent"],
+                metadata={"session": 1},
             )
-        
+
         # Verify session 1 stored
-        s1_context = memory.get_context(device_id)
-        assert s1_context["history_count"] == 3
-        assert s1_context["total_exchanges"] == 3
-        
+        s1_history = memory.recall_recent(device_id, n=10)
+        assert len(s1_history) == 3
+
         # Simulate session break (time gap)
         time.sleep(0.1)
-        
+
         # Session 2: Continuation with context
         session2_messages = [
             "Do you remember my name?",
-            "What did I say I like?"
+            "What did I say I like?",
         ]
-        
+
         for i, message in enumerate(session2_messages):
-            history = memory.get_history(device_id, limit=10)
-            context = memory.get_context(device_id)
-            
+            history = list(reversed(memory.recall_recent(device_id, n=10)))
+
             state = {
                 "task_id": f"persist_s2_{i}",
                 "device_id": device_id,
@@ -459,93 +450,71 @@ class TestEndToEndWorkflow:
                 "raw_input": message,
                 "confidence": 0.9,
                 "conversation_history": history,
-                "context": context
             }
-            
+
             result = await orchestrator.run(state)
-            memory.add_exchange(
+            memory.commit_exchange(
                 device_id,
                 message,
                 result["response_text"],
-                {"intent": result["intent"], "session": 2}
+                intent=result["intent"],
+                metadata={"session": 2},
             )
-        
-        # Verify persistence across sessions
-        final_context = memory.get_context(device_id)
-        assert final_context["history_count"] == 5
-        assert final_context["total_exchanges"] == 5
-        assert final_context["is_returning_user"] == True
 
-        # Verify conversation continuity
-        full_history = memory.get_history(device_id, limit=10)
-        assert len(full_history) == 5
-        assert "Alex" in full_history[1]["user"]
-        assert "coffee" in full_history[2]["user"]
+        # Verify continuity: full history is one stream, no session boundary.
+        full_history_chronological = list(reversed(memory.recall_recent(device_id, n=10)))
+        assert len(full_history_chronological) == 5
+        assert "Alex" in full_history_chronological[1]["user"]
+        assert "coffee" in full_history_chronological[2]["user"]
 
     @pytest.mark.asyncio
-    async def test_system_graceful_shutdown_and_restart(self, complete_system):
-        """Test system behavior during shutdown and restart scenarios"""
-        system = complete_system
-        memory = system["memory"]
-        orchestrator = system["orchestrator"]
-        
-        # Create active conversations
-        active_devices = ["shutdown_test_001", "shutdown_test_002"]
-        
-        for device_id in active_devices:
-            state = {
-                "task_id": f"pre_shutdown_{device_id}",
-                "device_id": device_id,
-                "input_type": "text",
-                "raw_input": "This is before shutdown",
-                "confidence": 0.9
-            }
-            
-            result = await orchestrator.run(state)
-            memory.add_exchange(
-                device_id,
-                state["raw_input"],
-                result["response_text"],
-                {"intent": result["intent"]}
-            )
-        
-        # Verify pre-shutdown state
-        for device_id in active_devices:
-            history = memory.get_history(device_id, limit=10)
-            assert len(history) == 1
-        
-        # Simulate graceful shutdown
-        memory.shutdown()
+    async def test_conversation_survives_restart(self, tmp_path, disable_hardware_optimization):
+        """The headline v1 promise: history persists across process restart."""
+        db_file = tmp_path / "naila.db"
 
-        # Simulate system restart with new memory instance
-        with patch('memory.conversation.ConversationMemory._start_background_cleanup'):
-            new_memory = ConversationMemory(max_history=10, ttl_hours=1)
-            # Ensure cleanup task is None for testing
-            new_memory._cleanup_task = None
-        
-        # Simulate conversations after restart
-        for device_id in active_devices:
-            state = {
-                "task_id": f"post_restart_{device_id}",
-                "device_id": device_id,
-                "input_type": "text",
-                "raw_input": "This is after restart",
-                "confidence": 0.9
-            }
-            
-            result = await orchestrator.run(state)
-            new_memory.add_exchange(
-                device_id,
-                state["raw_input"],
-                result["response_text"],
-                {"intent": result["intent"]}
-            )
-        
-        # Verify fresh start (no previous context)
-        for device_id in active_devices:
-            context = new_memory.get_context(device_id)
-            assert context["history_count"] == 1
-            assert context["is_returning_user"] == False
+        # Bring up an orchestration graph backed by the shared file.
+        with patch("agents.input_processor.SentenceTransformer") as mock_st:
+            mock_model = Mock()
+            mock_model.encode.return_value = [[0.1, 0.2, 0.3]]
+            mock_st.return_value = mock_model
+
+            input_processor = InputProcessor()
+            response_generator = ResponseGenerator()
+
+            with patch("graphs.orchestration.InputProcessor", return_value=input_processor), \
+                 patch("graphs.orchestration.ResponseGenerator", return_value=response_generator):
+                orchestrator = NAILAOrchestrationGraph()
+
+            memory_before = ConversationMemory(db_path=str(db_file))
+            active_devices = ["shutdown_test_001", "shutdown_test_002"]
+
+            for device_id in active_devices:
+                state = {
+                    "task_id": f"pre_shutdown_{device_id}",
+                    "device_id": device_id,
+                    "input_type": "text",
+                    "raw_input": "This is before shutdown",
+                    "confidence": 0.9,
+                }
+                result = await orchestrator.run(state)
+                memory_before.commit_exchange(
+                    device_id,
+                    state["raw_input"],
+                    result["response_text"],
+                    intent=result["intent"],
+                    metadata={},
+                )
+
+            memory_before.close()
+
+            # Simulate restart by opening a fresh ConversationMemory on the
+            # same file. History from the previous instance must be visible.
+            memory_after = ConversationMemory(db_path=str(db_file))
+
+            for device_id in active_devices:
+                history = memory_after.recall_recent(device_id, n=10)
+                assert len(history) == 1
+                assert history[0]["user"] == "This is before shutdown"
 
     @pytest.mark.asyncio
     async def test_complete_mqtt_integration_flow(self, complete_system):
