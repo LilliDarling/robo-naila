@@ -13,7 +13,7 @@ MODEL_TYPE = "llama"  # Model architecture type
 # Larger contexts waste VRAM on KV cache and slow down inference significantly.
 CONTEXT_SIZE = int(os.getenv("LLM_CONTEXT_SIZE", "4096"))
 MAX_TOKENS_PER_RESPONSE = int(os.getenv("LLM_MAX_TOKENS", "256"))
-CONTEXT_HISTORY_LIMIT = int(os.getenv("LLM_CONTEXT_HISTORY_LIMIT", "5"))
+CONTEXT_HISTORY_LIMIT = int(os.getenv("LLM_CONTEXT_HISTORY_LIMIT", "10"))
 TOKEN_BUDGET_FOR_HISTORY = int(os.getenv("LLM_TOKEN_BUDGET_HISTORY", "2000"))
 
 # Generation Parameters

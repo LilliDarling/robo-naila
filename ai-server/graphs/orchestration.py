@@ -10,6 +10,7 @@ from agents.actions import registry as action_registry
 # Import handler modules so their module-level ``register`` calls run on graph
 # construction. Add new handlers here when they ship.
 from agents.actions import time_handler  # noqa: F401  (registered via import)
+from agents.actions import weather_handler  # noqa: F401  (registered via import)
 from memory.conversation import ConversationMemory
 from utils import get_logger
 
