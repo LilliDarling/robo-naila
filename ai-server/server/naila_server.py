@@ -40,10 +40,11 @@ class NailaAIServer:
             os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         self.memory = ConversationMemory(db_path=db_path)
 
-        # Shared orchestrator — used by both MQTT and gRPC
+        # Shared orchestrator — used by both MQTT and gRPC. Transport-agnostic;
+        # transports own their own publish/delivery (MQTT in ai_handlers, gRPC
+        # via the audio_delivery callback).
         self.orchestrator = NAILAOrchestrator(
             memory=self.memory,
-            mqtt_service=self.mqtt_service,
             llm_service=self.llm_service,
             tts_service=self.tts_service,
             vision_service=self.vision_service,

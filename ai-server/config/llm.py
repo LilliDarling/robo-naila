@@ -44,7 +44,10 @@ LLAMA_3_END_HEADER = "<|end_header_id|>"
 LLAMA_3_EOT = "<|eot_id|>"
 
 # Performance Thresholds
-MAX_INFERENCE_TIME_SECONDS = 30.0  # Timeout for generation
+# Max wall-clock wait for a single generate_chat call. Note: on timeout
+# the model thread keeps running inside the executor — see the call site
+# at agents/response_generator.py for the cancellability constraint.
+MAX_INFERENCE_TIME_SECONDS = float(os.getenv("LLM_MAX_INFERENCE_TIME_SECONDS", "120.0"))
 WARNING_INFERENCE_TIME_SECONDS = 10.0  # Log warning if slower
 
 # Prompt Configuration

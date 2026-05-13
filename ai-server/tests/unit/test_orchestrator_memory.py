@@ -50,7 +50,7 @@ class TestOrchestratorMemoryWiring:
     async def test_orchestrator_does_not_recall_before_graph(self, orchestrator, memory):
         # Recall is the graph's job now (see retrieve_context node). The
         # orchestrator stays out of the way so we don't double-fetch.
-        await orchestrator.process_task_with_callback(
+        await orchestrator.process_task(
             {"task_id": "t1", "device_id": "dev-x", "transcription": "hello"}
         )
         memory.recall_recent.assert_not_called()
@@ -59,7 +59,7 @@ class TestOrchestratorMemoryWiring:
     async def test_commit_called_after_graph_with_intent_split_out(
         self, orchestrator, memory
     ):
-        await orchestrator.process_task_with_callback(
+        await orchestrator.process_task(
             {"task_id": "t1", "device_id": "dev-x", "transcription": "hello"}
         )
         memory.commit_exchange.assert_called_once()
@@ -81,7 +81,7 @@ class TestOrchestratorMemoryWiring:
 
         monkeypatch.setattr(orch.graph, "run", fake_run)
 
-        await orch.process_task_with_callback(
+        await orch.process_task(
             {"task_id": "t1", "device_id": "dev-x", "transcription": "hello"}
         )
         memory.commit_exchange.assert_not_called()
@@ -119,7 +119,7 @@ class TestOrchestratorMemoryWiring:
                           side_effect=fake_input), \
              patch.object(orch.graph.response_generator, "process",
                           side_effect=fake_response):
-            await orch.process_task_with_callback(
+            await orch.process_task(
                 {"task_id": "t1", "device_id": "dev-meta", "transcription": "hi"}
             )
 
@@ -152,7 +152,7 @@ class TestOrchestratorMemoryWiring:
 
         monkeypatch.setattr(orch.graph, "run", fake_run)
 
-        await orch.process_task_with_callback(
+        await orch.process_task(
             {"task_id": "t1", "device_id": "dev-x", "transcription": "now"}
         )
 

@@ -1,5 +1,7 @@
 import base64
 from datetime import datetime, timezone
+from typing import Any, Dict
+from config.mqtt_topics import OUTPUT
 from mqtt.core.models import MQTTMessage
 from .base import BaseHandler
 
@@ -228,9 +230,11 @@ class AIHandlers(BaseHandler):
         try:
             result = await self.orchestrator.process_task(message.payload)
             self.logger.info(f"Task {task_id} processed successfully")
+            if result.get("response_text"):
+                await self._publish_response(device_id, task_id, result)
         except Exception as e:
             self.logger.error(f"Error processing task {task_id}: {e}")
-            
+
             # Fallback response
             response_data = {
                 "task_id": task_id,
@@ -240,7 +244,53 @@ class AIHandlers(BaseHandler):
                 "sample_rate": 16000
             }
             self.mqtt_service.publish_ai_response("audio", device_id, response_data, qos=1)
-    
+
+    async def _publish_response(self, device_id: str, task_id: str, result: Dict[str, Any]):
+        """Publish the orchestrator's text (and optional audio) result via MQTT.
+
+        Command server subscribes to OUTPUT.ai_response_text for any post-response
+        device-side actions; OUTPUT.ai_response_audio carries the synthesized TTS
+        bytes when the response generator populated ``response_audio`` in state.
+        """
+        ai_response = {
+            "task_id": task_id,
+            "source": "ai_server",
+            "target_device": device_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "response": {
+                "text": result.get("response_text", ""),
+                "intent": result.get("intent", ""),
+                "confidence": result.get("confidence", 1.0),
+                "context": result.get("context", {}),
+            },
+        }
+        self.mqtt_service.publish(OUTPUT.ai_response_text, ai_response, qos=1)
+
+        if "response_audio" in result:
+            audio_data = result["response_audio"]
+            audio_response = {
+                "task_id": task_id,
+                "device_id": device_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "audio_data": base64.b64encode(audio_data.audio_bytes).decode("utf-8"),
+                "format": audio_data.format,
+                "sample_rate": audio_data.sample_rate,
+                "duration_ms": audio_data.duration_ms,
+                "text": audio_data.text,
+                "metadata": {
+                    "voice": "lessac",
+                    "language": "en_US",
+                    "synthesis_time_ms": audio_data.synthesis_time_ms,
+                },
+            }
+            self.mqtt_service.publish(OUTPUT.ai_response_audio, audio_response, qos=1)
+            self.logger.info(
+                f"Published audio response for {task_id} "
+                f"({audio_data.duration_ms}ms, {audio_data.format})"
+            )
+
+        self.logger.info(f"Published AI response for {task_id}")
+
     async def handle_personality_response(self, message: MQTTMessage):
         """Handle personality-adjusted responses - placeholder"""
         # TODO: Implement personality system integration

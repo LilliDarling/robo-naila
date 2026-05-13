@@ -1,11 +1,14 @@
-"""Main orchestrator — transport-agnostic AI pipeline entry point"""
+"""Main orchestrator — transport-agnostic AI pipeline entry point.
 
-import base64
+Runs the LangGraph pipeline and persists the completed turn. Transport-specific
+concerns (MQTT publish, gRPC audio delivery) live in their respective layers —
+this class only owns the pipeline lifecycle and memory persistence.
+"""
+
 from typing import Any, Callable, Dict, Optional
 from datetime import datetime, timezone
 from graphs.orchestration import NAILAOrchestrationGraph
 from memory.conversation import ConversationMemory
-from config.mqtt_topics import OUTPUT
 from utils import get_logger
 
 
@@ -16,13 +19,13 @@ class NAILAOrchestrator:
     """Main orchestrator for NAILA AI system.
 
     Both MQTT and gRPC route through this class to share the same
-    LangGraph pipeline, conversation memory, and AI services.
+    LangGraph pipeline, conversation memory, and AI services. Transport-specific
+    side effects (publishing, audio chunking) are the caller's responsibility.
     """
 
     def __init__(
         self,
         memory: ConversationMemory,
-        mqtt_service=None,
         llm_service=None,
         tts_service=None,
         vision_service=None,
@@ -34,7 +37,6 @@ class NAILAOrchestrator:
             tts_service=tts_service,
             vision_service=vision_service,
         )
-        self.mqtt_service = mqtt_service
 
     def set_llm_service(self, llm_service):
         """Set LLM service for the orchestration graph"""
@@ -50,35 +52,25 @@ class NAILAOrchestrator:
         """Set Vision service for the orchestration graph"""
         self.graph.vision_service = vision_service
 
-    async def process_task(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Process a task from MQTT — runs graph then publishes response via MQTT."""
-        result = await self.process_task_with_callback(message_data)
-
-        # Publish response via MQTT if service available
-        task_id = message_data.get("task_id", "unknown")
-        device_id = message_data.get("device_id", "unknown")
-        if self.mqtt_service and result.get("response_text"):
-            await self._publish_response(device_id, task_id, result)
-
-        return result
-
-    async def process_task_with_callback(
+    async def process_task(
         self,
         message_data: Dict[str, Any],
         audio_delivery: Optional[Callable] = None,
         transport: str = "mqtt",
     ) -> Dict[str, Any]:
-        """Process a task with optional transport-specific audio delivery.
+        """Run the graph for a single turn and persist the result.
 
         Args:
             message_data: Task payload (from MQTT message or gRPC request).
             audio_delivery: Async callback invoked by ResponseGenerator when
                 TTS audio is ready. For gRPC this chunks and queues AudioOutput
                 messages. For MQTT this is None (audio published separately).
-            transport: Transport identifier ("mqtt" or "grpc").
+            transport: Transport identifier ("mqtt" or "grpc"). Forwarded to
+                the response generator via LangGraph config.
 
         Returns:
-            Final graph state dict with response_text, intent, etc.
+            Final graph state dict with response_text, intent, etc. Transport
+            layers are responsible for any publish/delivery side effects.
         """
         task_id = message_data.get(
             "task_id", f"task_{datetime.now(timezone.utc).timestamp()}"
@@ -102,7 +94,6 @@ class NAILAOrchestrator:
             "visual_context": None,
         }
 
-        # Build LangGraph config with transport callbacks
         config = None
         if audio_delivery or transport != "mqtt":
             config = {
@@ -112,10 +103,8 @@ class NAILAOrchestrator:
                 }
             }
 
-        # Run orchestration graph
         result = await self.graph.run(initial_state, config=config)
 
-        # Persist the completed turn.
         if result.get("processed_text") and result.get("response_text"):
             self.memory.commit_exchange(
                 device_id,
@@ -126,63 +115,3 @@ class NAILAOrchestrator:
             )
 
         return result
-
-    async def _publish_response(self, device_id: str, task_id: str, result: Dict[str, Any]):
-        """Publish AI response via MQTT - Command server will handle device commands"""
-        if not self.mqtt_service:
-            return
-
-        # Build AI text response
-        ai_response = {
-            "task_id": task_id,
-            "source": "ai_server",
-            "target_device": device_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "response": {
-                "text": result.get("response_text", ""),
-                "intent": result.get("intent", ""),
-                "confidence": result.get("confidence", 1.0),
-                "context": result.get("context", {}),
-            },
-        }
-
-        # Publish text response - Command server subscribes to this
-        self.mqtt_service.publish(
-            OUTPUT.ai_response_text,
-            ai_response,
-            qos=1,
-        )
-
-        # Publish audio response if available
-        if "response_audio" in result:
-            audio_data = result["response_audio"]
-            audio_response = {
-                "task_id": task_id,
-                "device_id": device_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "audio_data": base64.b64encode(audio_data.audio_bytes).decode("utf-8"),
-                "format": audio_data.format,
-                "sample_rate": audio_data.sample_rate,
-                "duration_ms": audio_data.duration_ms,
-                "text": audio_data.text,
-                "metadata": {
-                    "voice": "lessac",
-                    "language": "en_US",
-                    "synthesis_time_ms": audio_data.synthesis_time_ms,
-                },
-            }
-
-            self.mqtt_service.publish(
-                OUTPUT.ai_response_audio,
-                audio_response,
-                qos=1,
-            )
-
-            logger.info(
-                "published_audio_response",
-                duration_ms=audio_data.duration_ms,
-                format=audio_data.format,
-                task_id=task_id,
-            )
-
-        logger.info("published_ai_response", task_id=task_id)

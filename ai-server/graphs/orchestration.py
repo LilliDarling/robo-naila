@@ -12,6 +12,7 @@ from agents.actions import registry as action_registry
 from agents.actions import time_handler  # noqa: F401  (registered via import)
 from agents.actions import weather_handler  # noqa: F401  (registered via import)
 from memory.conversation import ConversationMemory
+from config import orchestration as orch_config
 from utils import get_logger
 
 
@@ -19,14 +20,10 @@ logger = get_logger(__name__)
 
 # Intents that don't benefit from history when we're already confident.
 # ``time_query`` doesn't depend on prior turns; ``greeting`` is the same.
-# Skipping recall for these saves a SQLite roundtrip per turn.
+# Skipping recall for these saves a SQLite roundtrip per turn. Kept in
+# source (not config) because this is a design choice about which intents
+# are stateless, not a numeric tuning dial.
 _RECALL_SKIP_INTENTS = frozenset({"time_query", "greeting"})
-_RECALL_SKIP_CONFIDENCE = 0.8
-_HISTORY_LIMIT = 10
-
-# Below this confidence we don't trust the intent classifier enough to fire
-# a real action. Falls through to the response_generator's clarification path.
-_ACTION_CONFIDENCE_FLOOR = 0.3
 
 
 class NAILAOrchestrationGraph:
@@ -118,19 +115,35 @@ class NAILAOrchestrationGraph:
 
         # Skip recall for high-confidence simple intents — they don't benefit
         # from history and the SQLite roundtrip is wasted work.
-        if intent in _RECALL_SKIP_INTENTS and confidence > _RECALL_SKIP_CONFIDENCE:
-            logger.debug("skipping_recall", intent=intent, reason="simple_query")
+        if intent in _RECALL_SKIP_INTENTS and confidence > orch_config.RECALL_SKIP_CONFIDENCE:
+            logger.info("skipping_recall", intent=intent, confidence=confidence, reason="simple_query")
             state["conversation_history"] = []
             return state
 
         if not device_id:
+            logger.info("skipping_recall", reason="missing_device_id")
             state["conversation_history"] = []
             return state
 
         try:
-            recent = self.memory.recall_recent(device_id, n=_HISTORY_LIMIT)
+            recent = self.memory.recall_recent(device_id, n=orch_config.HISTORY_LIMIT)
             state["conversation_history"] = list(reversed(recent))
-            logger.debug("history_recalled", device_id=device_id, count=len(recent))
+            preview = [
+                {
+                    "intent": e.get("intent"),
+                    "user": (e.get("user") or "")[:60],
+                    "assistant": (e.get("assistant") or "")[:60],
+                }
+                for e in state["conversation_history"]
+            ]
+            logger.info(
+                "history_recalled",
+                device_id=device_id,
+                intent=intent,
+                count=len(recent),
+                limit=orch_config.HISTORY_LIMIT,
+                exchanges=preview,
+            )
         except Exception as e:
             logger.error(
                 "context_retrieval_error",
@@ -162,7 +175,7 @@ class NAILAOrchestrationGraph:
         intent = state.get("intent")
         confidence = state.get("confidence", 1.0)
 
-        if confidence < _ACTION_CONFIDENCE_FLOOR:
+        if confidence < orch_config.ACTION_CONFIDENCE_FLOOR:
             return state
 
         handler = action_registry.get(intent)

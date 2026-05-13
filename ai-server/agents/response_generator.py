@@ -3,9 +3,9 @@
 import asyncio
 import time
 from typing import Any, Dict, List, Optional
-from datetime import datetime
 from cachetools import TTLCache
 from agents.base import BaseAgent
+from config import llm as llm_config
 
 
 class ResponseGenerator(BaseAgent):
@@ -126,7 +126,7 @@ class ResponseGenerator(BaseAgent):
             # streaming-disabled, or streaming returned no text.
             response = await self._generate_response(
                 intent, processed_text, context, conversation_history, confidence,
-                use_llm=use_llm, visual_context=visual_context,
+                device_id, use_llm=use_llm, visual_context=visual_context,
             )
 
         # Add response metadata
@@ -280,6 +280,7 @@ class ResponseGenerator(BaseAgent):
         context: Dict[str, Any],
         history: List[Dict],
         confidence: float,
+        device_id: str,
         use_llm: bool = False,
         visual_context: Optional[Dict[str, Any]] = None
     ) -> str:
@@ -316,8 +317,9 @@ class ResponseGenerator(BaseAgent):
             if intent == "question" and last_intent in ["time_query", "weather_query"]:
                 return self._generate_followup_response(intent, text, last_intent, last_exchange)
 
-        # Use cached response for repeated queries (speed optimization)
-        cache_key = f"{intent}:{text.lower().strip()}"
+        # Cache key includes device_id so two devices saying the same thing
+        # don't share base wording — matches the v1 device-scoped recall model.
+        cache_key = f"{device_id}:{intent}:{text.lower().strip()}"
         if cached_response := self._get_cached_response(cache_key):
             return self._personalize_response(cached_response, history)
 
@@ -332,7 +334,6 @@ class ResponseGenerator(BaseAgent):
         self,
         query: str,
         history: List[Dict],
-        timeout: float = 120.0,
         max_retries: int = 2,
         visual_context: Optional[Dict[str, Any]] = None
     ) -> str:
@@ -351,6 +352,7 @@ class ResponseGenerator(BaseAgent):
             self._augment_query_with_visual(query, visual_context), history,
         )
 
+        timeout = llm_config.MAX_INFERENCE_TIME_SECONDS
         last_exception = None
         for attempt in range(1, max_retries + 1):
             try:
@@ -410,16 +412,9 @@ class ResponseGenerator(BaseAgent):
         return base_response
     
     def _generate_base_response(self, intent: str, text: str, context: Dict, history: List) -> str:
-        """Generate base response for intent.
-
-        ``time_query`` is intentionally absent — it's action-handled by
-        ``agents.actions.time_handler`` before this code runs (chunk 3).
-        ``weather_query`` will move out the same way in chunk 4; until then
-        it stays here as a placeholder.
-        """
+        """Generate base response for intent."""
         responses = {
             "greeting": self._generate_greeting_response(context, history),
-            "weather_query": "I don't have weather data access yet, but I'm working on it!",
             "question": self._generate_question_response(text, context),
             "gratitude": self._generate_gratitude_response(history),
             "goodbye": self._generate_goodbye_response(context),
