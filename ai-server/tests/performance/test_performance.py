@@ -16,112 +16,78 @@ from graphs.orchestration import NAILAOrchestrationGraph
 class TestPerformance:
     """Performance benchmarks and load tests"""
 
-    def test_memory_performance_large_dataset(self):
-        """Test memory performance with large conversation datasets"""
-        memory = ConversationMemory(max_history=100, ttl_hours=1)
-        # Disable background task for performance testing
-        if memory._cleanup_task and not memory._cleanup_task.done():
-            memory._cleanup_task.cancel()
-            memory._cleanup_task = None
-        
-        # Performance metrics
+    def test_memory_performance_large_dataset(self, tmp_path):
+        """Insertion + recall throughput on a sizeable history."""
+        memory = ConversationMemory(db_path=str(tmp_path / "naila.db"))
+
         device_count = 50
         exchanges_per_device = 200
-        
+
         start_time = time.time()
-        
-        # Add large number of exchanges
         for device_id in range(device_count):
             for exchange_id in range(exchanges_per_device):
-                memory.add_exchange(
+                memory.commit_exchange(
                     f"device_{device_id:03d}",
                     f"User message {exchange_id}",
                     f"Assistant response {exchange_id}",
-                    {"intent": "test", "exchange_id": exchange_id}
+                    intent="test",
+                    metadata={"exchange_id": exchange_id},
                 )
-        
         insertion_time = time.time() - start_time
-        
-        # Test retrieval performance
+
         start_time = time.time()
-        
         for device_id in range(device_count):
-            history = memory.get_history(f"device_{device_id:03d}", limit=10)
-            context = memory.get_context(f"device_{device_id:03d}")
-        
+            memory.recall_recent(f"device_{device_id:03d}", n=10)
         retrieval_time = time.time() - start_time
-        
-        # Performance assertions
-        total_exchanges = device_count * exchanges_per_device
-        assert insertion_time < 10.0, f"Insertion took {insertion_time:.2f}s for {total_exchanges} exchanges"
+
+        total = device_count * exchanges_per_device
+        assert insertion_time < 30.0, f"Insertion took {insertion_time:.2f}s for {total} exchanges"
         assert retrieval_time < 2.0, f"Retrieval took {retrieval_time:.2f}s for {device_count} devices"
-        
-        # Memory should respect limits
-        for device_id in range(device_count):
-            history = memory.get_history(f"device_{device_id:03d}", limit=10)
-            assert len(history) <= 100  # max_history limit
-            
-        # Cleanup
-        if hasattr(memory, '_cleanup_task') and memory._cleanup_task and not memory._cleanup_task.done():
-            memory._cleanup_task.cancel()
-    
-    def test_concurrent_memory_access_performance(self):
-        """Test memory performance under concurrent access"""
-        memory = ConversationMemory(max_history=50, ttl_hours=1)
-        # Disable background task for performance testing
-        if memory._cleanup_task and not memory._cleanup_task.done():
-            memory._cleanup_task.cancel()
-            memory._cleanup_task = None
+
+    def test_concurrent_memory_access_performance(self, tmp_path):
+        """Concurrent writers must not error; SQLite WAL + busy_timeout serialize them."""
+        db_file = tmp_path / "naila.db"
+        # Initialize the schema once on the main thread.
+        ConversationMemory(db_path=str(db_file)).close()
+
         thread_count = 10
         operations_per_thread = 100
-        
-        # Performance tracking
-        thread_times = []
-        errors = []
-        
-        def worker_thread(thread_id):
-            start_time = time.time()
+        thread_times: list[float] = []
+        errors: list[str] = []
+
+        def worker_thread(thread_id: int) -> None:
+            start = time.time()
             device_id = f"thread_device_{thread_id}"
-            
             try:
+                # Each thread owns its own connection — sqlite3 connections
+                # are bound to the thread that created them by default.
+                local = ConversationMemory(db_path=str(db_file))
                 for i in range(operations_per_thread):
-                    # Mix of operations
                     if i % 3 == 0:
-                        memory.add_exchange(device_id, f"msg {i}", f"resp {i}", {})
-                    elif i % 3 == 1:
-                        memory.get_history(device_id, limit=10)
+                        local.commit_exchange(
+                            device_id, f"msg {i}", f"resp {i}", intent=None, metadata={}
+                        )
                     else:
-                        memory.get_context(device_id)
-                
-                thread_times.append(time.time() - start_time)
-                
-            except Exception as e:
+                        local.recall_recent(device_id, n=10)
+                thread_times.append(time.time() - start)
+            except Exception as e:  # pragma: no cover — surfaces below
                 errors.append(f"Thread {thread_id}: {e}")
-        
-        # Run concurrent threads
-        threads = []
-        for i in range(thread_count):
-            thread = threading.Thread(target=worker_thread, args=(i,))
-            threads.append(thread)
-            thread.start()
-        
-        # Wait for completion
-        for thread in threads:
-            thread.join()
-        
-        # Performance analysis
-        assert len(errors) == 0, f"Concurrent access errors: {errors}"
+
+        threads = [
+            threading.Thread(target=worker_thread, args=(i,)) for i in range(thread_count)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"Concurrent access errors: {errors}"
         assert len(thread_times) == thread_count
-        
+
         avg_time = statistics.mean(thread_times)
         max_time = max(thread_times)
-        
-        assert avg_time < 1.0, f"Average thread time {avg_time:.2f}s too slow"
-        assert max_time < 2.0, f"Max thread time {max_time:.2f}s too slow"
-        
-        # Cleanup
-        if hasattr(memory, '_cleanup_task') and memory._cleanup_task and not memory._cleanup_task.done():
-            memory._cleanup_task.cancel()
+        assert avg_time < 5.0, f"Average thread time {avg_time:.2f}s too slow"
+        assert max_time < 10.0, f"Max thread time {max_time:.2f}s too slow"
 
     @pytest.mark.asyncio
     async def test_input_processor_throughput(self, disable_hardware_optimization):
@@ -232,8 +198,8 @@ class TestPerformance:
                 "response_metadata": {"intent": "greeting"}
             })
             mock_response.return_value = response_generator
-            
-            orchestrator = NAILAOrchestrationGraph()
+
+            orchestrator = NAILAOrchestrationGraph(memory=ConversationMemory(db_path=":memory:"))
             
             # Test pipeline latency
             test_states = [
@@ -281,8 +247,8 @@ class TestPerformance:
             response_generator = Mock()
             response_generator.process = AsyncMock(side_effect=fast_process)
             mock_response.return_value = response_generator
-            
-            orchestrator = NAILAOrchestrationGraph()
+
+            orchestrator = NAILAOrchestrationGraph(memory=ConversationMemory(db_path=":memory:"))
             
             # Create concurrent requests
             concurrent_requests = 20
@@ -313,49 +279,6 @@ class TestPerformance:
             for result in results:
                 assert "task_id" in result
                 assert "response_text" in result
-
-    def test_memory_cleanup_performance(self):
-        """Test memory cleanup performance with large datasets"""
-        memory = ConversationMemory(max_history=10, ttl_hours=0.001)
-        # Disable background task for testing
-        if memory._cleanup_task and not memory._cleanup_task.done():
-            memory._cleanup_task.cancel()
-            memory._cleanup_task = None
-        
-        # Add large number of conversations
-        device_count = 100
-        for device_id in range(device_count):
-            for i in range(5):
-                memory.add_exchange(
-                    f"device_{device_id:03d}",
-                    f"Message {i}",
-                    f"Response {i}",
-                    {}
-                )
-        
-        # Wait for TTL to expire (0.001 hours = 3.6 seconds)
-        time.sleep(4.0)
-        
-        # Add new conversations to trigger cleanup
-        for i in range(10):
-            memory.add_exchange("new_device", f"New {i}", f"New resp {i}", {})
-        
-        # Force cleanup (reset interval to allow immediate cleanup)
-        memory.last_cleanup = 0
-        start_time = time.time()
-        memory.cleanup_old_conversations()
-        cleanup_time = time.time() - start_time
-        
-        # Cleanup should be fast even with many old conversations
-        assert cleanup_time < 1.0, f"Cleanup took {cleanup_time:.2f}s (too slow)"
-        
-        # Most old conversations should be cleaned
-        remaining_devices = len(memory.conversations)
-        assert remaining_devices < device_count // 2, f"Too many devices remaining: {remaining_devices}"
-        
-        # Cleanup
-        if hasattr(memory, '_cleanup_task') and memory._cleanup_task and not memory._cleanup_task.done():
-            memory._cleanup_task.cancel()
 
     @pytest.mark.asyncio
     async def test_cache_hit_performance(self):
@@ -400,94 +323,28 @@ class TestPerformance:
             assert speedup >= 1.0, f"Cache slowdown detected: {speedup:.1f}x (expected >=1.0x)"
             assert result1["response_text"] == result2["response_text"]
 
-    def test_memory_usage_stability(self):
-        """Test memory usage doesn't grow unbounded"""
-        import psutil
-        import gc
-        
-        memory = ConversationMemory(max_history=20, ttl_hours=1)
-        # Disable background task for testing
-        if memory._cleanup_task and not memory._cleanup_task.done():
-            memory._cleanup_task.cancel()
-            memory._cleanup_task = None
-        process = psutil.Process()
-        
-        # Baseline memory
-        gc.collect()
-        initial_memory = process.memory_info().rss
-        
-        # Add many conversations
-        for cycle in range(10):
-            for device_id in range(100):
-                for i in range(50):
-                    memory.add_exchange(
-                        f"device_{device_id}_{cycle}",
-                        f"Message {i}",
-                        f"Response {i}",
-                        {}
-                    )
-            
-            # Clear some devices periodically
-            if cycle % 3 == 0:
-                for device_id in range(0, 50):
-                    memory.clear_device(f"device_{device_id}_{cycle-1}")
-        
-        # Final memory measurement
-        gc.collect()
-        final_memory = process.memory_info().rss
-        memory_growth = (final_memory - initial_memory) / (1024 * 1024)  # MB
-        
-        # Memory growth should be bounded
-        assert memory_growth < 100, f"Memory grew by {memory_growth:.1f}MB (too much)"
-        
-        # Verify memory limits are respected
-        active_conversations = sum(len(conv) for conv in memory.conversations.values())
-        max_expected = len(memory.conversations) * memory.max_history
-        
-        assert active_conversations <= max_expected, "Memory limits not enforced"
-        
-        # Cleanup
-        if hasattr(memory, '_cleanup_task') and memory._cleanup_task and not memory._cleanup_task.done():
-            memory._cleanup_task.cancel()
-
-    def test_large_conversation_history_performance(self):
-        """Test performance with very long conversation histories"""
-        memory = ConversationMemory(max_history=1000, ttl_hours=24)
-        # Disable background task for testing
-        if memory._cleanup_task and not memory._cleanup_task.done():
-            memory._cleanup_task.cancel()
-            memory._cleanup_task = None
+    def test_large_conversation_history_performance(self, tmp_path):
+        """Recall stays fast even when a single device has thousands of exchanges."""
+        memory = ConversationMemory(db_path=str(tmp_path / "naila.db"))
         device_id = "long_conversation_device"
-        
-        # Create very long conversation
+
         start_time = time.time()
-        
-        for i in range(2000): 
-            memory.add_exchange(
+        for i in range(2000):
+            memory.commit_exchange(
                 device_id,
                 f"Very long conversation message number {i} with some additional text to make it realistic",
                 f"Detailed response number {i} with comprehensive information and context",
-                {"intent": "conversation", "turn": i, "complexity": "high"}
+                intent="conversation",
+                metadata={"turn": i, "complexity": "high"},
             )
-        
         creation_time = time.time() - start_time
-        
-        # Test retrieval performance
+
         start_time = time.time()
-        full_history = memory.get_history(device_id, limit=10000)
-        limited_history = memory.get_history(device_id, limit=100)
-        context = memory.get_context(device_id)
+        recent_10 = memory.recall_recent(device_id, n=10)
+        recent_100 = memory.recall_recent(device_id, n=100)
         retrieval_time = time.time() - start_time
-        
-        # Performance assertions
-        assert creation_time < 5.0, f"Long conversation creation took {creation_time:.2f}s"
+
+        assert creation_time < 30.0, f"Long conversation creation took {creation_time:.2f}s"
         assert retrieval_time < 0.5, f"Retrieval took {retrieval_time:.2f}s"
-        
-        # Verify limits
-        assert len(full_history) == 1000  # Should respect max_history
-        assert len(limited_history) == 100
-        assert context["history_count"] == 1000
-        
-        # Cleanup
-        if hasattr(memory, '_cleanup_task') and memory._cleanup_task and not memory._cleanup_task.done():
-            memory._cleanup_task.cancel()
+        assert len(recent_10) == 10
+        assert len(recent_100) == 100

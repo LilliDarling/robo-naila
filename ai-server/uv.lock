@@ -78,7 +78,7 @@ requires-dist = [
     { name = "langgraph", specifier = ">=1.0.2" },
     { name = "llama-cpp-python", specifier = ">=0.3.16" },
     { name = "num2words", specifier = ">=0.5.14" },
-    { name = "numpy", specifier = ">=2.3.4" },
+    { name = "numpy", specifier = ">=2.3.4,<2.4" },
     { name = "opencv-python", specifier = ">=4.11.0.86" },
     { name = "paho-mqtt", specifier = ">=2.1.0" },
     { name = "pillow", specifier = ">=12.0.0" },

@@ -1,22 +1,36 @@
 """Main orchestration graph for NAILA using LangGraph"""
 
-from datetime import datetime
 from typing import Any, Dict, Optional
 from langgraph.graph import StateGraph, END
 from langchain_core.runnables import RunnableConfig
 from graphs.states import NAILAState
 from agents.input_processor import InputProcessor
 from agents.response_generator import ResponseGenerator
+from agents.actions import registry as action_registry
+# Import handler modules so their module-level ``register`` calls run on graph
+# construction. Add new handlers here when they ship.
+from agents.actions import time_handler  # noqa: F401  (registered via import)
+from agents.actions import weather_handler  # noqa: F401  (registered via import)
+from memory.conversation import ConversationMemory
+from config import orchestration as orch_config
 from utils import get_logger
 
 
 logger = get_logger(__name__)
 
+# Intents that don't benefit from history when we're already confident.
+# ``time_query`` doesn't depend on prior turns; ``greeting`` is the same.
+# Skipping recall for these saves a SQLite roundtrip per turn. Kept in
+# source (not config) because this is a design choice about which intents
+# are stateless, not a numeric tuning dial.
+_RECALL_SKIP_INTENTS = frozenset({"time_query", "greeting"})
+
 
 class NAILAOrchestrationGraph:
     """Main orchestration workflow for NAILA"""
 
-    def __init__(self, llm_service=None, tts_service=None, vision_service=None):
+    def __init__(self, memory: ConversationMemory, llm_service=None, tts_service=None, vision_service=None):
+        self.memory = memory
         self.llm_service = llm_service
         self.tts_service = tts_service
         self.vision_service = vision_service
@@ -37,6 +51,7 @@ class NAILAOrchestrationGraph:
         workflow.add_node("process_input", self._process_input)
         workflow.add_node("process_vision", self._process_vision)
         workflow.add_node("retrieve_context", self._retrieve_context)
+        workflow.add_node("dispatch_action", self._dispatch_action)
         workflow.add_node("generate_response", self._generate_response)
         workflow.add_node("execute_actions", self._execute_actions)
 
@@ -44,7 +59,11 @@ class NAILAOrchestrationGraph:
         workflow.set_entry_point("process_input")
         workflow.add_edge("process_input", "process_vision")
         workflow.add_edge("process_vision", "retrieve_context")
-        workflow.add_edge("retrieve_context", "generate_response")
+        # dispatch_action runs between context retrieval and response generation
+        # so action handlers can short-circuit the LLM path while still using
+        # any context the previous nodes loaded.
+        workflow.add_edge("retrieve_context", "dispatch_action")
+        workflow.add_edge("dispatch_action", "generate_response")
         workflow.add_edge("generate_response", "execute_actions")
         workflow.add_edge("execute_actions", END)
 
@@ -83,33 +102,56 @@ class NAILAOrchestrationGraph:
         return state
 
     async def _retrieve_context(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Retrieve additional context safely"""
+        """Load recent exchanges from memory into ``state["conversation_history"]``.
+
+        Memory returns newest-first (``ts DESC``); LLM consumers want
+        chronological order, so we reverse before storing. Memory is canonical
+        — every path here writes ``conversation_history`` directly so a stale
+        caller-provided value can never leak into the turn.
+        """
         device_id = state.get("device_id", "")
         intent = state.get("intent", "")
         confidence = state.get("confidence", 1.0)
 
-        # Skip context retrieval for simple, high-confidence queries (performance optimization)
-        if intent in ["time_query", "greeting"] and confidence > 0.8:
-            logger.debug("skipping_context_retrieval", intent=intent, reason="simple_query")
+        # Skip recall for high-confidence simple intents — they don't benefit
+        # from history and the SQLite roundtrip is wasted work.
+        if intent in _RECALL_SKIP_INTENTS and confidence > orch_config.RECALL_SKIP_CONFIDENCE:
+            logger.info("skipping_recall", intent=intent, confidence=confidence, reason="simple_query")
+            state["conversation_history"] = []
+            return state
+
+        if not device_id:
+            logger.info("skipping_recall", reason="missing_device_id")
+            state["conversation_history"] = []
             return state
 
         try:
-            # Safe context enhancement - create new dict to avoid mutation race conditions
-            enhanced_context = dict(state.get("context", {}))
-            enhanced_context["context_retrieved"] = True
-            enhanced_context["retrieval_timestamp"] = datetime.now().isoformat()
-
-            # Could add more context sources here:
-            # - Recent device interactions
-            # - User preferences
-            # - Environmental context
-
-            state["context"] = enhanced_context
-            logger.debug("context_enhanced", device_id=device_id)
-
+            recent = self.memory.recall_recent(device_id, n=orch_config.HISTORY_LIMIT)
+            state["conversation_history"] = list(reversed(recent))
+            preview = [
+                {
+                    "intent": e.get("intent"),
+                    "user": (e.get("user") or "")[:60],
+                    "assistant": (e.get("assistant") or "")[:60],
+                }
+                for e in state["conversation_history"]
+            ]
+            logger.info(
+                "history_recalled",
+                device_id=device_id,
+                intent=intent,
+                count=len(recent),
+                limit=orch_config.HISTORY_LIMIT,
+                exchanges=preview,
+            )
         except Exception as e:
-            logger.error("context_retrieval_error", device_id=device_id, error=str(e), error_type=type(e).__name__)
-            # Don't fail the whole pipeline for context issues
+            logger.error(
+                "context_retrieval_error",
+                device_id=device_id,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            state["conversation_history"] = []
 
         return state
     
@@ -121,6 +163,43 @@ class NAILAOrchestrationGraph:
             logger.error("input_processing_error", error=str(e), error_type=type(e).__name__)
             state.setdefault("errors", []).append(str(e))
             return state
+
+    async def _dispatch_action(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Look up the intent in the action registry and run the handler if found.
+
+        On success, sets ``state["response_text"]`` and ``state["action_handled"]``;
+        the response_generator's short-circuit then skips the LLM/streaming path.
+        On no-handler / low-confidence / handler error, passes through unchanged
+        so the LLM path can take over.
+        """
+        intent = state.get("intent")
+        confidence = state.get("confidence", 1.0)
+
+        if confidence < orch_config.ACTION_CONFIDENCE_FLOOR:
+            return state
+
+        handler = action_registry.get(intent)
+        if handler is None:
+            return state
+
+        try:
+            response = await handler(
+                state.get("processed_text", ""),
+                {"device_id": state.get("device_id", "")},
+            )
+            state["response_text"] = response
+            state["action_handled"] = True
+            logger.info("action_dispatched", intent=intent)
+        except Exception as e:
+            # Don't abort the turn — let the LLM path fall through and answer.
+            logger.error(
+                "action_handler_error",
+                intent=intent,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+
+        return state
 
     async def _generate_response(self, state: Dict[str, Any], config: RunnableConfig = None) -> Dict[str, Any]:
         """Generate response node — passes LangGraph config through for transport callbacks"""

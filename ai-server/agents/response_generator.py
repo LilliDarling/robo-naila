@@ -3,9 +3,9 @@
 import asyncio
 import time
 from typing import Any, Dict, List, Optional
-from datetime import datetime
 from cachetools import TTLCache
 from agents.base import BaseAgent
+from config import llm as llm_config
 
 
 class ResponseGenerator(BaseAgent):
@@ -49,6 +49,17 @@ class ResponseGenerator(BaseAgent):
         device_id = state.get("device_id", "")
         visual_context = state.get("visual_context")
 
+        # ── Action-handler short-circuit ──────────────────────────────────────
+        # When ``dispatch_action`` already produced a response, skip the LLM and
+        # streaming paths entirely. Per docs/INTELLIGENCE_ARCHITECTURE.md §3.1
+        # this MUST be checked BEFORE any streaming flags are wired, otherwise
+        # the audio_delivery callback / is_final lookahead fire on text that
+        # has no LLM stream behind it. The non-streaming TTS block at the
+        # bottom still runs on the action text (action responses still need
+        # audio output on gRPC / audio-input transports).
+        action_handled = bool(state.get("action_handled"))
+        # ─────────────────────────────────────────────────────────────────────
+
         # Check LLM readiness dynamically
         use_llm = self.llm_service is not None and self.llm_service.is_ready
 
@@ -74,18 +85,24 @@ class ResponseGenerator(BaseAgent):
         visual_short_circuit = bool(
             visual_context and (visual_context.get("answer") or visual_context.get("description"))
         )
+        # Streaming is forbidden when an action handler already answered: it
+        # would invoke the LLM/streaming callbacks against text that has no
+        # underlying token stream. Recompute can_stream with that veto baked in.
         can_stream = (
             use_llm
             and needs_audio
             and audio_delivery is not None
             and tts_ready
             and not visual_short_circuit
+            and not action_handled
             and confidence >= 0.3
         )
 
         response = ""
         streamed = False
-        if can_stream:
+        if action_handled:
+            response = state.get("response_text", "") or ""
+        elif can_stream:
             try:
                 response = await self._stream_response_to_audio(
                     processed_text,
@@ -104,12 +121,12 @@ class ResponseGenerator(BaseAgent):
                 )
                 response = ""
 
-        if not response:
+        if not response and not action_handled:
             # Non-streaming fallback: visual short-circuit, low confidence,
             # streaming-disabled, or streaming returned no text.
             response = await self._generate_response(
                 intent, processed_text, context, conversation_history, confidence,
-                use_llm=use_llm, visual_context=visual_context,
+                device_id, use_llm=use_llm, visual_context=visual_context,
             )
 
         # Add response metadata
@@ -117,7 +134,7 @@ class ResponseGenerator(BaseAgent):
             "intent": intent,
             "confidence": confidence,
             "generation_time_ms": int((time.time() - start_time) * 1000),
-            "context_used": bool(context.get("recent_exchanges")),
+            "context_used": bool(conversation_history),
             "device_id": device_id,
             "streamed": streamed,
         }
@@ -263,6 +280,7 @@ class ResponseGenerator(BaseAgent):
         context: Dict[str, Any],
         history: List[Dict],
         confidence: float,
+        device_id: str,
         use_llm: bool = False,
         visual_context: Optional[Dict[str, Any]] = None
     ) -> str:
@@ -293,29 +311,29 @@ class ResponseGenerator(BaseAgent):
         # Check for conversation continuity
         if history:
             last_exchange = history[-1]
-            last_intent = last_exchange.get("metadata", {}).get("intent", "")
+            last_intent = last_exchange.get("intent") or last_exchange.get("metadata", {}).get("intent", "")
 
             # Handle follow-up questions
             if intent == "question" and last_intent in ["time_query", "weather_query"]:
                 return self._generate_followup_response(intent, text, last_intent, last_exchange)
 
-        # Use cached response for repeated queries (speed optimization)
-        cache_key = f"{intent}:{text.lower().strip()}"
+        # Cache key includes device_id so two devices saying the same thing
+        # don't share base wording — matches the v1 device-scoped recall model.
+        cache_key = f"{device_id}:{intent}:{text.lower().strip()}"
         if cached_response := self._get_cached_response(cache_key):
-            return self._personalize_response(cached_response, context)
+            return self._personalize_response(cached_response, history)
 
         # Generate new response
         response = self._generate_base_response(intent, text, context, history)
         self._cache_response(cache_key, response)
 
         # Apply personalization to new responses too
-        return self._personalize_response(response, context)
+        return self._personalize_response(response, history)
 
     async def _generate_llm_response(
         self,
         query: str,
         history: List[Dict],
-        timeout: float = 120.0,
         max_retries: int = 2,
         visual_context: Optional[Dict[str, Any]] = None
     ) -> str:
@@ -334,6 +352,7 @@ class ResponseGenerator(BaseAgent):
             self._augment_query_with_visual(query, visual_context), history,
         )
 
+        timeout = llm_config.MAX_INFERENCE_TIME_SECONDS
         last_exception = None
         for attempt in range(1, max_retries + 1):
             try:
@@ -379,25 +398,23 @@ class ResponseGenerator(BaseAgent):
         """Cache response (TTLCache handles eviction and TTL automatically)"""
         self._response_cache[cache_key] = response
     
-    def _personalize_response(self, base_response: str, context: Dict[str, Any]) -> str:
-        """Add personalization based on context"""
-        history_count = context.get("history_count", 0)
-        
+    def _personalize_response(self, base_response: str, history: List[Dict]) -> str:
+        """Tweak response wording based on how deep into the conversation we are."""
+        history_count = len(history)
+
         if history_count > 5:
             # Long conversation - be more casual
             return base_response.replace("How can I help you", "What else can I do for you")
         elif history_count == 0:
             # First interaction - be welcoming
             return base_response.replace("Hello!", "Hello there! Nice to meet you.")
-        
+
         return base_response
     
     def _generate_base_response(self, intent: str, text: str, context: Dict, history: List) -> str:
-        """Generate base response for intent"""
+        """Generate base response for intent."""
         responses = {
             "greeting": self._generate_greeting_response(context, history),
-            "time_query": f"The current time is {datetime.now().strftime('%I:%M %p')}",
-            "weather_query": "I don't have weather data access yet, but I'm working on it!",
             "question": self._generate_question_response(text, context),
             "gratitude": self._generate_gratitude_response(history),
             "goodbye": self._generate_goodbye_response(context),

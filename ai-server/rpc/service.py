@@ -39,6 +39,15 @@ TTS_CHUNK_BYTES = 4800
 # Max audio buffer: ~60s of 16-bit mono at 48kHz = ~5.76 MB
 MAX_AUDIO_BUFFER_BYTES = 6 * 1024 * 1024
 
+# Below this duration a SPEECH_EVENT_END is treated as spurious — noise,
+# mic bleed from NAILA's own TTS, or a VAD glitch. Whisper reliably returns
+# empty transcriptions for clips this short, and processing them cancels any
+# in-flight response from a legitimate prior utterance (the cancel-on-new
+# logic in _read_inputs fires before STT runs). 450ms covers observed noise
+# (~380-440ms) without dropping the shortest legitimate utterances seen
+# (~480ms for "How are you?").
+MIN_UTTERANCE_DURATION_MS = 450
+
 
 def _pcm_to_wav(pcm_bytes: bytes, sample_rate: int, channels: int = 1, sample_width: int = 2) -> bytes:
     """Wrap raw PCM S16LE bytes in a WAV header for soundfile compatibility.
@@ -295,6 +304,20 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                             audio_bytes=len(audio_buffer),
                             duration_ms=duration_ms,
                         )
+
+                        # Drop spurious short clips before they can cancel an
+                        # in-flight response. See MIN_UTTERANCE_DURATION_MS.
+                        if duration_ms < MIN_UTTERANCE_DURATION_MS:
+                            logger.info(
+                                "speech_end_discarded",
+                                device_id=device_id,
+                                conversation_id=conversation_id,
+                                duration_ms=duration_ms,
+                                threshold_ms=MIN_UTTERANCE_DURATION_MS,
+                                reason="below_min_duration",
+                            )
+                            audio_buffer.clear()
+                            continue
 
                         # Cancel any prior processing before starting a new one
                         if processing_task and not processing_task.done():
@@ -649,7 +672,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
 
         async def _run_orchestration():
             try:
-                await self.orchestrator.process_task_with_callback(
+                await self.orchestrator.process_task(
                     task_data,
                     audio_delivery=_grpc_audio_delivery,
                     transport="grpc",

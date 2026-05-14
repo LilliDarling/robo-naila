@@ -112,59 +112,46 @@ def basic_state():
 
 @pytest.fixture
 def clean_memory():
-    """Fresh conversation memory instance"""
-    from unittest.mock import patch
-    with patch('memory.conversation.ConversationMemory._start_background_cleanup'):
-        memory = ConversationMemory(max_history=5, ttl_hours=1)
-        # Ensure cleanup task is None for testing
-        memory._cleanup_task = None
-    yield memory
+    """Fresh in-memory conversation store. Per-test isolation."""
+    return ConversationMemory(db_path=":memory:")
 
 
 @pytest.fixture
 def populated_memory():
-    """Memory instance with test data"""
-    from unittest.mock import patch
-    with patch('memory.conversation.ConversationMemory._start_background_cleanup'):
-        memory = ConversationMemory(max_history=5, ttl_hours=1)
-        # Ensure cleanup task is None for testing
-        memory._cleanup_task = None
+    """Memory pre-seeded with two devices' worth of test exchanges."""
+    memory = ConversationMemory(db_path=":memory:")
 
-    # Add some test conversations
-    memory.add_exchange(
+    memory.commit_exchange(
         "robot_001",
         "Hello",
         "Hi there! How can I help you?",
-        {"intent": "greeting"}
+        intent="greeting",
+        metadata={},
     )
-    memory.add_exchange(
+    memory.commit_exchange(
         "robot_001",
         "What time is it?",
         "The current time is 10:30 AM",
-        {"intent": "time_query"}
+        intent="time_query",
+        metadata={},
     )
-    memory.add_exchange(
+    memory.commit_exchange(
         "robot_002",
         "Weather today?",
         "I don't have weather data yet",
-        {"intent": "weather_query"}
+        intent="weather_query",
+        metadata={},
     )
 
-    yield memory
+    return memory
 
 
 @pytest.fixture
 def memory_with_history():
-    """Memory with extensive conversation history"""
-    from unittest.mock import patch
-    with patch('memory.conversation.ConversationMemory._start_background_cleanup'):
-        memory = ConversationMemory(max_history=10, ttl_hours=1)
-        # Ensure cleanup task is None for testing
-        memory._cleanup_task = None
-
+    """Memory pre-seeded with a single device's longer conversation."""
+    memory = ConversationMemory(db_path=":memory:")
     device_id = "test_device"
 
-    # Add a longer conversation
     exchanges = [
         ("Hi", "Hello! How can I help?", "greeting"),
         ("What's your name?", "I'm NAILA, your AI assistant", "question"),
@@ -173,10 +160,10 @@ def memory_with_history():
         ("How's the weather?", "I don't have weather access yet", "weather_query"),
         ("Can you help me?", "Of course! What do you need help with?", "question"),
         ("What can you do?", "I can answer questions and have conversations", "question"),
-        ("That's great", "I'm glad you think so!", "general")
+        ("That's great", "I'm glad you think so!", "general"),
     ]
 
     for user_msg, assistant_msg, intent in exchanges:
-        memory.add_exchange(device_id, user_msg, assistant_msg, {"intent": intent})
+        memory.commit_exchange(device_id, user_msg, assistant_msg, intent=intent, metadata={})
 
-    yield memory
+    return memory

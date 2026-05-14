@@ -8,7 +8,14 @@ import pytest
 from PIL import Image
 
 from graphs.orchestration import NAILAOrchestrationGraph
+from memory.conversation import ConversationMemory
 from services.vision import VisionService
+
+
+@pytest.fixture
+def memory():
+    """Per-test in-memory conversation store — isolated and fast."""
+    return ConversationMemory(db_path=":memory:")
 
 
 @pytest.fixture
@@ -37,27 +44,27 @@ class TestVisionOrchestration:
     """Test vision integration with orchestration graph"""
 
     @pytest.mark.asyncio
-    async def test_orchestration_with_vision_service(self, vision_service, sample_image_bytes):
+    async def test_orchestration_with_vision_service(self, memory, vision_service, sample_image_bytes):
         """Test that orchestration graph accepts vision service"""
-        graph = NAILAOrchestrationGraph(vision_service=vision_service)
+        graph = NAILAOrchestrationGraph(memory=memory, vision_service=vision_service)
         assert graph.vision_service is not None
         assert graph.vision_service.is_ready
 
     @pytest.mark.asyncio
-    async def test_vision_node_in_workflow(self, vision_service):
+    async def test_vision_node_in_workflow(self, memory, vision_service):
         """Test that vision node is added when vision service provided"""
-        graph = NAILAOrchestrationGraph(vision_service=vision_service)
+        graph = NAILAOrchestrationGraph(memory=memory, vision_service=vision_service)
         # Vision node should be in the workflow
         assert "process_vision" in list(graph.workflow.nodes)
 
     @pytest.mark.asyncio
-    async def test_orchestration_without_vision_service(self):
+    async def test_orchestration_without_vision_service(self, memory):
         """Test that orchestration works without vision service
 
         Vision node is always present in the graph (static topology), but gracefully
         skips processing when vision service is unavailable.
         """
-        graph = NAILAOrchestrationGraph(vision_service=None)
+        graph = NAILAOrchestrationGraph(memory=memory, vision_service=None)
         assert graph.vision_service is None
         # Vision node is always present (static topology)
         assert "process_vision" in list(graph.workflow.nodes)
@@ -79,9 +86,9 @@ class TestVisionOrchestration:
         assert "visual_context" not in result or result.get("visual_context") is None
 
     @pytest.mark.asyncio
-    async def test_vision_processing_with_image_data(self, vision_service, sample_image_bytes):
+    async def test_vision_processing_with_image_data(self, memory, vision_service, sample_image_bytes):
         """Test vision processing node with actual image data"""
-        graph = NAILAOrchestrationGraph(vision_service=vision_service)
+        graph = NAILAOrchestrationGraph(memory=memory, vision_service=vision_service)
 
         initial_state = {
             "device_id": "test_device",
@@ -109,9 +116,9 @@ class TestVisionOrchestration:
         assert "object_counts" in result["visual_context"]
 
     @pytest.mark.asyncio
-    async def test_vision_query_with_answer(self, vision_service, sample_image_bytes):
+    async def test_vision_query_with_answer(self, memory, vision_service, sample_image_bytes):
         """Test vision query that generates an answer"""
-        graph = NAILAOrchestrationGraph(vision_service=vision_service)
+        graph = NAILAOrchestrationGraph(memory=memory, vision_service=vision_service)
 
         initial_state = {
             "device_id": "test_device",
@@ -138,9 +145,9 @@ class TestVisionOrchestration:
         assert "description" in result["visual_context"]
 
     @pytest.mark.asyncio
-    async def test_orchestration_without_image_data(self, vision_service):
+    async def test_orchestration_without_image_data(self, memory, vision_service):
         """Test that vision node is skipped when no image data"""
-        graph = NAILAOrchestrationGraph(vision_service=vision_service)
+        graph = NAILAOrchestrationGraph(memory=memory, vision_service=vision_service)
 
         initial_state = {
             "device_id": "test_device",
@@ -166,9 +173,9 @@ class TestVisionOrchestration:
         assert result.get("response_text") is not None
 
     @pytest.mark.asyncio
-    async def test_response_uses_visual_context(self, vision_service, sample_image_bytes):
+    async def test_response_uses_visual_context(self, memory, vision_service, sample_image_bytes):
         """Test that response generator uses visual context"""
-        graph = NAILAOrchestrationGraph(vision_service=vision_service)
+        graph = NAILAOrchestrationGraph(memory=memory, vision_service=vision_service)
 
         initial_state = {
             "device_id": "test_device",

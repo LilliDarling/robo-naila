@@ -13,7 +13,7 @@ MODEL_TYPE = "llama"  # Model architecture type
 # Larger contexts waste VRAM on KV cache and slow down inference significantly.
 CONTEXT_SIZE = int(os.getenv("LLM_CONTEXT_SIZE", "4096"))
 MAX_TOKENS_PER_RESPONSE = int(os.getenv("LLM_MAX_TOKENS", "256"))
-CONTEXT_HISTORY_LIMIT = int(os.getenv("LLM_CONTEXT_HISTORY_LIMIT", "5"))
+CONTEXT_HISTORY_LIMIT = int(os.getenv("LLM_CONTEXT_HISTORY_LIMIT", "10"))
 TOKEN_BUDGET_FOR_HISTORY = int(os.getenv("LLM_TOKEN_BUDGET_HISTORY", "2000"))
 
 # Generation Parameters
@@ -44,7 +44,10 @@ LLAMA_3_END_HEADER = "<|end_header_id|>"
 LLAMA_3_EOT = "<|eot_id|>"
 
 # Performance Thresholds
-MAX_INFERENCE_TIME_SECONDS = 30.0  # Timeout for generation
+# Max wall-clock wait for a single generate_chat call. Note: on timeout
+# the model thread keeps running inside the executor — see the call site
+# at agents/response_generator.py for the cancellability constraint.
+MAX_INFERENCE_TIME_SECONDS = float(os.getenv("LLM_MAX_INFERENCE_TIME_SECONDS", "120.0"))
 WARNING_INFERENCE_TIME_SECONDS = 10.0  # Log warning if slower
 
 # Prompt Configuration

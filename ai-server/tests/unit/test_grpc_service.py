@@ -32,7 +32,7 @@ async def _async_iter(items):
 
 
 def _make_orchestrator_result(response_text="hi there", intent="greeting"):
-    """Build a mock orchestrator.process_task_with_callback result."""
+    """Build a mock orchestrator.process_task result."""
     return {
         "response_text": response_text,
         "intent": intent,
@@ -44,7 +44,7 @@ def _make_orchestrator_result(response_text="hi there", intent="greeting"):
 def _make_servicer(stt_text="hello", response_text="hi there", tts_bytes=b"\x00" * 100):
     """Return a NailaAIServicer with mocked STT service and orchestrator.
 
-    The orchestrator mock simulates the real flow: when process_task_with_callback
+    The orchestrator mock simulates the real flow: when process_task
     is called with an audio_delivery callback, it invokes the callback with TTS
     audio data (as the graph's ResponseGenerator would).
     """
@@ -54,7 +54,7 @@ def _make_servicer(stt_text="hello", response_text="hi there", tts_bytes=b"\x00"
     stt = MagicMock(is_ready=True)
     stt.transcribe_audio = AsyncMock(return_value=stt_result)
 
-    async def mock_process_task_with_callback(message_data, audio_delivery=None, transport="mqtt"):
+    async def mock_process_task(message_data, audio_delivery=None, transport="mqtt"):
         """Simulate the orchestrator running the graph and calling the audio delivery callback."""
         result = _make_orchestrator_result(response_text=response_text)
         if audio_delivery and tts_bytes:
@@ -62,7 +62,7 @@ def _make_servicer(stt_text="hello", response_text="hi there", tts_bytes=b"\x00"
         return result
 
     orchestrator = MagicMock()
-    orchestrator.process_task_with_callback = AsyncMock(side_effect=mock_process_task_with_callback)
+    orchestrator.process_task = AsyncMock(side_effect=mock_process_task)
 
     servicer = NailaAIServicer()
     servicer.set_stt_service(stt)
@@ -115,8 +115,8 @@ class TestStreamConversation:
         assert len(outputs) >= 1
         assert outputs[-1].is_final is True
         # Verify orchestrator was called (not direct LLM/TTS)
-        servicer.orchestrator.process_task_with_callback.assert_called_once()
-        call_kwargs = servicer.orchestrator.process_task_with_callback.call_args
+        servicer.orchestrator.process_task.assert_called_once()
+        call_kwargs = servicer.orchestrator.process_task.call_args
         assert call_kwargs.kwargs["transport"] == "grpc"
         assert call_kwargs.kwargs["audio_delivery"] is not None
 
@@ -131,7 +131,7 @@ class TestStreamConversation:
         async for _ in servicer.StreamConversation(_async_iter(inputs), _grpc_context()):
             pass
 
-        call_args = servicer.orchestrator.process_task_with_callback.call_args
+        call_args = servicer.orchestrator.process_task.call_args
         task_data = call_args.args[0] if call_args.args else call_args.kwargs.get("message_data", {})
         assert task_data["transcription"] == "what time is it"
         assert task_data["device_id"] == "dev1"
@@ -303,7 +303,7 @@ class TestServiceErrors:
     async def test_orchestrator_exception_yields_error(self):
         """When orchestrator raises, should yield an internal error."""
         servicer = _make_servicer()
-        servicer.orchestrator.process_task_with_callback = AsyncMock(
+        servicer.orchestrator.process_task = AsyncMock(
             side_effect=RuntimeError("graph failed")
         )
         inputs = [
@@ -332,7 +332,7 @@ class TestServiceErrors:
         assert len(outputs) == 1
         assert outputs[0].is_final is True
         # Orchestrator should NOT be called for empty transcriptions
-        servicer.orchestrator.process_task_with_callback.assert_not_called()
+        servicer.orchestrator.process_task.assert_not_called()
 
 
 # ── _extract_audio ───────────────────────────────────────────────────────────

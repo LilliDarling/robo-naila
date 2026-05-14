@@ -6,12 +6,18 @@ import json
 from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime, timezone
 from graphs.orchestration import NAILAOrchestrationGraph
+from memory.conversation import ConversationMemory
 from mqtt.core.models import MQTTMessage, TopicCategory
 
 
 class TestMQTTIntegration:
     """Integration tests for MQTT message processing flow"""
-    
+
+    @pytest.fixture
+    def memory(self):
+        """Per-test in-memory conversation store."""
+        return ConversationMemory(db_path=":memory:")
+
     @pytest.fixture
     def mock_mqtt_service(self):
         """Mock MQTT service for integration testing"""
@@ -32,17 +38,8 @@ class TestMQTTIntegration:
         service.publish.side_effect = capture_publish
         return service
     
-    @pytest.fixture
-    def orchestrator_with_mqtt(self, mock_mqtt_service):
-        """Orchestrator configured with mocked MQTT service"""
-        with patch('agents.input_processor.InputProcessor'), \
-             patch('agents.response_generator.ResponseGenerator'):
-            orchestrator = NAILAOrchestrationGraph()
-            orchestrator.mqtt_service = mock_mqtt_service
-            return orchestrator
-
     @pytest.mark.asyncio
-    async def test_stt_to_ai_response_flow(self, mock_mqtt_service):
+    async def test_stt_to_ai_response_flow(self, memory, mock_mqtt_service):
         """Test complete STT -> AI processing -> response flow"""
         # Incoming STT message
         stt_message = MQTTMessage(
@@ -101,7 +98,7 @@ class TestMQTTIntegration:
             })
             mock_response.return_value = response_generator
             
-            orchestrator = NAILAOrchestrationGraph()
+            orchestrator = NAILAOrchestrationGraph(memory=memory)
             
             # Convert MQTT message to orchestration state
             initial_state = {
@@ -115,10 +112,14 @@ class TestMQTTIntegration:
             # Process through orchestration
             result = await orchestrator.run(initial_state)
             
-            # Verify processing results (actual response generator returns current time)
-            assert "current time is" in result["response_text"].lower()
-            assert result["intent"] == "time_query" 
+            # Verify processing results: ``time_query`` is action-handled
+            # (see agents.actions.time_handler) and produces a templated reply
+            # like "It's 3:47 PM." — pin on AM/PM since the exact hour shifts.
+            assert "AM" in result["response_text"] or "PM" in result["response_text"]
+            assert result["intent"] == "time_query"
             assert result["device_id"] == "robot_001"
+            # Confirm the action substrate fired (not the LLM/pattern path).
+            assert result.get("action_handled") is True
             
             # Verify basic processing completed successfully (integration test)
             assert "task_id" in result
@@ -159,7 +160,7 @@ class TestMQTTIntegration:
         assert published["qos"] == 1
 
     @pytest.mark.asyncio
-    async def test_vision_and_text_multimodal_flow(self, mock_mqtt_service):
+    async def test_vision_and_text_multimodal_flow(self, memory, mock_mqtt_service):
         """Test processing flow with both vision and text inputs"""
         # Vision message
         vision_message = MQTTMessage(
@@ -229,7 +230,7 @@ class TestMQTTIntegration:
             })
             mock_response.return_value = response_generator
             
-            orchestrator = NAILAOrchestrationGraph()
+            orchestrator = NAILAOrchestrationGraph(memory=memory)
             result = await orchestrator.run(multimodal_state)
             
             # Verify multimodal processing (integration test uses real components)
@@ -294,7 +295,7 @@ class TestMQTTIntegration:
         assert validate_orchestration_message(invalid_message) == False
 
     @pytest.mark.asyncio
-    async def test_concurrent_device_processing(self, mock_mqtt_service):
+    async def test_concurrent_device_processing(self, memory, mock_mqtt_service):
         """Test processing messages from multiple devices concurrently"""
         # Messages from different devices
         device_messages = [
@@ -335,7 +336,7 @@ class TestMQTTIntegration:
             mock_input.return_value = input_processor
             mock_response.return_value = response_generator
             
-            orchestrator = NAILAOrchestrationGraph()
+            orchestrator = NAILAOrchestrationGraph(memory=memory)
             
             # Process all messages concurrently
             tasks = [orchestrator.run(msg) for msg in device_messages]
@@ -380,51 +381,40 @@ class TestMQTTIntegration:
     async def test_conversation_memory_integration(self, mock_mqtt_service):
         """Test integration between MQTT flow and conversation memory"""
         from memory.conversation import ConversationMemory
-        
-        memory = ConversationMemory(max_history=3, ttl_hours=1)
-        # Disable background task for testing
-        if memory._cleanup_task and not memory._cleanup_task.done():
-            memory._cleanup_task.cancel()
-            memory._cleanup_task = None
+
+        memory = ConversationMemory(db_path=":memory:")
         device_id = "robot_001"
-        
-        # Simulate conversation flow through MQTT
+
         conversation_turns = [
             ("Hello", "Hi there! How can I help?"),
             ("What time is it?", "The current time is 2:30 PM"),
-            ("Thank you", "You're welcome!")
+            ("Thank you", "You're welcome!"),
         ]
-        
+
         for user_msg, assistant_msg in conversation_turns:
-            # Add to memory (simulating orchestration result)
-            memory.add_exchange(device_id, user_msg, assistant_msg, {"intent": "test"})
-            
-            # Publish response via MQTT
+            memory.commit_exchange(
+                device_id, user_msg, assistant_msg, intent="test", metadata={}
+            )
             await mock_mqtt_service.publish(
                 "naila/ai/responses/text",
                 {
                     "device_id": device_id,
                     "response_text": assistant_msg,
-                    "user_input": user_msg
-                }
+                    "user_input": user_msg,
+                },
             )
-        
-        # Verify memory state
-        history = memory.get_history(device_id, limit=10)
+
+        # ``recall_recent`` returns newest-first.
+        history = memory.recall_recent(device_id, n=10)
         assert len(history) == 3
-        assert history[-1]["assistant"] == "You're welcome!"
-        
-        # Verify MQTT messages
+        assert history[0]["assistant"] == "You're welcome!"
+
         assert len(mock_mqtt_service.published_messages) == 3
         last_published = mock_mqtt_service.published_messages[-1]
         assert last_published["payload"]["response_text"] == "You're welcome!"
-        
-        # Cleanup
-        if hasattr(memory, '_cleanup_task') and memory._cleanup_task and not memory._cleanup_task.done():
-            memory._cleanup_task.cancel()
 
     @pytest.mark.asyncio
-    async def test_graceful_degradation_on_service_failure(self):
+    async def test_graceful_degradation_on_service_failure(self, memory):
         """Test system behavior when MQTT service is unavailable"""
         # Mock failed MQTT service
         failed_service = Mock()
@@ -434,7 +424,7 @@ class TestMQTTIntegration:
         with patch('agents.input_processor.InputProcessor'), \
              patch('agents.response_generator.ResponseGenerator'):
             
-            orchestrator = NAILAOrchestrationGraph()
+            orchestrator = NAILAOrchestrationGraph(memory=memory)
             
             # Processing should still work
             result = await orchestrator.run({
