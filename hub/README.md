@@ -17,7 +17,12 @@ The hub starts two subsystems:
 - **HTTP signaling server** on `0.0.0.0:8080`
 - **gRPC client** connecting to `http://127.0.0.1:50051` (the AI server)
 
-Both addresses are currently hardcoded defaults. The gRPC client reconnects automatically with exponential backoff (1s initial, 30s max) if the AI server is unavailable.
+Set `NAILA_AI_GRPC_URL=http://<ai-host>:50051` to use a remote AI server;
+omitting it preserves the loopback default. Include the `http://` scheme.
+The HTTP bind remains `0.0.0.0:8080`. The gRPC client reconnects automatically
+with exponential backoff (1s initial, 30s max) if the AI server is unavailable.
+
+For a Pi hub with orchestration on a separate Mac, see [Pi deployment](../docs/PI_HUB_SETUP.md).
 
 ## HTTP Endpoints
 

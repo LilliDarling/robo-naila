@@ -42,8 +42,9 @@ async fn main() {
     let grpc_cancel = cancel.clone();
     let grpc_bus = Arc::clone(&audio_bus);
     let grpc_metrics = Arc::clone(&metrics);
+    let grpc_config = GrpcConfig::from_env();
     let grpc_handle = tokio::spawn(async move {
-        run_grpc_client(GrpcConfig::default(), grpc_bus, audio_rx, grpc_cancel, grpc_metrics).await;
+        run_grpc_client(grpc_config, grpc_bus, audio_rx, grpc_cancel, grpc_metrics).await;
     });
 
     // ── HTTP signaling server ───────────────────────────────────────────

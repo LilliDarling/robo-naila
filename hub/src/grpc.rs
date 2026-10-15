@@ -44,6 +44,41 @@ impl Default for GrpcConfig {
     }
 }
 
+impl GrpcConfig {
+    /// Read the remote AI endpoint once at startup, preserving local defaults.
+    pub fn from_env() -> Self {
+        Self::with_server_addr(std::env::var("NAILA_AI_GRPC_URL").ok())
+    }
+
+    fn with_server_addr(server_addr: Option<String>) -> Self {
+        let mut config = Self::default();
+        if let Some(addr) = server_addr {
+            config.server_addr = addr;
+        }
+        config
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    #[test]
+    fn absent_endpoint_preserves_local_default() {
+        let config = GrpcConfig::with_server_addr(None);
+        assert_eq!(config.server_addr, "http://127.0.0.1:50051");
+    }
+
+    #[test]
+    fn remote_endpoint_preserves_reconnect_policy() {
+        let endpoint = "http://192.168.1.10:50051";
+        let config = GrpcConfig::with_server_addr(Some(endpoint.to_owned()));
+        assert_eq!(config.server_addr, endpoint);
+        assert_eq!(config.initial_backoff, Duration::from_secs(1));
+        assert_eq!(config.max_backoff, Duration::from_secs(30));
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Public entry point
 // ─────────────────────────────────────────────────────────────────────────────
