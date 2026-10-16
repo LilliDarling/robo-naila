@@ -2,8 +2,21 @@
 
 Run only the Rust hub on the Pi; orchestration and models stay on the Mac.
 This establishes the deployment pair for #38. Benchmarks, OTel, YOLO measurement
-and physical audio-device setup are separate work. These steps have not yet
-been run on the operator's Pi; successful local tests do not prove deployment.
+and physical audio-device setup are separate work. Repeat the pair checks
+below after rebuilding or changing either host's address.
+
+Provisioned pair (2026-10-15): Pi 4 Model B Rev 1.5, Debian 13 (trixie),
+`aarch64`, SSH `hub@hub.local` (Ethernet preferred; Wi-Fi also configured).
+The Pi routes to the Mac via Ethernet. Mac: MacBook Air M4, 16 GB, macOS 26.6.2,
+on the same LAN. Find its current address with the commands below.
+The operator already flashed this Pi: resume with SSH, not another card write.
+
+Verified on this pair at 2026-10-15 17:31 America/Boise: native release build
+passed in 23m 16s using Rust 1.99.1, protoc 3.21.12 and system Opus 1.5.2.
+Both Pi-local and Mac-to-Pi `/health` returned `grpc_connected: true`,
+`ai_server.health: healthy`, version `0.1.0` and all four models loaded.
+Hub logs confirmed the remote address and `bidirectional stream established`.
+No audio peer was connected; this verifies gRPC connectivity and model readiness.
 
 ## 1. Image and boot the Pi
 
@@ -11,13 +24,15 @@ Use [Raspberry Pi Imager](https://www.raspberrypi.com/documentation/computers/ge
 Select the actual Pi model, **Raspberry Pi OS Lite (64-bit)** and the intended
 microSD card (writing erases that card; Imager handles formatting). If Imager
 does not offer the 64-bit image for that model, stop and record the model.
-Customise hostname `naila-hub`, username `naila`, a chosen password, timezone
+Customise hostname `hub`, username `hub`, a chosen password, timezone
 `America/Boise`, and SSH using the Mac's public key (`~/.ssh/id_ed25519.pub`),
 or password login if no key exists. Configure Wi-Fi SSID/password/country if
 not using Ethernet. Write, verify, eject, insert in the Pi and power it on.
 Use the same LAN as the Mac; avoid guest/client isolation. Ethernet is preferred.
 
-On the Mac, `ssh naila@naila-hub.local`. If mDNS fails, find the Pi's DHCP lease
+The provisioned pair uses hostname/user `hub`/`hub`; keep the existing image
+and account when resuming this guide. On the Mac, `ssh hub@hub.local`.
+If mDNS fails, find the Pi's DHCP lease
 in the router and use its IP instead. Record the actual model, OS and address:
 
 ```sh
@@ -26,6 +41,7 @@ tr -d '\0' </proc/device-tree/model
 cat /etc/os-release
 uname -m                       # expect aarch64
 hostname -I
+sudo timedatectl set-timezone America/Boise  # if the flashed image still uses UTC
 sudo apt update
 sudo apt install -y build-essential pkg-config cmake libopus-dev protobuf-compiler curl ca-certificates rsync
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
@@ -47,7 +63,11 @@ for Python 3.12, uv, ffmpeg, dependencies and model downloads if not already
 installed. From `ai-server/`, the setup commands are `uv venv --python 3.12`,
 `uv sync`, and `bash download_models.sh`; install ffmpeg with `brew install ffmpeg`.
 The normal server also starts MQTT before gRPC. If there is no local broker,
-install/start one with `brew install mosquitto` and `brew services start mosquitto`.
+install one with `brew install mosquitto`, then run `mosquitto -p 1883` in a
+separate terminal. With no config file it listens locally. Confirm the actual
+listener with `lsof -nP -iTCP:1883 -sTCP:LISTEN` before starting the AI server.
+`brew services start mosquitto` reported success on this Mac without a working
+listener (missing `mosquitto.conf`), so service status alone is insufficient.
 Leave that broker local; the Pi hub only needs gRPC.
 
 ```sh
@@ -72,15 +92,15 @@ Keep the Mac awake and use its current DHCP address (or reserve a lease).
 
 ## 3. Copy this checkout, build and start the Pi hub
 
-The branch changes are uncommitted, so cloning the remote alone will miss them.
-Copy only the workspace manifests, hub and active protos from the Mac:
+Copy the current checkout, including any uncommitted fixes. A remote clone
+only includes pushed commits. Transfer the workspace manifests, hub and protos:
 
 ```sh
 # Mac, repository root; replace hostname with Pi IP if necessary
-ssh naila@naila-hub.local 'mkdir -p ~/robo-naila/hub ~/robo-naila/proto'
-rsync -av Cargo.toml Cargo.lock naila@naila-hub.local:robo-naila/
-rsync -av --exclude target hub/ naila@naila-hub.local:robo-naila/hub/
-rsync -av proto/ naila@naila-hub.local:robo-naila/proto/
+ssh hub@hub.local 'mkdir -p ~/robo-naila/hub ~/robo-naila/proto'
+rsync -av Cargo.toml Cargo.lock hub@hub.local:robo-naila/
+rsync -av --exclude target hub/ hub@hub.local:robo-naila/hub/
+rsync -av proto/ hub@hub.local:robo-naila/proto/
 ```
 
 ```sh
@@ -88,7 +108,7 @@ rsync -av proto/ naila@naila-hub.local:robo-naila/proto/
 cd ~/robo-naila
 . "$HOME/.cargo/env"
 cargo build --locked --release -p hub -j 1
-export NAILA_AI_GRPC_URL=http://192.168.1.10:50051
+export NAILA_AI_GRPC_URL='http://<mac-lan-ip>:50051'
 RUST_LOG=info ./target/release/hub
 ```
 
@@ -106,11 +126,14 @@ curl --fail --max-time 5 http://127.0.0.1:8080/health
 ```
 
 Require `grpc_connected: true`, and inspect `ai_server` for the Mac's status,
-version and loaded models. Hub logs should show the chosen address, a received
-AI status and `bidirectional stream established`. From the Mac also run:
+version and loaded models. Its device labels currently reflect shared hardware
+detection: `mps` in status does not prove every service runs on the GPU (the Mac
+command above explicitly selects CPU STT). Hub logs should show the chosen
+address, a received AI status and `bidirectional stream established`.
+From the Mac also run:
 
 ```sh
-curl --fail --max-time 5 http://naila-hub.local:8080/health
+curl --fail --max-time 5 http://hub.local:8080/health
 ```
 
 `status: ok` alone only proves HTTP is alive. If gRPC remains disconnected,
