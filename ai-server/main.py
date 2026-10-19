@@ -4,6 +4,7 @@ from server.naila_server import NailaAIServer
 from utils.platform import CrossPlatformSignalHandler, check_python_version
 from utils import get_logger, setup_logging, silence_module
 import telemetry as otel
+from config.telemetry import TelemetryConfig
 
 
 # Setup centralized logging
@@ -18,7 +19,8 @@ logger = get_logger(__name__)
 
 async def main():
     """Main entry point with production-grade error handling"""
-    telemetry = otel.init()
+    telemetry_config = TelemetryConfig.from_env()
+    telemetry = otel.init(enabled=telemetry_config.enabled, endpoint=telemetry_config.traces_endpoint)
     server = None
 
     try:

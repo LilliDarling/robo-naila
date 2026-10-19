@@ -18,13 +18,16 @@ def reload_memory_config(monkeypatch):
 
     def _reload(env: dict | None = None):
         monkeypatch.delenv("NAILA_MEMORY_DB_PATH", raising=False)
+        monkeypatch.delenv("NAILA_BENCHMARK", raising=False)
         for key, value in (env or {}).items():
             if value is None:
                 monkeypatch.delenv(key, raising=False)
             else:
                 monkeypatch.setenv(key, value)
+        import config.benchmark as benchmark
         import config.memory as mod
 
+        importlib.reload(benchmark)
         return importlib.reload(mod)
 
     return _reload
@@ -57,3 +60,13 @@ class TestMemoryConfigDefault:
     def test_in_memory_override_passes_through(self, reload_memory_config):
         mod = reload_memory_config({"NAILA_MEMORY_DB_PATH": ":memory:"})
         assert mod.DB_PATH == ":memory:"
+
+
+class TestMemoryConfigBenchmark:
+    def test_benchmark_mode_defaults_to_in_memory(self, reload_memory_config):
+        mod = reload_memory_config({"NAILA_BENCHMARK": "1"})
+        assert mod.DB_PATH == ":memory:"
+
+    def test_explicit_path_wins_over_benchmark_mode(self, reload_memory_config):
+        mod = reload_memory_config({"NAILA_BENCHMARK": "1", "NAILA_MEMORY_DB_PATH": "/tmp/custom.db"})
+        assert mod.DB_PATH == "/tmp/custom.db"

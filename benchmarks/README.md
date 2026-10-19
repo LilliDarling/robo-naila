@@ -80,8 +80,11 @@ stdout without changing any input. Exit 0 means complete execution and coverage;
 
 On the intended Pi, run the normal release hub with `NAILA_AI_GRPC_URL` set to
 the dedicated machine's gRPC address. On that machine run the real orchestration
-server with `NAILA_MEMORY_DB_PATH=:memory:`. Enable tracing in both services and
-the peer as above. The peer/collector host must be off the Pi, normally the
+server in benchmark mode: set `NAILA_BENCHMARK=1` and
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` in its environment. Benchmark mode enables tracing and defaults conversation memory to `:memory:`, so benchmark
+turns never reach stored history; an explicit `NAILA_MEMORY_DB_PATH` still wins.
+Unset it to return to normal operation. Enable tracing in the hub and the peer as
+above. The peer/collector host must be off the Pi, normally the
 same dedicated machine; their CPU work can affect results. Only this peer may
 use this isolated stack. Health is readiness evidence, not a reservation lock.
 After a timeout/cancellation, restart the isolated AI process before rerunning:

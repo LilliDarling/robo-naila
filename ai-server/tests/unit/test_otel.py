@@ -29,6 +29,17 @@ def test_disabled_creates_no_exporter_or_thread(monkeypatch):
         otel.init()
 
 
+def test_explicit_settings_override_environment(monkeypatch):
+    monkeypatch.setenv("NAILA_OTEL_ENABLED", "1")
+    with patch("opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter") as exporter:
+        assert otel.init(enabled=False) is None
+        exporter.assert_not_called()
+    monkeypatch.delenv("NAILA_OTEL_ENABLED")
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", raising=False)
+    with pytest.raises(ValueError, match="explicit"):
+        otel.init(enabled=True)
+
+
 def test_missing_and_invalid_context():
     for value in ("", "garbage", "00-" + "0" * 32 + "-" + "0" * 16 + "-01"):
         assert not trace.get_current_span(otel.extract(value)).get_span_context().is_valid
