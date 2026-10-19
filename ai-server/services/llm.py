@@ -13,6 +13,8 @@ except ImportError:
 
 from config import llm as llm_config
 from services.base import BaseAIService
+from services.timing import Stage, measured, label, turn_outcome
+import telemetry as otel
 from utils.resource_pool import ResourcePool
 from utils.sentence_buffer import SentenceBuffer
 from utils import get_logger
@@ -171,6 +173,7 @@ class LLMService(BaseAIService):
                 return -1  # All layers
         return 0  # CPU only
 
+    @measured("llm")
     async def generate_chat(
         self,
         messages: List[Dict[str, str]],
@@ -180,6 +183,7 @@ class LLMService(BaseAIService):
     ) -> str:
         """Generate a chat completion from messages"""
         if not self.is_ready or self.model is None:
+            label("unavailable")
             logger.error("Model not loaded, cannot generate")
             return ""
 
@@ -218,7 +222,7 @@ class LLMService(BaseAIService):
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
-                lambda: model(
+                otel.executor_call(lambda: model(
                     prompt,
                     max_tokens=max_tokens,
                     temperature=temperature,
@@ -227,7 +231,7 @@ class LLMService(BaseAIService):
                     repeat_penalty=llm_config.REPEAT_PENALTY,
                     stop=llm_config.STOP_SEQUENCES,
                     echo=False,
-                )
+                ))
             )
 
             # Extract generated text with validation
@@ -264,6 +268,7 @@ class LLMService(BaseAIService):
             return generated_text
 
         except Exception as e:
+            label("error")
             logger.error("llm_generation_failed", error=str(e), error_type=type(e).__name__)
             return ""
 
@@ -285,17 +290,36 @@ class LLMService(BaseAIService):
         Caller assembles the full response text by joining the yielded
         sentences if they need it for conversation history.
         """
-        if not self.is_ready or self.model is None:
-            logger.error("Model not loaded, cannot stream")
-            return
+        stage = Stage("llm", streaming=True)
+        stage.submitted = False
+        try:
+            if not self.is_ready or self.model is None:
+                stage.outcome = "unavailable"
+                logger.error("Model not loaded, cannot stream")
+                return
 
-        if self._pool is not None:
-            async with self._pool:
-                async for sentence in self._stream_chat_impl(messages, max_tokens, temperature, top_p):
+            if self._pool is not None:
+                async with self._pool:
+                    async for sentence in self._stream_chat_impl(messages, max_tokens, temperature, top_p, stage=stage):
+                        yield sentence
+            else:
+                async for sentence in self._stream_chat_impl(messages, max_tokens, temperature, top_p, stage=stage):
                     yield sentence
-        else:
-            async for sentence in self._stream_chat_impl(messages, max_tokens, temperature, top_p):
-                yield sentence
+        except (asyncio.CancelledError, GeneratorExit):
+            stage.cancel()
+            if not stage.submitted:
+                stage.outcome = "cancelled"
+            raise
+        except Exception:
+            stage.outcome = "error"
+            raise
+        finally:
+            # Once submitted, ONLY the executor producer ends the span, even
+            # when cancellation leaves native inference running.
+            if stage.outcome == "error":
+                turn_outcome("stage_failed")
+            if not stage.submitted:
+                stage.end()
 
     async def _stream_chat_impl(
         self,
@@ -303,6 +327,8 @@ class LLMService(BaseAIService):
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
+        *,
+        stage: Stage,
     ) -> AsyncIterator[str]:
         """Run llama-cpp's blocking stream on an executor thread; the producer
         thread also segments output into sentences so cross-thread asyncio
@@ -329,6 +355,7 @@ class LLMService(BaseAIService):
             total token count for performance logging."""
             buf = SentenceBuffer()
             tokens = 0
+            sentences = 0
             try:
                 for chunk in model(
                     prompt,
@@ -345,19 +372,29 @@ class LLMService(BaseAIService):
                         continue
                     delta = chunk["choices"][0].get("text", "")
                     if delta:
+                        if tokens == 0:
+                            stage.set(**{"llm.first_output_ms": (time.perf_counter() - stage.started) * 1000})
                         tokens += 1
                         for sentence in buf.feed(delta):
+                            sentences += 1
                             loop.call_soon_threadsafe(queue.put_nowait, sentence)
                 tail = buf.flush()
                 if tail:
+                    sentences += 1
                     loop.call_soon_threadsafe(queue.put_nowait, tail)
+                stage.outcome = "success" if sentences else "empty"
             except Exception as e:
+                stage.outcome = "error"
                 logger.error("llm_stream_failed", error=str(e), error_type=type(e).__name__)
             finally:
+                stage.set(sentence_count=sentences)
+                stage.end()
                 loop.call_soon_threadsafe(queue.put_nowait, (_SENTINEL, tokens))
             return tokens
 
-        producer = loop.run_in_executor(None, _produce)
+        with otel.attached(stage.context):
+            producer = loop.run_in_executor(None, otel.executor_call(_produce))
+        stage.submitted = True
         total_tokens = 0
         try:
             while True:
@@ -366,9 +403,14 @@ class LLMService(BaseAIService):
                     total_tokens = item[1]
                     break
                 yield item
+        except (asyncio.CancelledError, GeneratorExit):
+            stage.cancel()
+            raise
         finally:
             try:
-                await producer
+                # Shield keeps consumer cancellation from cancelling queued native work.
+                if not asyncio.current_task().cancelling():
+                    await asyncio.shield(producer)
             except Exception:
                 pass
 

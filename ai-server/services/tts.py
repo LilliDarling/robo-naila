@@ -19,6 +19,8 @@ except ImportError:
 
 from config import tts as tts_config
 from services.base import BaseAIService
+from services.timing import measured, label
+import telemetry as otel
 from utils.text_normalizer import TextNormalizer
 from utils.resource_pool import ResourcePool
 from utils import get_logger
@@ -159,6 +161,7 @@ class TTSService(BaseAIService):
         except Exception as e:
             logger.warning("tts_warmup_failed", error=str(e), severity="non-critical")
 
+    @measured("tts", "audio_bytes", "synthesis_time_ms")
     async def synthesize(
         self,
         text: str,
@@ -179,6 +182,7 @@ class TTSService(BaseAIService):
             AudioData with synthesized speech.
         """
         if not self.is_ready or self.model is None:
+            label("unavailable")
             logger.error("tts_model_not_loaded")
             return self._empty_result()
 
@@ -201,14 +205,18 @@ class TTSService(BaseAIService):
             # Check cache
             cache_key = self._build_cache_key(normalized_text, voice=voice, speed=speed)
             if cache_key in self._phrase_cache:
+                label(cache_hit=True)
                 logger.debug("tts_using_cached_audio", text=normalized_text)
                 audio_samples = self._phrase_cache[cache_key]
             else:
+                label(cache_hit=False)
                 audio_samples, _ = await self._synthesize_to_audio(
                     normalized_text, voice=voice, speed=speed,
                 )
                 self._phrase_cache[cache_key] = audio_samples
 
+            if len(audio_samples) == 0:
+                label("empty_output")
             duration_ms = int((len(audio_samples) / tts_config.SAMPLE_RATE) * 1000)
 
             # Encode output
@@ -229,6 +237,7 @@ class TTSService(BaseAIService):
             )
 
         except Exception as e:
+            label("error")
             logger.error("tts_synthesis_failed", error=str(e), error_type=type(e).__name__)
             return self._empty_result()
 
@@ -261,7 +270,7 @@ class TTSService(BaseAIService):
         loop = asyncio.get_event_loop()
         samples, sr = await loop.run_in_executor(
             None,
-            lambda: model.create(text, voice=voice, speed=speed, lang=tts_config.LANGUAGE),
+            otel.executor_call(lambda: model.create(text, voice=voice, speed=speed, lang=tts_config.LANGUAGE)),
         )
         return samples, sr
 

@@ -26,6 +26,7 @@ import psutil
 from rpc.generated import naila_pb2, naila_pb2_grpc
 from utils import get_logger
 import telemetry as otel
+from services.timing import Stage, turn_evidence, current_turn, turn_outcome
 
 if TYPE_CHECKING:
     from agents.orchestrator import NAILAOrchestrator
@@ -322,6 +323,8 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                             audio_buffer.clear()
                             continue
 
+                        turn = Stage("ai.turn", parent=utterance_parent, output_queued=True)
+
                         # Cancel any prior processing before starting a new one
                         if processing_task and not processing_task.done():
                             processing_task.cancel()
@@ -335,7 +338,8 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                         audio_buffer.clear()
 
                         processing_task = asyncio.create_task(
-                            otel.in_context(frozen_parent, self._enqueue_utterance(
+                            otel.in_context(frozen_parent, self._timed_utterance(
+                                turn,
                                 output_queue,
                                 frozen_audio,
                                 input_sample_rate,
@@ -401,6 +405,21 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                 conversation_id=conversation_id,
             )
 
+    async def _timed_utterance(self, turn, *args, **kwargs):
+        try:
+            with turn_evidence(turn), otel.attached(turn.context):
+                await self._enqueue_utterance(*args, **kwargs)
+            if turn.outcome == "empty":
+                turn.outcome = "success"
+        except asyncio.CancelledError:
+            turn.outcome = "cancelled"
+            raise
+        except Exception:
+            turn.outcome = "error"
+            raise
+        finally:
+            turn.end()
+
     async def _enqueue_utterance(
         self,
         queue: asyncio.Queue,
@@ -417,14 +436,25 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         Checks context.cancelled() before each stage to avoid wasting compute
         after a client disconnect.
         """
+        turn = current_turn()
+        has_audio = False
+        failed = False
         async for output in self._process_utterance(
             pcm_bytes, sample_rate, device_id, conversation_id, context,
             target_output_sample_rate=target_output_sample_rate,
         ):
             if context and context.cancelled():
                 logger.info("client_disconnected_during_enqueue", device_id=device_id)
+                if turn:
+                    turn.outcome = "cancelled"
                 return
+            has_audio = has_audio or bool(output.audio_opus or output.audio_pcm)
+            failed = failed or bool(output.error_code)
             await queue.put(output)
+        if turn:
+            turn.set(audio_nonempty=has_audio)
+            if failed or not has_audio:
+                turn.outcome = "error" if failed else "empty_output"
 
     async def _process_utterance(
         self,
@@ -682,6 +712,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                     transport="grpc",
                 )
             except Exception as e:
+                turn_outcome("error")
                 logger.error("orchestration_failed", error=str(e), error_type=type(e).__name__)
                 await tts_queue.put(self._error_output(
                     device_id, conversation_id,
@@ -698,6 +729,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                 if item is _DONE:
                     break
                 if context and context.cancelled():
+                    turn_outcome("cancelled")
                     logger.info("client_disconnected_during_tts_stream", device_id=device_id)
                     orchestration_task.cancel()
                     return
