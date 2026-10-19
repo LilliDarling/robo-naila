@@ -1,13 +1,13 @@
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
-use opentelemetry::trace::FutureExt;
+use opentelemetry::{KeyValue, trace::{FutureExt, TraceContextExt}};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, info_span, warn, Instrument};
+use tracing::{Instrument, error, info, info_span, warn};
 
 use crate::audio::{AudioBus, AudioTransport, SpeechEvent, TaggedFrame, TtsFrame};
 use crate::metrics::HubMetrics;
@@ -52,6 +52,8 @@ pub async fn run_device<T: AudioTransport>(
         let (tts_tx, mut tts_rx) = mpsc::channel::<TtsFrame>(32);
         bus.tts_sub.insert(Arc::clone(&device_id), tts_tx);
 
+        let mut timing = crate::timing::SessionTiming::new(&parent, vad_config.onset_threshold, vad_config.hangover_threshold);
+        timing.context.span().set_attributes([KeyValue::new("device_id", device_id.to_string()), KeyValue::new("conversation_id", conversation_id.to_string())]);
         let mut vad = VadFilter::new(vad_config);
         let mut state = RelayState::Idle;
         let mut utterance_context = parent.clone();
@@ -70,12 +72,15 @@ pub async fn run_device<T: AudioTransport>(
                         }
                     };
 
+                    let before = Instant::now();
                     let vad_result = vad.process(audio_frame);
+                    timing.vad.record(before.elapsed());
+                    if let VadResult::Emit(event, _) = &vad_result { timing.event(*event); }
 
                     match state {
                         RelayState::Idle => {
                             if let VadResult::Emit(SpeechEvent::Start, frames) = vad_result {
-                                utterance_context = crate::otel::accepted_utterance(&parent);
+                                utterance_context = crate::otel::accepted_utterance(&timing.context);
                                 state = RelayState::Streaming;
                                 metrics.vad_onsets.fetch_add(1, Ordering::Relaxed);
                                 let count = frames.len() as u64;
@@ -115,13 +120,19 @@ pub async fn run_device<T: AudioTransport>(
                             // track is wedged (peer not consuming, internal buffer
                             // full). Better to tear down the device task than to
                             // sit here indefinitely and back-pressure upstream.
-                            match timeout(TTS_SEND_TIMEOUT, transport.send(tts_frame)).await {
-                                Ok(Ok(())) => {}
+                            let (nonempty, final_frame, opus) = (!tts_frame.data.is_empty(), tts_frame.is_final, tts_frame.is_opus);
+                            let before = Instant::now();
+                            let result = timeout(TTS_SEND_TIMEOUT, transport.send(tts_frame)).await;
+                            timing.send.record(before.elapsed());
+                            match result {
+                                Ok(Ok(())) => timing.sent(nonempty, final_frame, opus),
                                 Ok(Err(e)) => {
+                                    timing.send_error();
                                     error!("send TTS failed: {e:?}");
                                     break 'outer;
                                 }
                                 Err(_elapsed) => {
+                                    timing.send_error();
                                     warn!(
                                         timeout_ms = TTS_SEND_TIMEOUT.as_millis(),
                                         "transport.send timed out — peer not draining; tearing down device"

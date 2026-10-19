@@ -6,3 +6,4 @@ pub mod metrics;
 pub mod vad;
 pub mod webrtc;
 pub mod otel;
+mod timing;

@@ -1,12 +1,17 @@
 use bytes::Bytes;
-use opentelemetry::trace::FutureExt;
+use opentelemetry::{
+    KeyValue,
+    trace::{FutureExt, TraceContextExt},
+};
 use opus::{Application, Channels, Decoder as OpusDecoder, Encoder as OpusEncoder};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 use webrtc::rtp::header::Header;
-use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::TrackLocalWriter;
+use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_remote::TrackRemote;
 use webrtc::{peer_connection::RTCPeerConnection, rtp::packet::Packet};
 
@@ -195,9 +200,12 @@ impl AudioTransport for WebRtcTransport {
 impl Drop for WebRtcTransport {
     fn drop(&mut self) {
         let pc = self.peer_connection.clone();
-        tokio::spawn(async move {
-            let _ = pc.close().await;
-        }.with_current_context());
+        tokio::spawn(
+            async move {
+                let _ = pc.close().await;
+            }
+            .with_current_context(),
+        );
     }
 }
 
@@ -206,57 +214,103 @@ impl Drop for WebRtcTransport {
 ///
 /// Called by the signaling layer inside the on_track callback.
 /// Returns when the track ends or the channel is dropped.
-pub fn spawn_track_reader(track: Arc<TrackRemote>, audio_tx: Sender<AudioFrame>, parent: opentelemetry::Context) {
-    // `tokio::spawn` schedules an async task to run concurrently on the Tokio
-    // runtime. Unlike a regular function call, spawn returns immediately — the
-    // task runs in the background.
-    //
-    // `async move { ... }` creates an async block that takes ownership of
-    // captured variables (`track`, `audio_tx`). The `move` keyword transfers
-    // ownership into the closure; without it, the closure would try to borrow,
-    // which fails because the spawned task may outlive the current scope.
-    tokio::spawn(async move {
-        // `.expect()` panics with a message if the Result is Err. Unlike `unwrap()`,
-        // it documents *why* we believe this can't fail. Here, decoder creation
-        // only fails with invalid parameters (wrong sample rate, channel count),
-        // which are compile-time constants — so failure indicates a programmer
-        // error, not a runtime condition we should handle gracefully.
-        let mut decoder =
-            OpusDecoder::new(OPUS_SAMPLE_RATE, Channels::Mono).expect("opus decoder init");
-        let mut pcm_buf = vec![0i16; SAMPLES_PER_FRAME];
-
-        loop {
-            match track.read_rtp().await {
-                Ok((packet, _)) => {
-                    let decoded = match decoder.decode(&packet.payload, &mut pcm_buf, false) {
-                        Ok(n) => n,
-                        Err(e) => {
-                            debug!("opus decode error (skipping frame): {e}");
-                            continue;
-                        }
-                    };
-
-                    // Convert i16 PCM samples to bytes (little-endian).
-                    // `flat_map` yields individual bytes from each sample's 2-byte representation.
-                    // `collect()` allocates a Vec, then `Bytes::from()` takes ownership without
-                    // copying — this is more efficient than copy_from_slice with a reused buffer.
-                    let byte_data: Vec<u8> = pcm_buf[..decoded]
-                        .iter()
-                        .flat_map(|s| s.to_le_bytes())
-                        .collect();
-
-                    let frame = AudioFrame {
-                        data: Bytes::from(byte_data),
-                        sample_rate: OPUS_SAMPLE_RATE,
-                        timestamp: packet.header.timestamp as u64,
-                    };
-
-                    if audio_tx.send(frame).await.is_err() {
-                        break; // transport dropped
-                    }
-                }
-                Err(_) => break, // track ended
-            }
-        }
-    }.with_context(parent));
+pub fn spawn_track_reader(
+    track: Arc<TrackRemote>,
+    audio_tx: Sender<AudioFrame>,
+    parent: opentelemetry::Context,
+    cancel: CancellationToken,
+) {
+    let mut decoder =
+        OpusDecoder::new(OPUS_SAMPLE_RATE, Channels::Mono).expect("opus decoder init");
+    tokio::spawn(
+        receive_audio(
+            move || {
+                let track = track.clone();
+                async move { track.read_rtp().await.ok().map(|(p, _)| p) }
+            },
+            move |payload, pcm| decoder.decode(payload, pcm, false),
+            audio_tx,
+            parent.clone(),
+            cancel,
+        )
+        .with_context(parent),
+    );
 }
+
+// webrtc 0.17 TrackRemote::read_rtp delivers a packet after transport buffering;
+// it supplies no decoder/dispatch timing (src/track/track_remote/mod.rs:272).
+// Keeping packet delivery outside the measured calls also permits deterministic
+// boundary tests without introducing a production delay option.
+async fn receive_audio<R, F, D>(
+    mut read: R,
+    mut decode: D,
+    audio_tx: Sender<AudioFrame>,
+    parent: opentelemetry::Context,
+    cancel: CancellationToken,
+) where
+    R: FnMut() -> F,
+    F: Future<Output = Option<Packet>>,
+    D: FnMut(&[u8], &mut [i16]) -> Result<usize, opus::Error>,
+{
+    let _cancel_on_exit = cancel.clone().drop_guard();
+    let cx = crate::timing::child("hub.webrtc.receive", &parent);
+    let mut decode_cost = crate::timing::Costs::default();
+    let mut dispatch_cost = crate::timing::Costs::default();
+    let mut decode_errors = 0i64;
+    let mut dispatch_errors = 0i64;
+    let mut pcm_buf = vec![0i16; SAMPLES_PER_FRAME];
+
+    loop {
+        let result = tokio::select! {
+            result = read() => result,
+            _ = cancel.cancelled() => break,
+        };
+        match result {
+            Some(packet) => {
+                let before = Instant::now();
+                let result = decode(&packet.payload, &mut pcm_buf);
+                decode_cost.record(before.elapsed());
+                let decoded = match result {
+                    Ok(n) => n,
+                    Err(e) => {
+                        decode_errors += 1;
+                        debug!("opus decode error (skipping frame): {e}");
+                        continue;
+                    }
+                };
+
+                let dispatch_start = Instant::now();
+                let byte_data: Vec<u8> = pcm_buf[..decoded]
+                    .iter()
+                    .flat_map(|s| s.to_le_bytes())
+                    .collect();
+                let frame = AudioFrame {
+                    data: Bytes::from(byte_data),
+                    sample_rate: OPUS_SAMPLE_RATE,
+                    timestamp: packet.header.timestamp as u64,
+                };
+                let failed = tokio::select! {
+                    result = audio_tx.send(frame) => result.is_err(),
+                    _ = cancel.cancelled() => true,
+                };
+                dispatch_cost.record(dispatch_start.elapsed());
+                if failed {
+                    dispatch_errors += 1;
+                    break;
+                }
+            }
+            None => break,
+        }
+    }
+    decode_cost.export(&cx, "opus_decode_ms");
+    dispatch_cost.export(&cx, "receive_dispatch_ms");
+    cx.span().set_attributes([
+        KeyValue::new("decode_errors", decode_errors),
+        KeyValue::new("dispatch_errors", dispatch_errors),
+    ]);
+    cx.span().end();
+}
+
+#[cfg(test)]
+#[path = "webrtc_tests.rs"]
+mod tests;

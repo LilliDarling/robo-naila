@@ -130,7 +130,14 @@ async fn handle_connect(
     info!(device_id = %req.device_id, "incoming WebRTC connection");
 
     let parent = crate::otel::extract(headers.get("traceparent").and_then(|v| v.to_str().ok()).unwrap_or(""));
-    match negotiate_session(&state, req, parent.clone()).with_context(parent).await {
+    let connect = crate::timing::child("hub.connect", &parent);
+    let before = std::time::Instant::now();
+    let result = negotiate_session(&state, req, parent.clone()).with_context(parent).await;
+    use opentelemetry::trace::TraceContextExt;
+    connect.span().set_attribute(opentelemetry::KeyValue::new("outcome", if result.is_ok() { "ok" } else { "error" }));
+    connect.span().set_attribute(opentelemetry::KeyValue::new("hub_connect_ms", before.elapsed().as_secs_f64() * 1000.0));
+    connect.span().end();
+    match result {
         Ok(answer_sdp) => {
             (StatusCode::OK, Json(ConnectResponse { sdp: answer_sdp })).into_response()
         }
@@ -233,8 +240,10 @@ async fn negotiate_session(
     //   - Outer `move`: captures device_id_for_track, audio_tx into the FnMut
     //   - Inner `move` (in Box::pin): moves clones into the async block
     let track_parent = parent.clone();
+    let track_cancel = device_cancel.clone();
     peer_connection.on_track(Box::new(move |track, _receiver, _transceiver| {
         let audio_tx = audio_tx.clone();
+        let cancel = track_cancel.clone();
         let parent = track_parent.clone();
         let reader_parent = parent.clone();
         let device_id = Arc::clone(&device_id_for_track);
@@ -243,7 +252,7 @@ async fn negotiate_session(
             // Only handle audio tracks.
             if track.kind() == RTPCodecType::Audio {
                 info!(device_id = %device_id, "audio track negotiated");
-                spawn_track_reader(track, audio_tx, reader_parent);
+                spawn_track_reader(track, audio_tx, reader_parent, cancel);
             }
         }.with_context(parent))
     }));
