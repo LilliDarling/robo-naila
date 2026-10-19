@@ -155,6 +155,15 @@ require `grpc_connected: true` and healthy model status under `ai_server`.
 This checks connectivity and readiness; a real audio round trip is a separate
 check. Recheck the Mac's LAN address after network changes.
 
+`sudo bash scripts/install-daemons.sh` runs mosquitto and the server as launchd
+daemons. macOS Local Network privacy blocks outgoing LAN connections from a
+daemon that runs as a user (`[Errno 65] No route to host`); incoming gRPC is
+unaffected. To export traces to a collector on another machine, set
+`NAILA_OTLP_RELAY_TARGET=<collector-ip>:4318` and
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces` in
+`ai-server/.env`, then re-run the installer. It adds a root loopback relay
+(`scripts/otlp-relay.pl`), which macOS exempts, while the server stays unprivileged.
+
 ## Communication
 
 ### gRPC (real-time audio loop)
