@@ -15,7 +15,11 @@ from rpc.service import NailaAIServicer, _pcm_duration_ms, _pcm_to_wav, TTS_CHUN
 
 def _audio_input(event, pcm=b"", device_id="dev1", conversation_id="conv1", sample_rate=16000):
     """Build a minimal AudioInput-like object."""
+    # Keep synthetic utterances above the existing 450ms acceptance minimum.
+    pcm *= 160
     msg = MagicMock()
+    msg.HasField.return_value = False
+    msg.traceparent = ""
     msg.event = event
     msg.device_id = device_id
     msg.conversation_id = conversation_id
@@ -258,9 +262,9 @@ class TestInterruptCancellation:
             async for out in servicer.StreamConversation(input_stream(), _grpc_context()):
                 outputs.append(out)
 
-        # Second utterance should only have the \x02 audio (START + END = 100 bytes), not leftover \x01
+        # Second utterance should only have the \x02 audio (START + END = 16000 bytes), not leftover \x01
         assert len(captured_pcm) == 1
-        assert captured_pcm[0] == b"\x02" * 100
+        assert captured_pcm[0] == b"\x02" * 16000
         assert b"\x01" not in captured_pcm[0]
 
 

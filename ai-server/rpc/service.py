@@ -25,6 +25,7 @@ import psutil
 
 from rpc.generated import naila_pb2, naila_pb2_grpc
 from utils import get_logger
+import telemetry as otel
 
 if TYPE_CHECKING:
     from agents.orchestrator import NAILAOrchestrator
@@ -209,6 +210,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         Input reading and utterance processing run concurrently so that
         SPEECH_EVENT_INTERRUPT can cancel an in-flight processing task.
         """
+        utterance_parent = otel.extract("")
         audio_buffer = bytearray()
         device_id = ""
         conversation_id = ""
@@ -228,7 +230,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
 
         async def _read_inputs():
             """Read the input stream and dispatch speech events."""
-            nonlocal audio_buffer, device_id, conversation_id
+            nonlocal audio_buffer, device_id, conversation_id, utterance_parent
             nonlocal input_sample_rate, target_output_sample_rate, processing_task
 
             try:
@@ -241,6 +243,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                     event = audio_input.event
 
                     if event == naila_pb2.SPEECH_EVENT_START:
+                        utterance_parent = otel.extract(audio_input.traceparent)
                         audio_buffer.clear()
                         if pcm_data:
                             audio_buffer.extend(pcm_data)
@@ -327,11 +330,12 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                             except (asyncio.CancelledError, Exception):
                                 pass
 
+                        frozen_parent = utterance_parent
                         frozen_audio = bytes(audio_buffer)
                         audio_buffer.clear()
 
                         processing_task = asyncio.create_task(
-                            self._enqueue_utterance(
+                            otel.in_context(frozen_parent, self._enqueue_utterance(
                                 output_queue,
                                 frozen_audio,
                                 input_sample_rate,
@@ -339,7 +343,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                                 conversation_id,
                                 context,
                                 target_output_sample_rate=target_output_sample_rate,
-                            )
+                            ))
                         )
 
                     elif event == naila_pb2.SPEECH_EVENT_INTERRUPT:

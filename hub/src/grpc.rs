@@ -297,6 +297,9 @@ async fn send_loop(
                     sequence_num: sequence,
                     event: event as i32,
                     session_config,
+                    traceparent: if event == SpeechEvent::Start {
+                        crate::otel::inject(&tagged.trace_context)
+                    } else { String::new() },
                 };
 
                 sequence = sequence.wrapping_add(1);

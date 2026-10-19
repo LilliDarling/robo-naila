@@ -22,6 +22,8 @@ use hub::metrics::HubMetrics;
 async fn main() {
     tracing_subscriber::fmt::init();
 
+    let otel = hub::otel::init().expect("invalid OTel configuration");
+
     let cancel = CancellationToken::new();
 
     // ── AudioBus ────────────────────────────────────────────────────────
@@ -92,5 +94,6 @@ async fn main() {
     {
         info!("graceful shutdown timed out, forcing exit");
     }
+    let _ = tokio::task::spawn_blocking(move || hub::otel::shutdown(otel)).await;
     info!("shutdown complete");
 }

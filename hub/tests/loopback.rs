@@ -64,6 +64,11 @@ impl NailaAi for EchoAiService {
                             _ => break,
                         };
 
+                        if input.event == hub::grpc::proto::SpeechEvent::Start as i32 {
+                            assert!(input.traceparent.contains("0123456789abcdef0123456789abcdef"));
+                        } else {
+                            assert!(input.traceparent.is_empty());
+                        }
                         let pcm = match input.audio {
                             Some(Audio::AudioPcm(data)) => data,
                             _ => continue,
@@ -167,6 +172,7 @@ async fn audio_loopback_through_grpc() {
         device_cancel.clone(),
         Arc::clone(&device_tasks),
         device_metrics,
+        hub::otel::extract("00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"),
     ));
 
     // Give the gRPC client time to connect to the mock server.

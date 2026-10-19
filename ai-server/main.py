@@ -3,6 +3,7 @@ import sys
 from server.naila_server import NailaAIServer
 from utils.platform import CrossPlatformSignalHandler, check_python_version
 from utils import get_logger, setup_logging, silence_module
+import telemetry as otel
 
 
 # Setup centralized logging
@@ -17,6 +18,7 @@ logger = get_logger(__name__)
 
 async def main():
     """Main entry point with production-grade error handling"""
+    telemetry = otel.init()
     server = None
 
     try:
@@ -44,6 +46,9 @@ async def main():
                 await server.stop()
             except Exception as e:
                 logger.error("cleanup_error", error=str(e), error_type=type(e).__name__)
+
+        if not await asyncio.to_thread(otel.shutdown, telemetry):
+            logger.warning("otel_shutdown_incomplete")
 
 
 if __name__ == "__main__":

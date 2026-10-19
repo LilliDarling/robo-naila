@@ -14,6 +14,10 @@ dependencies = [
 
 [project.optional-dependencies]
 aec = ["speexdsp>=0.1.1"]
+benchmark = [
+    "opentelemetry-sdk==1.38.0",
+    "opentelemetry-exporter-otlp-proto-http==1.38.0",
+]
 
 [dependency-groups]
 dev = [

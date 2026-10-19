@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use opentelemetry::trace::FutureExt;
 use opus::{Application, Channels, Decoder as OpusDecoder, Encoder as OpusEncoder};
 use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -196,7 +197,7 @@ impl Drop for WebRtcTransport {
         let pc = self.peer_connection.clone();
         tokio::spawn(async move {
             let _ = pc.close().await;
-        });
+        }.with_current_context());
     }
 }
 
@@ -205,7 +206,7 @@ impl Drop for WebRtcTransport {
 ///
 /// Called by the signaling layer inside the on_track callback.
 /// Returns when the track ends or the channel is dropped.
-pub fn spawn_track_reader(track: Arc<TrackRemote>, audio_tx: Sender<AudioFrame>) {
+pub fn spawn_track_reader(track: Arc<TrackRemote>, audio_tx: Sender<AudioFrame>, parent: opentelemetry::Context) {
     // `tokio::spawn` schedules an async task to run concurrently on the Tokio
     // runtime. Unlike a regular function call, spawn returns immediately — the
     // task runs in the background.
@@ -257,5 +258,5 @@ pub fn spawn_track_reader(track: Arc<TrackRemote>, audio_tx: Sender<AudioFrame>)
                 Err(_) => break, // track ended
             }
         }
-    });
+    }.with_context(parent));
 }

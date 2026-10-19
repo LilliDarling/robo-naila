@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use opentelemetry::trace::FutureExt;
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::{get, post}, Json, Router};
 use dashmap::DashMap;
@@ -119,6 +120,7 @@ async fn handle_connect(
     // Extractors are the core of Axum's design — they're composable, type-safe,
     // and the order matters (body-consuming extractors like Json must come last).
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<ConnectRequest>,
     // `impl IntoResponse` lets us return different response types from the same handler.
     // Axum will call `.into_response()` on whatever we return. This is more flexible
@@ -127,7 +129,8 @@ async fn handle_connect(
 ) -> impl IntoResponse {
     info!(device_id = %req.device_id, "incoming WebRTC connection");
 
-    match negotiate_session(&state, req).await {
+    let parent = crate::otel::extract(headers.get("traceparent").and_then(|v| v.to_str().ok()).unwrap_or(""));
+    match negotiate_session(&state, req, parent.clone()).with_context(parent).await {
         Ok(answer_sdp) => {
             (StatusCode::OK, Json(ConnectResponse { sdp: answer_sdp })).into_response()
         }
@@ -147,6 +150,7 @@ async fn handle_connect(
 async fn negotiate_session(
     state: &AppState,
     req: ConnectRequest,
+    parent: opentelemetry::Context,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // Convert device_id to Arc<str> once, then use Arc::clone() everywhere.
     // This avoids String clones in callbacks and the run_device loop.
@@ -208,7 +212,7 @@ async fn negotiate_session(
     tokio::spawn(async move {
         let mut buf = vec![0u8; 1500];
         while let Ok((_, _)) = rtp_sender.read(&mut buf).await {}
-    });
+    }.with_context(parent.clone()));
 
     // ── 6. on_track: wire inbound audio into the transport channel ──────
     //
@@ -228,26 +232,31 @@ async fn negotiate_session(
     // The `move` keywords transfer ownership into each closure layer:
     //   - Outer `move`: captures device_id_for_track, audio_tx into the FnMut
     //   - Inner `move` (in Box::pin): moves clones into the async block
+    let track_parent = parent.clone();
     peer_connection.on_track(Box::new(move |track, _receiver, _transceiver| {
         let audio_tx = audio_tx.clone();
+        let parent = track_parent.clone();
+        let reader_parent = parent.clone();
         let device_id = Arc::clone(&device_id_for_track);
 
         Box::pin(async move {
             // Only handle audio tracks.
             if track.kind() == RTPCodecType::Audio {
                 info!(device_id = %device_id, "audio track negotiated");
-                spawn_track_reader(track, audio_tx);
+                spawn_track_reader(track, audio_tx, reader_parent);
             }
-        })
+        }.with_context(parent))
     }));
 
     // ── 7. Connection state monitoring + cancel on peer failure ─────────
+    let state_parent = parent.clone();
     let device_id_for_state = Arc::clone(&device_id);
     let device_cancel_for_state = device_cancel.clone();
     peer_connection.on_peer_connection_state_change(Box::new(
         move |state: RTCPeerConnectionState| {
             let device_id = Arc::clone(&device_id_for_state);
             let cancel = device_cancel_for_state.clone();
+            let parent = state_parent.clone();
             Box::pin(async move {
                 match state {
                     RTCPeerConnectionState::Connected => {
@@ -262,7 +271,7 @@ async fn negotiate_session(
                     }
                     _ => {}
                 }
-            })
+            }.with_context(parent))
         },
     ));
 
@@ -328,6 +337,7 @@ async fn negotiate_session(
             device_cancel,
             device_tasks_ref,
             metrics,
+            parent,
         )
         .await;
     });

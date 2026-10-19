@@ -5,3 +5,4 @@ pub mod http;
 pub mod metrics;
 pub mod vad;
 pub mod webrtc;
+pub mod otel;

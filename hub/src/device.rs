@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dashmap::DashMap;
+use opentelemetry::trace::FutureExt;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -40,6 +41,7 @@ pub async fn run_device<T: AudioTransport>(
     device_cancel: CancellationToken,
     device_tasks: Arc<DashMap<Arc<str>, CancellationToken>>,
     metrics: Arc<HubMetrics>,
+    parent: opentelemetry::Context,
 ) {
     let device_id: Arc<str> = transport.id().into();
 
@@ -52,6 +54,7 @@ pub async fn run_device<T: AudioTransport>(
 
         let mut vad = VadFilter::new(vad_config);
         let mut state = RelayState::Idle;
+        let mut utterance_context = parent.clone();
 
         info!("device task started");
 
@@ -72,10 +75,11 @@ pub async fn run_device<T: AudioTransport>(
                     match state {
                         RelayState::Idle => {
                             if let VadResult::Emit(SpeechEvent::Start, frames) = vad_result {
+                                utterance_context = crate::otel::accepted_utterance(&parent);
                                 state = RelayState::Streaming;
                                 metrics.vad_onsets.fetch_add(1, Ordering::Relaxed);
                                 let count = frames.len() as u64;
-                                if !send_frames(&bus, &device_id, &conversation_id, frames, SpeechEvent::Start).await {
+                                if !send_frames(&bus, &device_id, &conversation_id, frames, SpeechEvent::Start, &utterance_context).await {
                                     break 'outer;
                                 }
                                 metrics.frames_forwarded.fetch_add(count, Ordering::Relaxed);
@@ -90,7 +94,7 @@ pub async fn run_device<T: AudioTransport>(
                                         metrics.vad_ends.fetch_add(1, Ordering::Relaxed);
                                     }
                                     let count = frames.len() as u64;
-                                    if !send_frames(&bus, &device_id, &conversation_id, frames, event).await {
+                                    if !send_frames(&bus, &device_id, &conversation_id, frames, event, &utterance_context).await {
                                         break 'outer;
                                     }
                                     metrics.frames_forwarded.fetch_add(count, Ordering::Relaxed);
@@ -153,6 +157,7 @@ pub async fn run_device<T: AudioTransport>(
                     timestamp: 0,
                 },
                 event: SpeechEvent::End,
+                trace_context: utterance_context.clone(),
             })
             .await;
 
@@ -173,6 +178,7 @@ pub async fn run_device<T: AudioTransport>(
         device_tasks.remove_if(device_id.as_ref(), |_, token| token.is_cancelled());
         info!("device session cleaned up");
     }
+    .with_context(parent.clone())
     .instrument(span)
     .await
 }
@@ -184,6 +190,7 @@ async fn send_frames(
     conversation_id: &Arc<str>,
     frames: Vec<crate::audio::AudioFrame>,
     first_event: SpeechEvent,
+    trace_context: &opentelemetry::Context,
 ) -> bool {
     for (i, f) in frames.into_iter().enumerate() {
         let event = if i == 0 {
@@ -196,6 +203,7 @@ async fn send_frames(
             conversation_id: Arc::clone(conversation_id),
             frame: f,
             event,
+            trace_context: trace_context.clone(),
         };
         if bus.audio_tx.send(tagged).await.is_err() {
             error!("audio bus closed");
