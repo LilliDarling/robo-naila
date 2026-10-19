@@ -145,3 +145,14 @@ PYTHONPATH="$PWD:$PWD/devices/audio-client:$PWD/ai-server" \
   devices/audio-client/.venv/bin/python -m pytest -q \
   benchmarks/tests devices/audio-client/tests/test_http.py
 ```
+
+For the full local stub-model transport gate, first build the normal release hub
+with `cargo build -p hub --release`. With the preinstalled pinned collector,
+run the same focused pytest command with these additional environment variables:
+`NAILA_TEST_HUB="$PWD/target/release/hub"` and
+`NAILA_TEST_COLLECTOR=/path/to/otelcol-contrib` (version 0.137.0).
+The opt-in integration test uses localhost port 8080, starts its own isolated
+AI/collector/hub test processes, and retains diagnostic artifacts under pytest's
+temporary directory. It exercises the real graph with native model doubles,
+then checks two sequential joined trials and identical offline summarization.
+Without those variables, only that transport test is skipped.

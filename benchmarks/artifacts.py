@@ -31,7 +31,7 @@ def distribution(values):
 
 def summarize(manifest, samples, snapshot, capture_error=None):
     populations = {name: [] for name in ('peer.connect_ms', 'peer_first_audio_ms', 'peer_input_to_first_audio_ms',
-                   'stt', 'llm', 'tts', 'ai.turn', 'llm.first_output_ms',
+                   'stt', 'llm', 'tts', 'tts_cache_hit_ms', 'tts_cache_miss_ms', 'ai.turn', 'llm.first_output_ms', 'hub_connect_ms',
                    'hub_response_first_send_ms', 'hub_response_final_send_ms',
                    'vad_ms_per_trial_mean', 'opus_decode_ms_per_trial_mean',
                    'receive_dispatch_ms_per_trial_mean', 'send_ms_per_trial_mean')}
@@ -70,10 +70,12 @@ def summarize(manifest, samples, snapshot, capture_error=None):
                         if name == 'tts':
                             hit = attrs.get('cache_hit')
                             cache['hit' if hit is True else 'miss' if hit is False else 'unknown'] += 1
+                            if hit is not None and value is not None:
+                                populations['tts_cache_hit_ms' if hit else 'tts_cache_miss_ms'].append(float(value))
                 for spans in groups.values():
                     for span in spans:
                         attrs = attributes(span.get('attributes', []))
-                        for key in ('llm.first_output_ms', 'hub_response_first_send_ms', 'hub_response_final_send_ms'):
+                        for key in ('llm.first_output_ms', 'hub_connect_ms', 'hub_response_first_send_ms', 'hub_response_final_send_ms'):
                             if key in attrs:
                                 populations[key].append(float(attrs[key]))
                         for prefix, field in (('vad', 'vad_ms'), ('opus_decode', 'opus_decode_ms'),

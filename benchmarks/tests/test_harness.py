@@ -192,6 +192,8 @@ def test_statistics_warmup_cache_and_failure_counts(evidence):
     assert summary['stages']['peer_first_audio_ms']['n'] == 1
     assert summary['stages']['vad_ms_per_trial_mean']['mean'] == .5
     assert summary['tts_cache'] == dict(hit=1, miss=0, unknown=0)
+    assert summary['stages']['tts_cache_hit_ms']['n'] == 1
+    assert summary['stages']['tts_cache_miss_ms']['n'] == 0
     summary = summarize(manifest, [dict(sample, outcome='failed')], spans)
     assert (summary['attempted'], summary['success'], summary['failed']) == (1, 0, 1)
     assert not summary['complete']
