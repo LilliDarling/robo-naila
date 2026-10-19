@@ -10,10 +10,19 @@ use std::{
 #[test]
 fn unchanged_question_through_opus_is_one_utterance() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let python = std::env::var_os("NAILA_TEST_PEER_PYTHON")
+        .unwrap_or_else(|| root.join("devices/audio-client/.venv/bin/python").into());
+    let available = Command::new(&python)
+        .args(["-c", "from aiortc.codecs.opus import OpusEncoder; OpusEncoder()"])
+        .output();
+    if !available.is_ok_and(|output| output.status.success()) {
+        eprintln!("SKIP unchanged_question_through_opus_is_one_utterance: audio-client Python or aiortc Opus encoder unavailable ({python:?})");
+        return;
+    }
     // aiortc 1.14.0 OpusEncoder.encode returns payloads, not a framed stream:
     // https://github.com/aiortc/aiortc/blob/1.14.0/src/aiortc/codecs/opus.py
     // Length-prefix only this test's subprocess output; use the real peer codec.
-    let encoded = Command::new(root.join("devices/audio-client/.venv/bin/python"))
+    let encoded = Command::new(&python)
         .current_dir(root)
         .env("PYTHONPATH", root)
         .args([
