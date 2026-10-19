@@ -136,6 +136,25 @@ STT_VAD_FILTER=false STT_DEVICE=cpu STT_COMPUTE_TYPE=int8 uv run python main.py
 Full config surface lives in `config/{stt,llm,tts,vision,mqtt,grpc}.py` —
 each module documents its own env vars.
 
+### Mac orchestrator with a remote hub
+
+After installing dependencies and models, start a local MQTT broker with
+`mosquitto -p 1883`, then run `./scripts/orchestrator-run.sh` from the repository
+root. The launcher binds gRPC to `0.0.0.0:50051`, uses CPU/int8 Whisper with
+hub-side VAD, and preserves the installed native LLM build. It expects the
+CTranslate2 Whisper model in `ai-server/models/stt/small.en` (override
+`STT_MODEL_PATH` if needed); a whisper.cpp GGML file is incompatible.
+
+On the hub machine, set `NAILA_AI_GRPC_URL=http://<mac-lan-ip>:50051` before
+starting the hub build from PR #39. Restart an already-running hub to change
+its destination. The hub connects to the Mac, so the Mac does not need a hub
+address in its server configuration. MQTT can remain loopback-only.
+
+Wait for `grpc_server_started`, then check `http://<hub-host>:8080/health`:
+require `grpc_connected: true` and healthy model status under `ai_server`.
+This checks connectivity and readiness; a real audio round trip is a separate
+check. Recheck the Mac's LAN address after network changes.
+
 ## Communication
 
 ### gRPC (real-time audio loop)
