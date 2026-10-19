@@ -113,13 +113,23 @@ async fn real_webrtc_and_task_owned_measurements() {
             assert_eq!(decoder.decode(&packet.payload, &mut [0; 960], false).unwrap(), 960);
         }
         pc.close().await.unwrap();
-        // Explicit cancellation makes read_rtp terminate even if the remote close
-        // is not observed promptly by the library.
-        tasks.get("timing-peer").unwrap().cancel();
-        loop {
-            if capture.0.lock().unwrap().iter().any(|s| s.name == "hub.webrtc.receive") && tasks.is_empty() { break; }
-            tokio::task::yield_now().await;
-        }
+        // Remote close alone must finish both hub tasks; never cancel a hub
+        // token from this fixture or infer cleanup from just one ended span.
+        timeout(Duration::from_secs(10), async {
+            loop {
+                let spans = capture.0.lock().unwrap();
+                let finished = ["hub.webrtc.receive", "hub.session"].iter()
+                    .all(|name| spans.iter().any(|s| s.name == *name));
+                if finished && tasks.is_empty() { break; }
+                drop(spans);
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.expect("remote close must finish hub session/receive within 10 seconds");
+        assert!(!bus.tts_sub.contains_key("timing-peer"));
+        let mut health = tokio::net::TcpStream::connect(addr).await.unwrap();
+        health.write_all(format!("GET /health HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+        let mut response = String::new(); health.read_to_string(&mut response).await.unwrap();
+        assert!(response.contains("\"active_devices\":0"), "{response}");
         let spans = capture.0.lock().unwrap().clone();
         let receive = spans.iter().find(|s| s.name == "hub.webrtc.receive").unwrap();
         assert_eq!(number(receive, "opus_decode_ms.count"), 6.0);

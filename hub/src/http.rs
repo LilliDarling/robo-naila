@@ -257,7 +257,7 @@ async fn negotiate_session(
         }.with_context(parent))
     }));
 
-    // ── 7. Connection state monitoring + cancel on peer failure ─────────
+    // ── 7. Connection state monitoring + cancel on disconnect/failure ───
     let state_parent = parent.clone();
     let device_id_for_state = Arc::clone(&device_id);
     let device_cancel_for_state = device_cancel.clone();
@@ -273,6 +273,13 @@ async fn negotiate_session(
                     }
                     RTCPeerConnectionState::Disconnected => {
                         warn!(device_id = %device_id, "peer disconnected");
+                        // webrtc 0.17 SettingEngine::set_ice_timeouts documents
+                        // 5s to Disconnected, then another 25s to Failed. Remote
+                        // close need not end read_rtp first. End this session on
+                        // disconnect through its existing cancellation/cleanup
+                        // path; waiting for Failed exceeds finite peer teardown.
+                        // https://docs.rs/webrtc/0.17.0/webrtc/api/setting_engine/struct.SettingEngine.html#method.set_ice_timeouts
+                        cancel.cancel();
                     }
                     RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed => {
                         error!(device_id = %device_id, "peer connection failed/closed");
