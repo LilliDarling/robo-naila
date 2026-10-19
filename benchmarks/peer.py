@@ -42,7 +42,7 @@ class ReplayTrack(AudioStreamTrack):
         self.fixture, self.clock, self.sleep = fixture, clock, sleep
         self.ready_at = None
         self.cursor = self.pts = 0
-        self.next_at = clock()
+        self.next_at = None
         self.first = self.end = None
         self.finished = asyncio.Event()
 
@@ -50,6 +50,8 @@ class ReplayTrack(AudioStreamTrack):
         self.ready_at = self.clock() + .5
 
     async def recv(self):
+        if self.next_at is None:
+            self.next_at = self.clock()
         await self.sleep(max(0, self.next_at - self.clock()))
         now = self.clock()
         pcm = bytes(1920)

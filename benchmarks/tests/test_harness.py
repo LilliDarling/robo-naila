@@ -95,6 +95,21 @@ async def test_canceled_recv_does_not_advance(wav):
     assert b''.join(frames) == track.fixture.pcm
 
 
+@pytest.mark.asyncio
+async def test_delayed_initial_pull_starts_media_clock_without_catchup(wav):
+    clock = Clock()
+    track = ReplayTrack(Fixture.load(wav), clock, clock.sleep)
+    clock.now = 5  # Signaling must not create five seconds of overdue media.
+    track.connected()
+    handoffs = []
+    for _ in range(30):
+        await track.recv()
+        handoffs.append(clock.now)
+    assert handoffs == pytest.approx([5 + i * .02 for i in range(30)])
+    assert track.first >= 5.5
+    assert track.cursor > 0
+
+
 def record(spans):
     return json.dumps({'resourceSpans': [{'resource': {'attributes': []}, 'scopeSpans': [{'spans': spans}]}]}).encode() + b'\n'
 
@@ -269,8 +284,11 @@ def test_offline_summary_is_read_only_and_truncation_fails(evidence, tmp_path, c
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('disconnect,late_cleanup', [(False, False), (True, False), (False, True)])
-async def test_trial_waits_for_connected_finality_and_task_cleanup(monkeypatch, wav, evidence, disconnect, late_cleanup):
+@pytest.mark.parametrize('disconnect,late_cleanup,cleanup_failure', [
+    (False, False, None), (True, False, None), (False, True, None),
+    (True, True, None), (True, False, 'close'), (True, False, 'flush'),
+])
+async def test_trial_waits_for_connected_finality_and_task_cleanup(monkeypatch, wav, evidence, disconnect, late_cleanup, cleanup_failure):
     import benchmarks.voice as voice
     from opentelemetry.sdk.trace import TracerProvider
     sample, spans = evidence
@@ -310,6 +328,8 @@ async def test_trial_waits_for_connected_finality_and_task_cleanup(monkeypatch, 
 
         async def close(self):
             state['active'] = 0
+            if cleanup_failure == 'close':
+                raise RuntimeError('close failed')
 
     class Reader:
         def read(self):
@@ -362,10 +382,14 @@ async def test_trial_waits_for_connected_finality_and_task_cleanup(monkeypatch, 
     monkeypatch.setattr(voice, 'health', health)
     monkeypatch.setattr(voice, 'exchange_sdp', exchange)
     monkeypatch.setattr(voice.asyncio, 'sleep', sleep)
+    if cleanup_failure == 'flush':
+        monkeypatch.setattr(provider, 'force_flush', lambda **kwargs: False)
     result = await voice.trial(SimpleNamespace(hub_url='http://test', timeout_seconds=1), Fixture.load(wav), Reader(), None, provider, False)
     assert result['outcome'] == ('failed' if disconnect or late_cleanup else 'success'), result
     if not disconnect:
         assert state['cleanup_reads'] >= 2
-    if late_cleanup:
+    if disconnect:
+        assert result['reason'] == 'EvidenceError: peer disconnected'
+    elif late_cleanup:
         assert 'deadline' in result['reason']
     provider.shutdown()

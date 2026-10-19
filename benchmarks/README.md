@@ -104,7 +104,7 @@ effective model settings. Example shape (replace placeholders with actual facts)
   "ai_grpc_url": "http://AI:50051",
   "peer_host": "AI", "collector_host": "AI", "colocated_with_ai": true,
   "settings": {
-    "vad": {"onset_frames": 3, "hangover_frames": 15},
+    "vad": {"onset_frames": 3, "hangover_frames": 25},
     "stt": {"model": null, "compute_type": null},
     "llm": {"model": null, "context": null, "max_tokens": null, "temperature": null},
     "tts": {"voice": null, "rate": null},
@@ -116,6 +116,11 @@ effective model settings. Example shape (replace placeholders with actual facts)
 The manifest includes source revision/dirty state, immutable WAV SHA-256,
 padding, peer host/libraries/Opus configuration and initial health/model/backend
 status. Summary retains trace resources and actual outbound codec counters.
+The #38 operator amendment sets the hub default to 25 hangover frames (500ms),
+with onset 3 and VeryAggressive mode unchanged. Keep `fixtures/question.wav`
+unchanged. Record the effective deployed settings in each new deployment file;
+an older running hub still uses its original default until explicitly deployed.
+Do not rewrite deployment metadata archived with earlier runs.
 Unknown configuration must be explicit; GPU installation never implies every
 model runs there. No model-file hashing, prompts, recordings or recognized text
 are saved. Required deployment identities must be present for acceptance.
@@ -148,6 +153,11 @@ PYTHONPATH="$PWD:$PWD/devices/audio-client:$PWD/ai-server" \
   devices/audio-client/.venv/bin/python -m pytest -q \
   benchmarks/tests devices/audio-client/tests/test_http.py
 ```
+
+`cargo test -p hub` also uses the installed benchmark Python environment above
+to encode the unchanged question with aiortc, then tests the actual Rust Opus
+decoder and production VAD. The 25-frame default must yield one START/END;
+an explicit 15-frame control must reproduce two utterances.
 
 For the full local stub-model transport gate, first build the normal release hub
 with `cargo build -p hub --release`. With the preinstalled pinned collector,

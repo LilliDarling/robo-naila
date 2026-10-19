@@ -9,17 +9,22 @@ pub struct VadConfig {
     pub onset_threshold: u32,
     /// Consecutive silence frames after speech before emitting End.
     /// Prevents premature cutoff during brief pauses mid-sentence.
-    /// Default: 15 frames = 300ms at 20ms/frame.
+    /// Default: 25 frames = 500ms at 20ms/frame.
     pub hangover_threshold: u32,
     /// VAD aggressiveness. Higher = fewer false positives but more missed speech.
     pub mode: VadMode,
 }
 
+#[cfg(test)]
+#[path = "vad_tests.rs"]
+mod tests;
+
 impl Default for VadConfig {
     fn default() -> Self {
         Self {
             onset_threshold: 3,
-            hangover_threshold: 15,
+            // #38 operator amendment: bridge speech pauses with 500ms hangover.
+            hangover_threshold: 25,
             mode: VadMode::VeryAggressive,
         }
     }

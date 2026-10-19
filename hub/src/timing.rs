@@ -180,7 +180,7 @@ mod tests {
     use super::*;
     #[test]
     fn first_utterance_owns_response_and_empty_final_cannot_complete() {
-        let mut timer = SessionTiming::new(&Context::new(), 3, 15);
+        let mut timer = SessionTiming::new(&Context::new(), 3, 25);
         timer.event(SpeechEvent::Start);
         timer.event(SpeechEvent::End);
         let anchor = timer.end.unwrap();
@@ -195,7 +195,7 @@ mod tests {
     }
     #[test]
     fn successful_final_requires_successful_nonempty_send() {
-        let mut timer = SessionTiming::new(&Context::new(), 3, 15);
+        let mut timer = SessionTiming::new(&Context::new(), 3, 25);
         timer.event(SpeechEvent::Start);
         timer.event(SpeechEvent::End);
         timer.end = Some(Instant::now() - Duration::from_millis(40));
@@ -203,7 +203,7 @@ mod tests {
         assert!(timer.first.unwrap() >= 40.0);
         timer.sent(false, true, true);
         assert!(timer.complete);
-        let mut independent = SessionTiming::new(&Context::new(), 3, 15);
+        let mut independent = SessionTiming::new(&Context::new(), 3, 25);
         independent.vad.record(Duration::from_micros(250));
         independent.vad.record(Duration::from_micros(750));
         assert_eq!(independent.vad.count, 2);

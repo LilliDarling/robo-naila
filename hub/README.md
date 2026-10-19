@@ -153,8 +153,13 @@ Device mic → [Opus/RTP] → Hub inbound track → Opus decode → PCM 48kHz
 Voice activity detection uses `webrtc-vad` (libfvad) with a four-state machine: `Silence` → `MaybeSpeech` → `Speaking` → `MaybeSilence`. Defaults:
 
 - **Onset threshold:** 3 consecutive speech frames (60ms) before confirming speech
-- **Hangover threshold:** 15 consecutive silence frames (300ms) before ending an utterance
-- **Mode:** Quality (lowest false-positive rate)
+- **Hangover threshold:** 25 consecutive silence frames (500ms) before ending an utterance
+- **Mode:** VeryAggressive (unchanged)
+
+The #38 operator amendment raises hangover from 300ms to 500ms to bridge an
+internal pause in the unchanged benchmark question after Opus decoding. This
+applies to all peers and adds 200ms to the nominal endpoint hangover; it may
+merge nearby turns. Onset and classifier mode stay unchanged.
 
 Frames are suppressed during silence. On confirmed onset, buffered frames are flushed with a `Start` event. During speech, frames are forwarded with `Continue`. After hangover expires, a final `End` event is emitted.
 

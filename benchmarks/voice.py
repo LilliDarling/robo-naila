@@ -138,13 +138,13 @@ async def trial(args, fixture, reader, session, provider, warmup, previous=None)
             async with asyncio.timeout(5):
                 await pc.close()
         except Exception as exc:
-            sample['reason'] = 'peer cleanup failed: ' + type(exc).__name__
+            sample.setdefault('reason', 'peer cleanup failed: ' + type(exc).__name__)
         for task in receivers:
             task.cancel()
         await asyncio.gather(*receivers, return_exceptions=True)
         root.end()
         if not await asyncio.to_thread(provider.force_flush, timeout_millis=5000):
-            sample['reason'] = 'root export flush incomplete'
+            sample.setdefault('reason', 'root export flush incomplete')
         sample.update(received_frames=sink.count, first_fixture_handoff_seconds=replay.first,
                       last_fixture_handoff_seconds=replay.end - .02 if replay.end else None,
                       fixture_end_seconds=replay.end)
@@ -169,7 +169,7 @@ async def trial(args, fixture, reader, session, provider, warmup, previous=None)
         if 'reason' not in sample:
             sample['outcome'] = 'success'
     except Exception as exc:
-        sample['reason'] = str(exc)
+        sample.setdefault('reason', str(exc))
     return sample
 
 
