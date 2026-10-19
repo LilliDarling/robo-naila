@@ -221,11 +221,12 @@ async def run(args):
     finally:
         if not await asyncio.to_thread(otel.shutdown, provider):
             error = 'telemetry shutdown incomplete'
+    capture_error = None
     try:
         snapshot = reader.read(final=True)
     except EvidenceError as exc:
-        snapshot, error = reader.snapshot(), str(exc)
-    summary = summarize(manifest, samples, snapshot, error)
+        snapshot, capture_error = reader.snapshot(), str(exc)
+    summary = summarize(manifest, samples, snapshot, capture_error, execution_error=error)
     write_json(args.run_dir / 'summary.json', summary)
     print(json.dumps({key: summary[key] for key in ('complete', 'attempted', 'success', 'failed', 'reason')}))
     return 0 if summary['complete'] else 1

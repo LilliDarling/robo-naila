@@ -156,3 +156,9 @@ AI/collector/hub test processes, and retains diagnostic artifacts under pytest's
 temporary directory. It exercises the real graph with native model doubles,
 then checks two sequential joined trials and identical offline summarization.
 Without those variables, only that transport test is skipped.
+
+Atomic summary publication also records execution finalization. Offline
+summarization requires that record and preserves its `execution_error` (including
+failed exporter shutdown); complete traces cannot erase an execution failure.
+A missing/unfinalized summary means incomplete execution. Trace-only coverage
+failures can still be resolved by a later collector append, then recomputed.

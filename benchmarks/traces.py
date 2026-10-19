@@ -81,7 +81,9 @@ def validate(snapshot, sample, cleanup=True):
         if name in REQUIRED and name != 'tts' and len(spans) != 1:
             raise EvidenceError('unexpected repeated span: ' + name)
         for span in spans:
-            if int(span.get('endTimeUnixNano', 0)) <= int(span.get('startTimeUnixNano', 0)):
+            # SDK exports ended spans. Wall-clock steps can reverse timestamp
+            # order; only an absent/default end lacks completion evidence.
+            if int(span.get('endTimeUnixNano', 0)) <= 0:
                 raise EvidenceError('unfinished span: ' + name)
             attrs = attributes(span.get('attributes', []))
             if span.get('status', {}).get('code') == 2 or attrs.get('outcome') not in (None, 'ok', 'success'):

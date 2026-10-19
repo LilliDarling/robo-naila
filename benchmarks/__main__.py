@@ -3,6 +3,7 @@ import asyncio
 import json
 from pathlib import Path
 import sys
+import wave
 
 from .artifacts import summarize
 from .traces import EvidenceError, TraceReader
@@ -39,16 +40,24 @@ def main(argv=None):
             return asyncio.run(run(args))
         manifest = json.loads((args.run_dir / 'manifest.json').read_text())
         samples = [json.loads(line) for line in (args.run_dir / 'samples.jsonl').read_text().splitlines()]
+        # Atomic summary publication is also the execution-finalization record;
+        # recompute trace statistics, but never erase its execution error.
+        try:
+            finalization = json.loads((args.run_dir / 'summary.json').read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            finalization = {}
         reader = TraceReader(args.traces)
         error = None
         try:
             snapshot = reader.read(final=True)
         except EvidenceError as exc:
             snapshot, error = reader.snapshot(), str(exc)
-        result = summarize(manifest, samples, snapshot, error)
+        result = summarize(manifest, samples, snapshot, error,
+                           execution_error=finalization.get('execution_error'),
+                           execution_finalized=finalization.get('execution_finalized') is True)
         print(json.dumps(result, indent=2, allow_nan=False))
         return 0 if result['complete'] else 1
-    except (OSError, ValueError, ImportError) as exc:
+    except (OSError, ValueError, ImportError, EOFError, wave.Error) as exc:
         print(f'setup error: {exc}', file=sys.stderr)
         return 2
 

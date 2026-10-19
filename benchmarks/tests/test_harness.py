@@ -257,6 +257,7 @@ def test_offline_summary_is_read_only_and_truncation_fails(evidence, tmp_path, c
     (tmp_path / 'samples.jsonl').write_text(json.dumps(sample) + '\n')
     capture = tmp_path / 'traces'
     capture.write_bytes(record(spans))
+    write_json(tmp_path / 'summary.json', {'execution_finalized': True, 'execution_error': None})
     before = {p: p.read_bytes() for p in tmp_path.iterdir()}
     assert main(['summarize', '--run-dir', str(tmp_path), '--traces', str(capture)]) == 0
     assert json.loads(capsys.readouterr().out)['complete']

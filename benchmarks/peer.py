@@ -67,7 +67,8 @@ class ReplayTrack(AudioStreamTrack):
                 self.end = now + .02
                 self.finished.set()
         self.pts += 960
-        self.next_at = max(self.next_at + .02, now + .02)
+        # Deadlines follow the media clock; late wakeups do not shift later frames.
+        self.next_at += .02
         return frame
 
 
