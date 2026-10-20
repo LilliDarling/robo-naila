@@ -1,6 +1,7 @@
 """Controlled model/pool delays verify stage boundaries without model downloads."""
 import asyncio
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -16,6 +17,8 @@ from services import timing
 from services.llm import LLMService
 from services.stt import STTService
 from services.tts import TTSService
+
+pytestmark = pytest.mark.asyncio
 
 
 @pytest.fixture
@@ -36,101 +39,83 @@ def capture(monkeypatch):
     provider.shutdown()
 
 
-@pytest.mark.asyncio
-async def test_stt_includes_pool_and_work_with_monotonic_clock(capture, monkeypatch):
+@pytest.mark.parametrize('kind', ['stt', 'llm'])
+async def test_stage_includes_pool_and_work_excludes_consumer_delay(capture, monkeypatch, kind):
     clock = [10.0]
-    monkeypatch.setattr(timing.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(timing.time, 'perf_counter', lambda: clock[0])
     class Pool:
         async def __aenter__(self):
             clock[0] += .020
         async def __aexit__(self, *args):
             clock[0] += .003
-    service = STTService()
-    service.is_ready, service.model, service._pool = True, object(), Pool()
-    async def work(*args):
-        clock[0] += .030
-        monkeypatch.setattr(timing.time, "time", lambda: -100000.0)  # Wall-clock jump.
-        return SimpleNamespace(text="recognized", transcription_time_ms=7)
-    monkeypatch.setattr(service, "_transcribe_impl", work)
-    result = await service.transcribe_audio(b"unchanged")
+    service = STTService() if kind == 'stt' else LLMService()
+    service.is_ready, service._pool = True, Pool()
+    if kind == 'stt':
+        service.model = object()
+        async def work(*args):
+            clock[0] += .030
+            monkeypatch.setattr(timing.time, 'time', lambda: -100000.0)  # Wall-clock jump.
+            return SimpleNamespace(text='recognized', transcription_time_ms=7)
+        monkeypatch.setattr(service, '_transcribe_impl', work)
+        assert (await service.transcribe_audio(b'unchanged')).text == 'recognized'
+    else:
+        def model(*args, **kwargs):
+            clock[0] += .030
+            yield {'choices': [{'text': 'First sentence. '}]}
+            clock[0] += .010
+            yield {'choices': [{'text': 'Second sentence.'}]}
+        service.model = model
+        stream = service.generate_chat_stream([])
+        assert await anext(stream) == 'First sentence.'
+        assert not trace.get_current_span().get_span_context().is_valid
+        assert await asyncio.to_thread(capture.finished[0].wait, 2)
     span, = capture.get_finished_spans()
-    assert result.text == "recognized"
-    assert span.attributes["duration_ms"] == pytest.approx(53)
-    assert span.attributes["transcription_time_ms"] == 7
-    assert span.attributes["outcome"] == "success"
+    assert span.attributes['outcome'] == 'success'
+    assert span.attributes['duration_ms'] == pytest.approx(53 if kind == 'stt' else 60)
+    if kind == 'stt':
+        assert span.attributes['transcription_time_ms'] == 7
+    else:
+        assert span.attributes['sentence_count'] == 2
+        assert span.attributes['llm.first_output_ms'] == pytest.approx(50)
+        assert 0 <= span.attributes['llm.first_output_ms'] <= span.attributes['duration_ms']
+        clock[0] += 5  # Slow TTS/delivery cannot inflate producer timing.
+        assert [s async for s in stream] == ['Second sentence.']
+        assert capture.get_finished_spans() == (span,)
 
 
-@pytest.mark.asyncio
-async def test_tts_actual_cache_branch_and_empty_error(capture, monkeypatch):
+@pytest.mark.parametrize('mode,cache_hit,outcome', [
+    ('synth', False, 'success'), ('cache', True, 'success'), ('blank', None, 'empty'),
+    ('header', False, 'empty_output'), ('error', False, 'error'),
+])
+async def test_tts_cache_normalization_and_output(capture, monkeypatch, mode, cache_hit, outcome):
     service = TTSService()
     service.is_ready, service.model = True, object()
-    service._synthesize_to_audio = AsyncMock(return_value=(np.ones(2400, dtype=np.float32) * .1, 24000))
-    # Cache state is selected after normalization, not by a preflight timing probe.
+    audio = np.array([], dtype=np.float32) if mode == 'header' else np.ones(2400, dtype=np.float32) * .1
+    service._synthesize_to_audio = AsyncMock(return_value=(audio, 24000))
+    if mode == 'error':
+        service._synthesize_to_audio.side_effect = RuntimeError('not exported')
     preprocess = service._preprocess_text
     def normalize(text):
         result = preprocess(text)
-        if text == "Second sentence.":
-            service._phrase_cache[service._build_cache_key(result)] = np.ones(2400, dtype=np.float32)
+        if mode == 'cache':  # Cache may appear during normalization, not preflight.
+            service._phrase_cache[service._build_cache_key(result)] = audio
         return result
-    monkeypatch.setattr(service, "_preprocess_text", normalize)
-    first = await service.synthesize("First sentence.", output_format="raw")
-    second = await service.synthesize("Second sentence.", output_format="raw")
-    empty = await service.synthesize(" ", output_format="raw")
+    monkeypatch.setattr(service, '_preprocess_text', normalize)
     encode = service._encode_audio
-    # Isolate an encoder that permits an empty WAV (the current debug logger rejects it).
-    monkeypatch.setattr(service, "_encode_audio", lambda samples, fmt: b"RIFF header" if not len(samples) else encode(samples, fmt))
-    service._synthesize_to_audio.return_value = (np.array([], dtype=np.float32), 24000)
-    header_only = await service.synthesize("No samples.", output_format="wav")
-    assert header_only.audio_bytes  # A WAV header is not synthesized speech.
-    service._synthesize_to_audio.side_effect = RuntimeError("not exported")
-    failed = await service.synthesize("Failure sentence.", output_format="raw")
-    spans = capture.get_finished_spans()
-    assert first.audio_bytes and second.audio_bytes
-    assert not empty.audio_bytes and not failed.audio_bytes
-    assert [s.attributes.get("cache_hit") for s in spans] == [False, True, None, False, False]
-    assert [s.attributes["outcome"] for s in spans] == ["success", "success", "empty", "empty_output", "error"]
-    assert all("synthesis_time_ms" in s.attributes for s in spans)
-    assert service._synthesize_to_audio.await_count == 3
-
-
-@pytest.mark.asyncio
-async def test_stream_producer_ends_before_slow_consumer(capture, monkeypatch):
-    service = LLMService()
-    service.is_ready = True
-    clock = [10.0]
-    monkeypatch.setattr(timing.time, "perf_counter", lambda: clock[0])
-    class Pool:
-        async def __aenter__(self):
-            clock[0] += .020
-        async def __aexit__(self, *args):
-            pass
-    service._pool = Pool()
-    def model(*args, **kwargs):
-        clock[0] += .030
-        yield {"choices": [{"text": "First sentence. "}]}
-        clock[0] += .010
-        yield {"choices": [{"text": "Second sentence."}]}
-    service.model = model
-    stream = service.generate_chat_stream([])
-    first = await anext(stream)
-    assert not trace.get_current_span().get_span_context().is_valid
-    assert await asyncio.to_thread(capture.finished[0].wait, 2)
+    monkeypatch.setattr(service, '_encode_audio', lambda samples, fmt: b'RIFF header' if not len(samples) else encode(samples, fmt))
+    result = await service.synthesize(' ' if mode == 'blank' else 'A sentence.', output_format='wav' if mode == 'header' else 'raw')
     span, = capture.get_finished_spans()
-    assert span.attributes["outcome"] == "success"
-    assert span.attributes["sentence_count"] == 2
-    assert 0 <= span.attributes["llm.first_output_ms"] <= span.attributes["duration_ms"]
-    assert span.attributes["llm.first_output_ms"] == pytest.approx(50)
-    assert span.attributes["duration_ms"] == pytest.approx(60)
-    clock[0] += 5  # Slow TTS/delivery after producer completion must not inflate timing.
-    assert first == "First sentence."
-    assert [s async for s in stream] == ["Second sentence."]
-    assert capture.get_finished_spans() == (span,)
+    assert bool(result.audio_bytes) is (mode in ('synth', 'cache', 'header'))
+    assert span.attributes.get('cache_hit') is cache_hit
+    assert span.attributes['outcome'] == outcome and 'synthesis_time_ms' in span.attributes
+    assert service._synthesize_to_audio.await_count == int(mode in ('synth', 'header', 'error'))
 
 
-@pytest.mark.asyncio
-async def test_distinct_producer_parents_cancel_does_not_end_span(capture):
+@pytest.mark.parametrize("backend", ["helper", "llm"])
+async def test_distinct_producer_parents_cancel_does_not_end_span(capture, backend):
     release = threading.Event()
     started = [threading.Event(), threading.Event()]
+    pool = ThreadPoolExecutor(2)
     async def consume(index):
         service = LLMService()
         service.is_ready = True
@@ -142,6 +127,11 @@ async def test_distinct_producer_parents_cancel_does_not_end_span(capture):
         service.model = model
         parent = f"00-{index + 1:032x}-{index + 1:016x}-01"
         with otel.attached(otel.extract(parent)):
+            if backend == "helper":
+                def produce():
+                    with otel.span("llm"):
+                        return list(model())
+                return await asyncio.get_running_loop().run_in_executor(pool, otel.executor_call(produce))
             return [s async for s in service.generate_chat_stream([])]
     tasks = [asyncio.create_task(consume(i)) for i in range(2)]
     try:
@@ -155,35 +145,17 @@ async def test_distinct_producer_parents_cancel_does_not_end_span(capture):
         release.set()
     await tasks[1]
     assert await asyncio.to_thread(capture.finished[1].wait, 2)
+    pool.shutdown()
     spans = capture.get_finished_spans()
     assert len(spans) == 2
     assert {s.context.trace_id for s in spans} == {1, 2}
     cancelled, = [s for s in spans if s.context.trace_id == 1]
-    assert cancelled.attributes["caller_cancelled"] is True
-    assert cancelled.attributes["outcome"] == "cancelled"
+    if backend == "llm":
+        assert cancelled.attributes["caller_cancelled"] is True
+        assert cancelled.attributes["outcome"] == "cancelled"
     assert not trace.get_current_span().get_span_context().is_valid
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("mode,expected", [("empty", "empty"), ("error", "error"), ("unavailable", "unavailable")])
-async def test_llm_unusable_output_cannot_pass(capture, mode, expected):
-    service = LLMService()
-    service.is_ready = mode != "unavailable"
-    def model(*args, **kwargs):
-        if mode == "error":
-            raise RuntimeError("not exported")
-        return iter(()) if kwargs.get("stream") else {"choices": []}
-    service.model = model
-    assert [s async for s in service.generate_chat_stream([])] == []
-    assert await service.generate_chat([]) == ""
-    spans = capture.get_finished_spans()
-    assert len(spans) == 2
-    assert all(s.attributes["outcome"] == expected for s in spans)
-    assert all("llm.first_output_ms" not in s.attributes for s in spans)
-    assert all(not s.events for s in spans)  # No exception messages or prompts.
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["success", "empty_output", "error", "fallback", "cancelled"])
 async def test_turn_ends_after_enqueue_completion(capture, outcome):
     from rpc.service import NailaAIServicer
@@ -212,7 +184,6 @@ async def test_turn_ends_after_enqueue_completion(capture, outcome):
     assert span.attributes["outcome"] == outcome
 
 
-@pytest.mark.asyncio
 async def test_stream_cancellation_while_waiting_for_pool(capture):
     waiting = asyncio.Event()
     class Pool:
@@ -235,24 +206,28 @@ async def test_stream_cancellation_while_waiting_for_pool(capture):
     assert "llm.first_output_ms" not in span.attributes
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize('streaming', [False, True])
-@pytest.mark.parametrize('usage', [None, {'completion_tokens': 17, 'prompt_tokens': 43},
-                                  {'completion_tokens': -1, 'prompt_tokens': True}])
-async def test_exact_backend_usage_or_explicit_absence(capture, streaming, usage):
+@pytest.mark.parametrize('mode,usage', [
+    ('success', None), ('success', {'completion_tokens': 17, 'prompt_tokens': 43}),
+    ('success', {'completion_tokens': -1, 'prompt_tokens': True}),
+    ('empty', None), ('error', None), ('unavailable', None),
+])
+async def test_llm_outcome_usage_and_payload_privacy(capture, streaming, mode, usage):
     service = LLMService()
-    service.is_ready = True
+    service.is_ready = mode != 'unavailable'
     def model(*args, **options):
         assert options['temperature'] == .7
-        response = {'choices': [{'text': 'Several tokens in one chunk.'}], 'usage': usage}
-        return iter([{'choices': response['choices']}, {'choices': [], 'usage': usage}]) if streaming else response
+        if mode == 'error':
+            raise RuntimeError('not exported')
+        choices = [{'text': 'Several tokens in one chunk.'}] if mode == 'success' else []
+        return iter([{'choices': choices}, {'choices': [], 'usage': usage}]) if streaming else {'choices': choices, 'usage': usage}
     service.model = model
-    if streaming:
-        assert [s async for s in service.generate_chat_stream([])] == ['Several tokens in one chunk.']
-    else:
-        assert await service.generate_chat([]) == 'Several tokens in one chunk.'
+    result = ' '.join([s async for s in service.generate_chat_stream([])]) if streaming else await service.generate_chat([])
+    assert result == ('Several tokens in one chunk.' if mode == 'success' else '')
     span, = capture.get_finished_spans()
-    assert span.attributes['outcome'] == 'success'
+    assert span.attributes['outcome'] == mode and not span.events
+    if mode != 'success':
+        assert 'llm.first_output_ms' not in span.attributes
     for key in ('completion_tokens', 'prompt_tokens'):
         if usage and type(usage[key]) is int and usage[key] >= 0:
             assert span.attributes['llm.' + key] == usage[key]

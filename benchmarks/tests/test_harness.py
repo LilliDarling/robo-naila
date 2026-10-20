@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 import wave
 
 import pytest
@@ -22,6 +23,14 @@ def wav(tmp_path):
         out.setparams((1, 2, 48000, 0, 'NONE', ''))
         out.writeframes(b'\x01\x02' * 24001)
     return path
+
+
+@pytest.fixture
+def run_args(tmp_path, wav):
+    deployment = tmp_path / 'deployment.json'
+    deployment.write_text(json.dumps({k: dict(host=k, model='test', os='test', cpu='test') for k in ('pi', 'dedicated')}))
+    return SimpleNamespace(wav=wav, deployment=deployment, run_dir=tmp_path / 'run', traces=tmp_path / 'traces',
+                           hub_url='http://127.0.0.1:1', warmup=0, iterations=1, timeout_seconds=1)
 
 
 def test_immutable_fixture_and_padding(wav):
@@ -54,22 +63,29 @@ class Clock:
 
 
 @pytest.mark.asyncio
-async def test_delayed_connection_leading_silence_and_exact_replay(wav):
+@pytest.mark.parametrize('start,overshoot', [(0, 0), (5, 0), (0, .001)])
+async def test_replay_connection_clock_and_exact_handoffs(wav, start, overshoot):
     fixture, clock = Fixture.load(wav), Clock()
-    track = ReplayTrack(fixture, clock, clock.sleep)
-    for _ in range(35):
+    async def sleep(delay):
+        clock.now += delay + overshoot
+    track = ReplayTrack(fixture, clock, sleep)
+    for _ in range(35 if not start else 0):
         assert bytes((await track.recv()).planes[0]) == bytes(1920)
     assert track.first is None
+    clock.now = start or clock.now
     track.connected()
-    frames = []
-    for _ in range(60):
+    leading_until = track.ready_at
+    frames, handoffs = [], []
+    while not track.finished.is_set():
         frame = await track.recv()
-        if track.cursor and len(frames) < len(fixture.pcm) // 1920:
+        handoffs.append(clock.now)
+        if track.first is not None:
             frames.append(bytes(frame.planes[0]))
     assert b''.join(frames) == fixture.pcm
-    assert track.first >= .5 + .68
+    assert handoffs == pytest.approx([handoffs[0] + i * .02 for i in range(len(handoffs))])
+    assert track.first >= leading_until and track.cursor == len(fixture.pcm)
     assert track.end == pytest.approx(track.first + len(frames) * .02)
-    assert track.finished.is_set()
+    assert track.next_at == pytest.approx(track.pts / 48000 + start)
 
 
 @pytest.mark.asyncio
@@ -93,21 +109,6 @@ async def test_canceled_recv_does_not_advance(wav):
     track.sleep = clock.sleep
     frames = [bytes((await track.recv()).planes[0]) for _ in range(len(track.fixture.pcm) // 1920)]
     assert b''.join(frames) == track.fixture.pcm
-
-
-@pytest.mark.asyncio
-async def test_delayed_initial_pull_starts_media_clock_without_catchup(wav):
-    clock = Clock()
-    track = ReplayTrack(Fixture.load(wav), clock, clock.sleep)
-    clock.now = 5  # Signaling must not create five seconds of overdue media.
-    track.connected()
-    handoffs = []
-    for _ in range(30):
-        await track.recv()
-        handoffs.append(clock.now)
-    assert handoffs == pytest.approx([5 + i * .02 for i in range(30)])
-    assert track.first >= 5.5
-    assert track.cursor > 0
 
 
 def record(spans):
@@ -285,13 +286,9 @@ async def test_deadline_and_completion_gate(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_two_directory_contenders_leave_existing_contents(wav, tmp_path):
+async def test_two_directory_contenders_leave_existing_contents(run_args):
     from benchmarks.voice import run
-    directory = tmp_path / 'run'
-    deployment = tmp_path / 'deployment.json'
-    deployment.write_text(json.dumps({k: dict(host=k, model='test', os='test', cpu='test') for k in ('pi', 'dedicated')}))
-    args = SimpleNamespace(wav=wav, deployment=deployment, run_dir=directory, warmup=0, iterations=1,
-                           timeout_seconds=1, hub_url='http://127.0.0.1:1', traces=tmp_path / 'traces')
+    args, directory = run_args, run_args.run_dir
     first, second = await asyncio.gather(run(args), run(args), return_exceptions=True)
     assert first == 1
     assert isinstance(second, FileExistsError)
@@ -301,16 +298,21 @@ async def test_two_directory_contenders_leave_existing_contents(wav, tmp_path):
     assert (directory / 'manifest.json').read_bytes() == original
 
 
-def test_offline_summary_is_read_only_and_truncation_fails(evidence, tmp_path, capsys):
+@pytest.mark.parametrize('finalized', [False, True])
+def test_offline_finalization_read_only_and_truncation(evidence, tmp_path, capsys, finalized):
     sample, spans = evidence
     write_json(tmp_path / 'manifest.json', dict(run_id='run', warmup=0, iterations=1))
     (tmp_path / 'samples.jsonl').write_text(json.dumps(sample) + '\n')
     capture = tmp_path / 'traces'
     capture.write_bytes(record(spans))
-    write_json(tmp_path / 'summary.json', {'execution_finalized': True, 'execution_error': None})
+    if finalized:
+        write_json(tmp_path / 'summary.json', {'execution_finalized': True, 'execution_error': None})
     before = {p: p.read_bytes() for p in tmp_path.iterdir()}
-    assert main(['summarize', '--run-dir', str(tmp_path), '--traces', str(capture)]) == 0
-    assert json.loads(capsys.readouterr().out)['complete']
+    assert main(['summarize', '--run-dir', str(tmp_path), '--traces', str(capture)]) == (0 if finalized else 1)
+    summary = json.loads(capsys.readouterr().out)
+    assert summary['complete'] is finalized
+    if not finalized:
+        assert 'finalization' in summary['reason']
     assert {p: p.read_bytes() for p in tmp_path.iterdir()} == before
     with capture.open('ab') as out:
         out.write(b'{')
@@ -349,6 +351,8 @@ async def test_trial_waits_for_connected_finality_and_task_cleanup(monkeypatch, 
 
         def __init__(self, configuration):
             self.handlers = {}
+            self.createOffer = AsyncMock(return_value=self.localDescription)
+            self.setLocalDescription = AsyncMock()
             state['peer'] = self
 
         def on(self, name):
@@ -356,12 +360,6 @@ async def test_trial_waits_for_connected_finality_and_task_cleanup(monkeypatch, 
 
         def addTrack(self, track):
             state['track'] = track
-
-        async def createOffer(self):
-            return self.localDescription
-
-        async def setLocalDescription(self, offer):
-            pass
 
         async def setRemoteDescription(self, answer):
             state['active'] = 1  # SDP answer alone must not start scored input.
@@ -433,25 +431,18 @@ async def test_trial_waits_for_connected_finality_and_task_cleanup(monkeypatch, 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('execution_ok', [False, True])
-async def test_offline_preserves_execution_result_and_allows_late_trace(monkeypatch, tmp_path, wav, evidence, capsys, execution_ok):
+async def test_offline_preserves_execution_result_and_allows_late_trace(monkeypatch, run_args, evidence, capsys, execution_ok):
     import benchmarks.voice as voice
     sample, spans = evidence
-    capture = tmp_path / 'traces'
+    args, capture = run_args, run_args.traces
     capture.write_bytes(record(spans[:-1] if execution_ok else spans))
-    deployment = tmp_path / 'deployment.json'
-    deployment.write_text(json.dumps({k: dict(host=k, model='test', os='test', cpu='test') for k in ('pi', 'dedicated')}))
-    args = SimpleNamespace(wav=wav, deployment=deployment, run_dir=tmp_path / 'run', traces=capture,
-                           hub_url='http://unused', warmup=0, iterations=1, timeout_seconds=1)
-
-    async def health(*args):
-        return healthy()
 
     async def trial(*args):
         if not execution_ok:
             raise RuntimeError('trial failed')
         return sample
 
-    monkeypatch.setattr(voice, 'health', health)
+    monkeypatch.setattr(voice, 'health', AsyncMock(return_value=healthy()))
     monkeypatch.setattr(voice, 'trial', trial)
     assert await voice.run(args) == 1
     capsys.readouterr()
@@ -465,52 +456,17 @@ async def test_offline_preserves_execution_result_and_allows_late_trace(monkeypa
         assert 'trial failed' in summary['reason']
 
 
-def test_offline_requires_final_publication(tmp_path, evidence, capsys):
-    sample, spans = evidence
-    (tmp_path / 'manifest.json').write_text(json.dumps(dict(run_id='run', warmup=0, iterations=1)))
-    (tmp_path / 'samples.jsonl').write_text(json.dumps(sample) + '\n')
-    capture = tmp_path / 'traces'
-    capture.write_bytes(record(spans))
-    assert main(['summarize', '--run-dir', str(tmp_path), '--traces', str(capture)]) == 1
-    summary = json.loads(capsys.readouterr().out)
-    assert not summary['complete']
-    assert 'finalization' in summary['reason']
-
-
-@pytest.mark.asyncio
-async def test_replay_deadlines_do_not_accumulate_scheduler_overshoot(wav):
-    clock = Clock()
-
-    async def late_sleep(delay):
-        clock.now += delay + .001
-
-    track = ReplayTrack(Fixture.load(wav), clock, late_sleep)
-    track.connected()
-    handoffs = []
-    while not track.finished.is_set():
-        await track.recv()
-        if track.first is not None:
-            handoffs.append(clock.now)
-    assert handoffs[-1] - handoffs[0] == pytest.approx((len(handoffs) - 1) * .02)
-    assert track.next_at == pytest.approx(track.pts / 48000)
-
-
-@pytest.mark.parametrize('end_ns', ['1000', '500'])
-def test_completed_spans_allow_equal_or_backward_wall_time(evidence, end_ns):
-    sample, spans = evidence
-    stt = next(s for s in spans if s['name'] == 'stt')
-    stt['endTimeUnixNano'] = end_ns
-    validate(spans, sample)
-
-
-@pytest.mark.parametrize('end', [None, '0'])
-def test_missing_span_end_is_still_incomplete(evidence, end):
+@pytest.mark.parametrize('end', ['1000', '500', None, '0'])
+def test_span_end_presence_not_wall_clock_order(evidence, end):
     sample, spans = evidence
     stt = next(s for s in spans if s['name'] == 'stt')
     stt.pop('endTimeUnixNano')
     if end is not None:
         stt['endTimeUnixNano'] = end
-    with pytest.raises(EvidenceError, match='unfinished'):
+    if end in (None, '0'):
+        with pytest.raises(EvidenceError, match='unfinished'):
+            validate(spans, sample)
+    else:
         validate(spans, sample)
 
 

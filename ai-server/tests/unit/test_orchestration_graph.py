@@ -294,39 +294,6 @@ class TestNAILAOrchestrationGraph:
         assert result.get("action_handled", False) is False
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "intent_confidence, dispatched",
-        [(0.415, False), (0.49, True), (None, True)],
-        ids=["weak_match_falls_through", "strong_match_dispatches", "keyword_fallback_not_gated"],
-    )
-    async def test_dispatch_action_gates_on_intent_confidence(
-        self, orchestrator, monkeypatch, intent_confidence, dispatched
-    ):
-        """A weak classifier match must not fire an action even with a confident
-        transcript: "What color is the sky?" scored 0.415 for weather_query and
-        fetched the weather instead of reaching the LLM."""
-        from agents.actions import registry
-
-        monkeypatch.setattr(registry, "_HANDLERS", {})
-
-        async def stub(utterance, context):
-            return "It's 60°F and overcast."
-
-        registry.register("weather_query", stub)
-
-        state = {
-            "intent": "weather_query",
-            "intent_confidence": intent_confidence,
-            "processed_text": "what color is the sky",
-            "confidence": 0.63,
-        }
-
-        result = await orchestrator._dispatch_action(state)
-
-        assert result.get("action_handled", False) is dispatched
-        assert ("response_text" in result) is dispatched
-
-    @pytest.mark.asyncio
     async def test_dispatch_action_passes_utterance_and_context_to_handler(
         self, orchestrator, monkeypatch
     ):
@@ -605,33 +572,21 @@ class TestNAILAOrchestrationGraph:
         assert result["conversation_history"] == []
 
     @pytest.mark.asyncio
-    async def test_workflow_weak_intent_match_reaches_llm_path(self, orchestrator, monkeypatch):
-        """End to end through the compiled graph: the classifier score set by
-        process_input must survive to dispatch_action. It once didn't (missing
-        from NAILAState), so "What color is the sky?" still fetched the weather."""
+    @pytest.mark.parametrize("intent_confidence,dispatched", [(0.415, False), (0.49, True), (None, True)])
+    async def test_workflow_intent_gate_preserves_classifier_score(self, orchestrator, monkeypatch, intent_confidence, dispatched):
         from agents.actions import registry
-
         monkeypatch.setattr(registry, "_HANDLERS", {})
-        called = {"hit": False}
-
-        async def stub(utterance, context):
-            called["hit"] = True
-            return "It's 60°F and overcast."
-
-        registry.register("weather_query", stub)
-
+        handler = AsyncMock(return_value="It's 60°F and overcast.")
+        registry.register("weather_query", handler)
         async def process_input(state):
-            state.update(processed_text="what color is the sky", intent="weather_query", intent_confidence=0.415)
-            return state
-
+            return {**state, "processed_text": "what color is the sky", "intent": "weather_query", "intent_confidence": intent_confidence}
         orchestrator.input_processor.process.side_effect = process_input
         orchestrator.response_generator.process.side_effect = lambda state, config=None: state
-
         result = await orchestrator.run({"raw_input": "What color is the sky?", "input_type": "text", "confidence": 0.63})
-
-        assert called["hit"] is False
-        assert result.get("action_handled", False) is False
-        assert result["intent_confidence"] == 0.415
+        assert result.get("action_handled", False) is dispatched
+        assert ("response_text" in result) is dispatched
+        assert result["intent_confidence"] == intent_confidence
+        assert handler.await_count == int(dispatched)
 
     @pytest.mark.asyncio
     async def test_workflow_with_empty_state(self, orchestrator):
