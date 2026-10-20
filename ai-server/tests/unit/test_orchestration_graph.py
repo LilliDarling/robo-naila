@@ -605,6 +605,35 @@ class TestNAILAOrchestrationGraph:
         assert result["conversation_history"] == []
 
     @pytest.mark.asyncio
+    async def test_workflow_weak_intent_match_reaches_llm_path(self, orchestrator, monkeypatch):
+        """End to end through the compiled graph: the classifier score set by
+        process_input must survive to dispatch_action. It once didn't (missing
+        from NAILAState), so "What color is the sky?" still fetched the weather."""
+        from agents.actions import registry
+
+        monkeypatch.setattr(registry, "_HANDLERS", {})
+        called = {"hit": False}
+
+        async def stub(utterance, context):
+            called["hit"] = True
+            return "It's 60°F and overcast."
+
+        registry.register("weather_query", stub)
+
+        async def process_input(state):
+            state.update(processed_text="what color is the sky", intent="weather_query", intent_confidence=0.415)
+            return state
+
+        orchestrator.input_processor.process.side_effect = process_input
+        orchestrator.response_generator.process.side_effect = lambda state, config=None: state
+
+        result = await orchestrator.run({"raw_input": "What color is the sky?", "input_type": "text", "confidence": 0.63})
+
+        assert called["hit"] is False
+        assert result.get("action_handled", False) is False
+        assert result["intent_confidence"] == 0.415
+
+    @pytest.mark.asyncio
     async def test_workflow_with_empty_state(self, orchestrator):
         """Test workflow handles empty/minimal state gracefully"""
         empty_state = {}

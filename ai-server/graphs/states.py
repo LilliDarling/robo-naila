@@ -15,6 +15,9 @@ class NAILAState(TypedDict):
     # Processing
     processed_text: Optional[str]
     intent: Optional[str]
+    # Intent-classifier similarity (None for keyword fallback); gates action
+    # handlers. LangGraph drops keys not declared here between nodes.
+    intent_confidence: Optional[float]
     confidence: float
     context: Dict[str, Any]
 
