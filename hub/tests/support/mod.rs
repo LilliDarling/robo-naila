@@ -1,3 +1,6 @@
+#[allow(dead_code)]
+pub mod telemetry;
+
 use std::sync::Arc;
 
 use bytes::Bytes;

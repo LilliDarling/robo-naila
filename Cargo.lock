@@ -1468,6 +1468,8 @@ dependencies = [
  "percent-encoding",
  "rand",
  "thiserror 2.0.21",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]

@@ -7,13 +7,11 @@ use hub::{
     http::{AppState, router},
     metrics::HubMetrics,
 };
-use opentelemetry::{Value, global};
-use opentelemetry_sdk::{
-    error::OTelSdkResult,
-    trace::{SdkTracerProvider, SpanData, SpanExporter},
-};
+use opentelemetry::global;
+use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
+use support::telemetry::number;
 use std::{
-    sync::{Arc, Mutex, atomic::AtomicU64},
+    sync::{Arc, atomic::AtomicU64},
     time::Duration,
 };
 use tokio::{
@@ -37,21 +35,6 @@ use webrtc::{
     },
 };
 
-#[derive(Clone, Debug, Default)]
-struct Capture(Arc<Mutex<Vec<SpanData>>>);
-impl SpanExporter for Capture {
-    async fn export(&self, batch: Vec<SpanData>) -> OTelSdkResult {
-        self.0.lock().unwrap().extend(batch);
-        Ok(())
-    }
-}
-fn number(span: &SpanData, key: &str) -> f64 {
-    match &span.attributes.iter().find(|kv| kv.key.as_str() == key).unwrap().value {
-        Value::F64(v) => *v,
-        Value::I64(v) => *v as f64,
-        other => panic!("{other:?}"),
-    }
-}
 fn bus() -> (Arc<AudioBus>, mpsc::Receiver<hub::audio::TaggedFrame>) {
     let (audio_tx, rx) = mpsc::channel(256);
     (Arc::new(AudioBus { audio_tx, tts_sub: DashMap::new(), device_configs: DashMap::new() }), rx)
@@ -61,7 +44,7 @@ fn bus() -> (Arc<AudioBus>, mpsc::Receiver<hub::audio::TaggedFrame>) {
 #[tokio::test]
 async fn real_webrtc_and_task_owned_measurements() {
     timeout(Duration::from_secs(20), async {
-        let capture = Capture::default();
+        let capture = InMemorySpanExporter::default();
         let provider = SdkTracerProvider::builder().with_simple_exporter(capture.clone()).build();
         global::set_tracer_provider(provider.clone());
         let (bus, mut rx) = bus();
@@ -117,7 +100,7 @@ async fn real_webrtc_and_task_owned_measurements() {
         // token from this fixture or infer cleanup from just one ended span.
         timeout(Duration::from_secs(10), async {
             loop {
-                let spans = capture.0.lock().unwrap();
+                let spans = capture.get_finished_spans().unwrap();
                 let finished = ["hub.webrtc.receive", "hub.session"].iter()
                     .all(|name| spans.iter().any(|s| s.name == *name));
                 if finished && tasks.is_empty() { break; }
@@ -130,7 +113,7 @@ async fn real_webrtc_and_task_owned_measurements() {
         health.write_all(format!("GET /health HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
         let mut response = String::new(); health.read_to_string(&mut response).await.unwrap();
         assert!(response.contains("\"active_devices\":0"), "{response}");
-        let spans = capture.0.lock().unwrap().clone();
+        let spans = capture.get_finished_spans().unwrap();
         let receive = spans.iter().find(|s| s.name == "hub.webrtc.receive").unwrap();
         assert_eq!(number(receive, "opus_decode_ms.count"), 6.0);
         assert_eq!(number(receive, "receive_dispatch_ms.count"), 6.0);
