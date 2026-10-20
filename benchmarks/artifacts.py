@@ -46,20 +46,19 @@ def summarize(manifest, samples, snapshot, capture_error=None, *, execution_erro
     provenance = {}
     for sample in samples:
         error = capture_error
-        observed = {}
         try:
             groups = validate(snapshot, sample)
             if sample['outcome'] != 'success':
                 raise EvidenceError(sample.get('reason', 'execution failed'))
             if sample.get('received_frames', 0) < 1:
                 raise EvidenceError('no decoded return')
-            for name in ('hub.session', 'hub.webrtc.receive'):
-                observed[name] = attributes(groups[name][0].get('attributes', []))
             for spans in groups.values():
                 for span in spans:
                     resource = span.get('resource', {})
-                    service = resource.get('service.name', 'unknown')
-                    provenance.setdefault(service, []).append(resource)
+                    # Per-batch resources repeat: https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/v0.137.0/exporter/fileexporter/README.md
+                    resources = provenance.setdefault(resource.get('service.name', 'unknown'), [])
+                    if resource not in resources:
+                        resources.append(resource)
             if not sample['warmup'] and not error:
                 for key in ('peer.connect_ms', 'peer_first_audio_ms', 'peer_input_to_first_audio_ms'):
                     populations[key].append(sample[key])
@@ -95,7 +94,7 @@ def summarize(manifest, samples, snapshot, capture_error=None, *, execution_erro
                                 populations[prefix + '_ms_per_trial_mean'].append(float(attrs[field + '.sum']) / count)
         except (EvidenceError, KeyError, TypeError, ValueError) as exc:
             error = str(exc)
-        results.append(dict(trial_id=sample['trial_id'], warmup=sample['warmup'], complete=error is None, reason=error, observed=observed))
+        results.append(dict(trial_id=sample['trial_id'], warmup=sample['warmup'], complete=error is None, reason=error))
     success = sum(r['complete'] for r in results)
     expected = manifest['warmup'] + manifest['iterations']
     stages = {k: distribution(v) for k, v in populations.items()}
@@ -106,8 +105,8 @@ def summarize(manifest, samples, snapshot, capture_error=None, *, execution_erro
                 execution_finalized=execution_finalized, execution_error=execution_error,
                 attempted=len(samples), success=success, failed=len(samples)-success,
                 requested=expected, measured_success=sum(r['complete'] and not r['warmup'] for r in results),
-                required_trace_coverage=results, provenance=dict(manifest=manifest, resources=provenance),
+                required_trace_coverage=results, provenance=dict(resources=provenance),
                 headline=['peer_first_audio_ms', 'llm.first_output_ms', 'llm.tokens_per_second'],
                 diagnostic_stages=['llm'],
-                stages=stages, tts_cache=cache, fps=None,
+                stages=stages, tts_cache=cache,
                 reason=execution_error or capture_error, timing_scope='software peer; includes synthesized silence; not audible or physical-device latency')

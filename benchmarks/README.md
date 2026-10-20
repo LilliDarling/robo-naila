@@ -75,8 +75,9 @@ Use a fresh capture for each invocation. The peer exclusively creates run-dir;
 existing directories exit 2 and are never resumed or overwritten. The collector
 owns capture-dir and traces.jsonl. Run artifacts are manifest.json, samples.jsonl
 and atomically published summary.json. The [archived Pi/Mac run](results/2026-10-20-pi4-hub-m2max-ai/)
-keeps raw evidence and a results table; its derived summary.json is not committed. Offline summary prints recomputed JSON to
-stdout without changing any input. Exit 0 means complete execution and coverage;
+keeps a manifest and results table; summary.json is not committed.
+Its removed samples.jsonl and traces.jsonl remain in git history at `3e54959`.
+Offline summary prints recomputed JSON to stdout without changing any input. Exit 0 means complete execution and coverage;
 1 means failed execution/incomplete evidence; 2 means invalid setup/arguments.
 
 On the intended Pi, run the normal release hub with `NAILA_AI_GRPC_URL` set to
@@ -116,7 +117,8 @@ effective model settings. Example shape (replace placeholders with actual facts)
 
 The manifest includes source revision/dirty state, immutable WAV SHA-256,
 padding, peer host/libraries/Opus configuration and initial health/model/backend
-status. Summary retains trace resources and actual outbound codec counters.
+status. Summary retains unique resources per service and compact trial coverage;
+manifest facts and outbound codec attributes stay in manifest.json and traces.jsonl.
 The #38 operator amendment sets the hub default to 25 hangover frames (500ms),
 with onset 3 and VeryAggressive mode unchanged. Keep `fixtures/question.wav`
 unchanged. Record the effective deployed settings in each new deployment file;
@@ -145,7 +147,7 @@ response or physical-device latency**. No host clocks are subtracted, and
 collection/export delays do not score. Warmups are excluded. Summaries report
 n/mean/min/max/nearest-rank p50/p95 (including n=1), null plus a reason for absent
 populations, TTS cache hits/misses and per-trial mean VAD/decode/send populations.
-Overlapping model stages are never added into a total. FPS is null for voice.
+Overlapping model stages are never added into a total.
 
 The summary's `headline` order is time to first reply audio (`peer_first_audio_ms`),
 time to first model text (`llm.first_output_ms`), then `llm.tokens_per_second`.

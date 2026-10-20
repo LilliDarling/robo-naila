@@ -76,12 +76,9 @@ Reading these numbers:
 ## Files
 
 - `manifest.json` — run configuration, provenance and deployment facts.
-- `samples.jsonl` — one record per trial (warmups flagged).
-- `traces.jsonl` — raw OTLP JSON capture from the collector (IDs and timings;
-  no audio or text).
 
 Host addresses were replaced with role names (`pi-hub`, `ai-server`). The derived
 `summary.json` is not committed. The table above preserves the published results;
-raw trial and trace evidence remains available for analysis. The CLI `summarize`
-command requires the original execution-finalization record in `summary.json`,
-so it cannot certify this archive after that record was removed.
+removed `samples.jsonl` and `traces.jsonl` remain in git history at `3e54959`.
+The CLI `summarize` command requires those inputs and the original execution-finalization
+record in `summary.json`, so it cannot certify this reduced archive.

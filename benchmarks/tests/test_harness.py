@@ -218,6 +218,20 @@ def test_statistics_warmup_cache_and_failure_counts(evidence):
         distribution([float('nan')])
 
 
+def test_summary_keeps_only_unique_resources_and_compact_coverage(evidence):
+    sample, spans = evidence
+    resources = [{'service.name': 'hub', 'instance': 'a', 'tags': ['pi']},
+                 {'service.name': 'hub', 'instance': 'b', 'tags': ['pi']},
+                 {'service.name': 'ai', 'instance': 'c'}]
+    for index, span in enumerate(spans):
+        span['resource'] = dict(resources[index % len(resources)])
+    summary = summarize(dict(run_id='run', warmup=1, iterations=1), [dict(sample, warmup=True), sample], spans)
+    assert summary['complete']
+    assert summary['provenance'] == {'resources': {'hub': resources[:2], 'ai': resources[2:]}}
+    assert all(set(result) == {'trial_id', 'warmup', 'complete', 'reason'} for result in summary['required_trace_coverage'])
+    assert 'fps' not in summary
+
+
 @pytest.mark.parametrize('usage', [False, True])
 def test_token_populations_and_producer_throughput(evidence, usage):
     sample, spans = evidence
