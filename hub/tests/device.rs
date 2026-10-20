@@ -8,11 +8,11 @@ use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use hub::audio::{AudioBus, SpeechEvent, TtsFrame};
+use hub::audio::{AudioBus, AudioFrame, SpeechEvent, TtsFrame};
 use hub::device::run_device;
 use hub::metrics::HubMetrics;
 use hub::vad::VadConfig;
-use support::{silence_frame, speech_frame, MockTransport};
+use support::{speech_frame, MockTransport};
 use webrtc_vad::VadMode;
 
 /// Small thresholds so tests complete quickly.
@@ -256,7 +256,11 @@ async fn vad_hangover_emits_end_and_resets() {
     // still classify as speech and reset the hangover counter. 30 frames
     // (~600ms) is more than enough headroom for hangover_threshold=5.
     for _ in 0..30 {
-        handles.frame_tx.send(silence_frame()).await.unwrap();
+        handles.frame_tx.send(AudioFrame {
+            data: Bytes::from(vec![0; 960 * 2]), // 20ms of mono PCM16 at 48kHz.
+            sample_rate: 48_000,
+            timestamp: 0,
+        }).await.unwrap();
     }
 
     // Drain frames until we see End (or timeout).
