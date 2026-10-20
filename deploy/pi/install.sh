@@ -1,10 +1,22 @@
 #!/bin/bash
-# Run as root on a NetworkManager Pi with both DHCP connections already active.
+# Run as root; --hub-only leaves existing network configuration alone.
 set -euo pipefail
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 source_dir=$(cd -- "$(dirname -- "$0")" && pwd)
 backup=/root/naila-dual-uplink-backup
 test "$(id -u)" = 0
+install_hub() {
+    install -d -m 0755 /etc/naila
+    if [ ! -e /etc/naila/hub.env ]; then
+        install -m 0600 "$source_dir/etc/naila/hub.env.example" /etc/naila/hub.env
+    fi
+    install -m 0644 "$source_dir/etc/systemd/system/naila-hub.service" /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable naila-hub.service
+    printf 'Hub installed; configure /etc/naila/hub.env, then: sudo systemctl start naila-hub\n'
+}
+if [ "${1:-}" = --hub-only ]; then install_hub; exit 0; fi
+test "$#" = 0
 for cmd in nmcli ip sysctl python3; do command -v "$cmd" >/dev/null; done
 test ! -e "$backup"
 test ! -e /etc/sysctl.d/90-naila-dual-uplink.conf
@@ -33,4 +45,5 @@ for nic in eth0 wlan0; do
         /etc/NetworkManager/dispatcher.d/90-naila-dual-uplink "$nic" up
 done
 sysctl -p /etc/sysctl.d/90-naila-dual-uplink.conf
+install_hub
 printf 'Installed dual-uplink configuration; rollback: sudo %s/rollback.sh\n' "$backup"

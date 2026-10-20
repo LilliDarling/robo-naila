@@ -1,7 +1,16 @@
 #!/bin/bash
-# PROPOSAL ONLY. Root rollback for the recorded baseline, not a generic reset.
+# Root rollback; --hub-only leaves existing network configuration alone.
 set -eu
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
+test "$(id -u)" = 0
+test "$#" = 0 || { test "$#" = 1 && test "$1" = --hub-only; }
+if [ -e /etc/systemd/system/naila-hub.service ]; then
+    systemctl disable --now naila-hub.service
+    rm -f /etc/systemd/system/naila-hub.service
+    systemctl daemon-reload
+fi
+# Preserve /etc/naila/hub.env for subsequent installs.
+if [ "${1:-}" = --hub-only ]; then exit 0; fi
 rm -f /etc/NetworkManager/dispatcher.d/90-naila-dual-uplink
 rm -f /etc/sysctl.d/90-naila-dual-uplink.conf
 ip -4 rule del priority 10100 table 101 2>/dev/null || true

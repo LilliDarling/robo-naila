@@ -107,6 +107,7 @@ ssh hub@hub.local 'mkdir -p ~/robo-naila/hub ~/robo-naila/proto'
 rsync -av Cargo.toml Cargo.lock hub@hub.local:robo-naila/
 rsync -av --exclude target hub/ hub@hub.local:robo-naila/hub/
 rsync -av proto/ hub@hub.local:robo-naila/proto/
+rsync -av deploy/pi/ hub@hub.local:robo-naila/deploy/pi/
 ```
 
 ```sh
@@ -114,14 +115,19 @@ rsync -av proto/ hub@hub.local:robo-naila/proto/
 cd ~/robo-naila
 . "$HOME/.cargo/env"
 cargo build --locked --release -p hub -j 1
-export NAILA_AI_GRPC_URL='http://<mac-lan-ip>:50051'
-RUST_LOG=info ./target/release/hub
+sudo bash deploy/pi/install.sh --hub-only
+sudoedit /etc/naila/hub.env  # set NAILA_AI_GRPC_URL; RUST_LOG=info
+sudo systemctl start naila-hub
+journalctl -u naila-hub -f
 ```
 
-`-j 1` limits build memory demand. Leave this foreground process running;
-Ctrl-C shuts it down. Re-export the URL after logging in again. The hub has
-automatic gRPC reconnect (1–30 seconds backoff); no supervisor is required today.
-An unset URL retains `http://127.0.0.1:50051`. Supply a nonempty HTTP URL.
+`-j 1` limits build memory demand. The service starts at boot, restarts on failure,
+and logs to the journal. Installation preserves an existing `/etc/naila/hub.env`;
+the repo ships a placeholder template. Tracing stays off by default. The hub's
+gRPC reconnect (1–30 seconds backoff) handles DHCP delay, so the unit orders after
+`network.target` without waiting for `network-online.target`. After env edits,
+run `sudo systemctl restart naila-hub`. To remove only the service (keeping env),
+run `sudo bash deploy/pi/rollback.sh --hub-only`.
 
 ## 4. Check the actual pair
 
