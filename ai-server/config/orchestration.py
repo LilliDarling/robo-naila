@@ -21,6 +21,13 @@ RECALL_SKIP_CONFIDENCE = float(os.getenv("NAILA_RECALL_SKIP_CONFIDENCE", "0.8"))
 # memory layer, not the prompt-context layer.
 HISTORY_LIMIT = int(os.getenv("NAILA_HISTORY_LIMIT", "10"))
 
-# Below this confidence the intent classifier is too uncertain to trust;
+# Below this STT confidence the transcript is too uncertain to act on;
 # action handlers won't fire and the LLM/clarification path takes over.
 ACTION_CONFIDENCE_FLOOR = float(os.getenv("NAILA_ACTION_CONFIDENCE_FLOOR", "0.3"))
+
+# Below this intent-classifier similarity, action handlers won't fire and the
+# LLM answers. Calibrated on all-MiniLM-L6-v2: real weather/time requests score
+# >= 0.49 ("What's the temperature?"), near misses up to 0.44 ("What color is
+# the sky?" 0.415 used to fetch the weather). Keyword-fallback intents carry no
+# score and are not gated.
+ACTION_INTENT_FLOOR = float(os.getenv("NAILA_ACTION_INTENT_FLOOR", "0.47"))

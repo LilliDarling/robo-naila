@@ -294,6 +294,39 @@ class TestNAILAOrchestrationGraph:
         assert result.get("action_handled", False) is False
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "intent_confidence, dispatched",
+        [(0.415, False), (0.49, True), (None, True)],
+        ids=["weak_match_falls_through", "strong_match_dispatches", "keyword_fallback_not_gated"],
+    )
+    async def test_dispatch_action_gates_on_intent_confidence(
+        self, orchestrator, monkeypatch, intent_confidence, dispatched
+    ):
+        """A weak classifier match must not fire an action even with a confident
+        transcript: "What color is the sky?" scored 0.415 for weather_query and
+        fetched the weather instead of reaching the LLM."""
+        from agents.actions import registry
+
+        monkeypatch.setattr(registry, "_HANDLERS", {})
+
+        async def stub(utterance, context):
+            return "It's 60°F and overcast."
+
+        registry.register("weather_query", stub)
+
+        state = {
+            "intent": "weather_query",
+            "intent_confidence": intent_confidence,
+            "processed_text": "what color is the sky",
+            "confidence": 0.63,
+        }
+
+        result = await orchestrator._dispatch_action(state)
+
+        assert result.get("action_handled", False) is dispatched
+        assert ("response_text" in result) is dispatched
+
+    @pytest.mark.asyncio
     async def test_dispatch_action_passes_utterance_and_context_to_handler(
         self, orchestrator, monkeypatch
     ):

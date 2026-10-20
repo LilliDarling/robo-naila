@@ -169,7 +169,7 @@ class NAILAOrchestrationGraph:
 
         On success, sets ``state["response_text"]`` and ``state["action_handled"]``;
         the response_generator's short-circuit then skips the LLM/streaming path.
-        On no-handler / low-confidence / handler error, passes through unchanged
+        On no-handler / low-confidence / weak intent match / handler error, passes through unchanged
         so the LLM path can take over.
         """
         intent = state.get("intent")
@@ -180,6 +180,11 @@ class NAILAOrchestrationGraph:
 
         handler = action_registry.get(intent)
         if handler is None:
+            return state
+
+        intent_confidence = state.get("intent_confidence")
+        if intent_confidence is not None and intent_confidence < orch_config.ACTION_INTENT_FLOOR:
+            logger.info("action_skipped", intent=intent, intent_confidence=intent_confidence, reason="weak_intent_match")
             return state
 
         try:

@@ -56,7 +56,7 @@ class InputProcessor(BaseAgent):
             processed_text = str(raw_input)
 
         # Basic intent detection
-        intent = self._detect_intent(processed_text)
+        intent, intent_confidence = self._classify_intent(processed_text)
 
         # Calculate processing time
         processing_time_ms = int((time.time() - start_time) * 1000)
@@ -64,6 +64,7 @@ class InputProcessor(BaseAgent):
         # Update state
         state["processed_text"] = processed_text
         state["intent"] = intent
+        state["intent_confidence"] = intent_confidence
         state["timestamp"] = datetime.now(timezone.utc).isoformat()
         state["processing_time_ms"] = processing_time_ms
 
@@ -71,6 +72,7 @@ class InputProcessor(BaseAgent):
             "input_processed",
             text=processed_text,
             intent=intent,
+            intent_confidence=intent_confidence,
             processing_time_ms=processing_time_ms
         )
         return state
@@ -131,23 +133,31 @@ class InputProcessor(BaseAgent):
             # Use mean embedding as intent representation
             self.intent_embeddings[intent] = np.mean(embeddings, axis=0)
     
-    @lru_cache(maxsize=256)
     def _detect_intent(self, text: str) -> str:
         """Fast intent detection with NLP model + fallback patterns"""
+        return self._classify_intent(text)[0]
+
+    @lru_cache(maxsize=256)
+    def _classify_intent(self, text: str) -> tuple[str, float | None]:
+        """Intent plus the classifier's similarity score, or None when there is
+        no score (empty text, keyword fallback)."""
         if not text.strip():
-            return "general"
-        
+            return "general", None
+
         # Try NLP model first (cached for speed)
         if self.has_model:
-            return self._detect_intent_semantic(text)
-        
+            return self._score_intent_semantic(text)
+
         # Fallback to fast pattern matching
-        return self._detect_intent_patterns(text)
-    
+        return self._detect_intent_patterns(text), None
+
     def _detect_intent_semantic(self, text: str) -> str:
         """Use sentence similarity for intent detection"""
+        return self._score_intent_semantic(text)[0]
+
+    def _score_intent_semantic(self, text: str) -> tuple[str, float | None]:
         if not self.model or not np:
-            return "general"
+            return "general", None
 
         # Get text embedding
         text_embedding = self.model.encode([text.lower()])[0]
@@ -166,7 +176,7 @@ class InputProcessor(BaseAgent):
                 best_score = similarity
                 best_intent = intent
 
-        return best_intent
+        return best_intent, float(best_score)
     
     def _detect_intent_patterns(self, text: str) -> str:
         """Fast pattern-based fallback"""
