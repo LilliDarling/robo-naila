@@ -9,9 +9,6 @@ import time
 from uuid import uuid4
 
 import aiohttp
-from opentelemetry import trace
-from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
-import telemetry as otel
 from audio_client.webrtc import WebRTCClient
 from audio_client.profile import get_profile
 
@@ -56,13 +53,15 @@ async def wait_for(predicate, deadline):
         await asyncio.sleep(min(.1, max(0, limit - time.monotonic())))
 
 
-async def trial(args, fixture, reader, session, provider, warmup, previous=None):
+async def trial(args, fixture, reader, session, warmup, previous=None):
     sample = dict(trial_id=str(uuid4()), device_id='benchmark-' + str(uuid4()), warmup=warmup, outcome='failed')
     replay, sink = ReplayTrack(fixture), Sink()
     client = WebRTCClient(args.hub_url, sample['device_id'], None, session,
                           profile=get_profile('mac'), source=replay, on_audio=sink)
-    root = trace.get_tracer('naila.benchmark').start_span('benchmark.voice', context=otel.extract(''))
-    sample.update(trace_id=f'{root.get_span_context().trace_id:032x}', root_span_id=f'{root.get_span_context().span_id:016x}')
+    # W3C trace-context v1: sampled external parent; no peer span needs exporting.
+    # https://www.w3.org/TR/trace-context-1/#traceparent-header
+    sample.update(trace_id=uuid4().hex, root_span_id=uuid4().hex[:16])
+    header = f"00-{sample['trace_id']}-{sample['root_span_id']}-01"
     baseline = None
     try:
         baseline = await health(session, args.hub_url)
@@ -70,47 +69,44 @@ async def trial(args, fixture, reader, session, provider, warmup, previous=None)
         sample['health_before'] = baseline
         if previous and any(baseline[k] != previous[k] for k in ('vad_onsets', 'vad_ends', 'grpc_reconnects', 'tts_frames_dropped')):
             raise EvidenceError('unexpected activity between trials')
-        with trace.use_span(root, end_on_exit=False, record_exception=False, set_status_on_exception=False):
-            headers = {}
-            TraceContextTextMapPropagator().inject(headers)
-            start = time.monotonic()
-            async with asyncio.timeout(30):
-                await client.connect(trace_header=headers['traceparent'])
-                async def ready():
-                    if client.broken.is_set():
-                        raise EvidenceError('connection failed during setup')
-                    return client.connected.is_set()
-                await wait_for(ready, start + 30)
-            sample['peer.connect_ms'] = (time.monotonic() - start) * 1000
-            replay.connected()
-            # Bounded replay plus post-input deadline; failures remain active after readiness.
-            async def complete():
+        start = time.monotonic()
+        async with asyncio.timeout(30):
+            await client.connect(trace_header=header)
+            async def ready():
                 if client.broken.is_set():
-                    raise EvidenceError('peer disconnected')
-                if len(client.receive_tasks) > 1:
-                    raise EvidenceError('unexpected return audio tracks')
-                if any(t.done() for t in client.receive_tasks):
-                    raise EvidenceError('receive sink ended')
-                current = await health(session, args.hub_url)
-                check_health(current, baseline, active=1)
-                snapshot = reader.read()
-                if replay.end is None or time.monotonic() < replay.end:
-                    if sink.first is not None:
-                        raise EvidenceError('return before fixture end')
-                    return False
-                if sink.first is not None and sink.first < replay.end:
+                    raise EvidenceError('connection failed during setup')
+                return client.connected.is_set()
+            await wait_for(ready, start + 30)
+        sample['peer.connect_ms'] = (time.monotonic() - start) * 1000
+        replay.connected()
+        # Bounded replay plus post-input deadline; failures remain active after readiness.
+        async def complete():
+            if client.broken.is_set():
+                raise EvidenceError('peer disconnected')
+            if len(client.receive_tasks) > 1:
+                raise EvidenceError('unexpected return audio tracks')
+            if any(t.done() for t in client.receive_tasks):
+                raise EvidenceError('receive sink ended')
+            current = await health(session, args.hub_url)
+            check_health(current, baseline, active=1)
+            snapshot = reader.read()
+            if replay.end is None or time.monotonic() < replay.end:
+                if sink.first is not None:
                     raise EvidenceError('return before fixture end')
-                try:
-                    validate(snapshot, sample, cleanup=False)
-                except EvidenceError as exc:
-                    if str(exc).startswith('missing spans:'):
-                        return False
-                    raise
-                return sink.count > 0
-            replay_deadline = time.monotonic() + 30 + len(fixture.pcm) / 96000
-            await wait_for(complete, lambda: replay.end + args.timeout_seconds if replay.end else replay_deadline)
-            sample.update(peer_first_audio_ms=(sink.first - replay.end) * 1000,
-                          peer_input_to_first_audio_ms=(sink.first - replay.first) * 1000)
+                return False
+            if sink.first is not None and sink.first < replay.end:
+                raise EvidenceError('return before fixture end')
+            try:
+                validate(snapshot, sample, cleanup=False)
+            except EvidenceError as exc:
+                if str(exc).startswith('missing spans:'):
+                    return False
+                raise
+            return sink.count > 0
+        replay_deadline = time.monotonic() + 30 + len(fixture.pcm) / 96000
+        await wait_for(complete, lambda: replay.end + args.timeout_seconds if replay.end else replay_deadline)
+        sample.update(peer_first_audio_ms=(sink.first - replay.end) * 1000,
+                      peer_input_to_first_audio_ms=(sink.first - replay.first) * 1000)
     except (Exception, asyncio.CancelledError) as exc:
         sample['reason'] = type(exc).__name__ + ': ' + str(exc)
     finally:
@@ -119,9 +115,6 @@ async def trial(args, fixture, reader, session, provider, warmup, previous=None)
                 await client.close()
         except Exception as exc:
             sample.setdefault('reason', 'peer cleanup failed: ' + type(exc).__name__)
-        root.end()
-        if not await asyncio.to_thread(provider.force_flush, timeout_millis=5000):
-            sample.setdefault('reason', 'root export flush incomplete')
         sample.update(received_frames=sink.count, first_fixture_handoff_seconds=replay.first,
                       last_fixture_handoff_seconds=replay.end - .02 if replay.end else None,
                       fixture_end_seconds=replay.end)
@@ -174,11 +167,7 @@ async def run(args):
     write_json(args.run_dir / 'manifest.json', manifest)
     (args.run_dir / 'samples.jsonl').touch(exist_ok=False)
     samples, reader, error = [], TraceReader(args.traces), None
-    provider = None
     try:
-        provider = otel.init('naila.benchmark')
-        if provider is None:
-            raise EvidenceError('NAILA_OTEL_ENABLED=1 required')
         async with aiohttp.ClientSession() as session:
             manifest['initial_health'] = await health(session, args.hub_url)
             check_health(manifest['initial_health'])
@@ -186,7 +175,7 @@ async def run(args):
             with (args.run_dir / 'samples.jsonl').open('a') as output:
                 previous = manifest['initial_health']
                 for index in range(args.warmup + args.iterations):
-                    result = await trial(args, fixture, reader, session, provider, index < args.warmup, previous)
+                    result = await trial(args, fixture, reader, session, index < args.warmup, previous)
                     previous = result.get('health_after')
                     samples.append(result)
                     output.write(json.dumps(result, allow_nan=False) + '\n')
@@ -195,9 +184,6 @@ async def run(args):
                         break
     except (Exception, asyncio.CancelledError) as exc:
         error = type(exc).__name__ + ': ' + str(exc)
-    finally:
-        if not await asyncio.to_thread(otel.shutdown, provider):
-            error = 'telemetry shutdown incomplete'
     capture_error = None
     try:
         snapshot = reader.read(final=True)

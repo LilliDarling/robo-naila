@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import grpc
 import numpy as np
 import telemetry as otel
+from config.telemetry import TelemetryConfig
 from agents.input_processor import InputProcessor
 from agents.orchestrator import NAILAOrchestrator
 from memory.conversation import ConversationMemory
@@ -43,7 +44,8 @@ async def main(ready_path):
     def unavailable(self):
         raise ImportError('integration fixture has no intent model')
     InputProcessor._load_transformer = unavailable
-    provider = otel.init()
+    config = TelemetryConfig.from_env()
+    provider = otel.init(enabled=config.enabled, endpoint=config.traces_endpoint)
     stt, llm, tts = STTService(), LLMService(), TTSService()
     for service, model in ((stt, Whisper()), (llm, Llama()), (tts, Kokoro())):
         service.is_ready, service.model = True, model

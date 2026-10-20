@@ -3,7 +3,6 @@
 No logging instrumentation or payload/exception recording is installed.
 """
 from contextlib import contextmanager
-import os
 import threading
 import time
 from uuid import uuid4
@@ -12,14 +11,10 @@ from opentelemetry import context, trace
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 
-def init(service_name="naila.ai", *, enabled=None, endpoint=None):
-    """The AI server passes its resolved ``config.telemetry`` settings; standalone
-    callers (benchmark peer, stub server) fall back to the environment."""
-    if enabled is None:
-        enabled = os.environ.get("NAILA_OTEL_ENABLED") == "1"
+def init(service_name="naila.ai", *, enabled, endpoint):
+    """Callers pass resolved config.telemetry settings."""
     if not enabled:
         return None
-    endpoint = endpoint or os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
     if not endpoint:
         raise ValueError("explicit OTEL_EXPORTER_OTLP_TRACES_ENDPOINT required")
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter

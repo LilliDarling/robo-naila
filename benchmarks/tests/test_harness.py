@@ -154,7 +154,7 @@ def evidence():
                   outcome='success', received_frames=10, peer_first_audio_ms=100, peer_input_to_first_audio_ms=600,
                   **{'peer.connect_ms': 20})
     spans = []
-    for i, name in enumerate(REQUIRED, 1):
+    for i, name in enumerate(REQUIRED, 2):
         values = {'outcome': 'success', 'duration_ms': 10}
         if name in ('hub.session', 'hub.response'):
             values = {'outcome': 'ok'}
@@ -172,7 +172,7 @@ def evidence():
             values['cache_hit'] = True
         if name == 'hub.response':
             values.update(hub_response_first_send_ms=50, hub_response_final_send_ms=100)
-        spans.append(dict(traceId=sample['trace_id'], spanId=f'{i:016x}', parentSpanId='' if i == 1 else sample['root_span_id'],
+        spans.append(dict(traceId=sample['trace_id'], spanId=f'{i:016x}', parentSpanId=sample['root_span_id'],
                           name=name, startTimeUnixNano='1000', endTimeUnixNano='2000', attributes=attr(**values)))
     return sample, tuple(spans)
 
@@ -184,6 +184,8 @@ def test_completion_requires_turn_and_cleanup(evidence):
     with pytest.raises(EvidenceError, match='hub.session'):
         validate(tuple(s for s in spans if s['name'] != 'hub.session'), sample)
     validate(spans, sample)
+    with pytest.raises(EvidenceError, match='missing ancestry'):
+        validate(spans, dict(sample, root_span_id='f' * 16))
     with pytest.raises(EvidenceError, match='missing spans'):
         validate(spans, dict(sample, trace_id='late-old-trace'))
 
@@ -319,26 +321,17 @@ def test_offline_summary_is_read_only_and_truncation_fails(evidence, tmp_path, c
 @pytest.mark.asyncio
 @pytest.mark.parametrize('disconnect,late_cleanup,cleanup_failure', [
     (False, False, None), (True, False, None), (False, True, None),
-    (True, True, None), (True, False, 'close'), (True, False, 'flush'),
+    (True, True, None), (True, False, 'close'),
     (False, False, 'receive'), (False, False, 'tracks'),
 ])
 async def test_trial_waits_for_connected_finality_and_task_cleanup(monkeypatch, wav, evidence, disconnect, late_cleanup, cleanup_failure):
     import benchmarks.voice as voice
     import audio_client.webrtc as transport
-    from opentelemetry.sdk.trace import TracerProvider
     sample, spans = evidence
-    provider = TracerProvider(shutdown_on_exit=False)
-    original_tracer = provider.get_tracer('test')
-    state = {'active': 0, 'cleanup_reads': 0, 'root': None, 'frame': asyncio.Event()}
+    state = {'active': 0, 'cleanup_reads': 0, 'trace_id': None, 'root_span_id': None, 'frame': asyncio.Event()}
     yield_loop = asyncio.sleep
     clock = Clock()
     monkeypatch.setattr(voice.time, 'monotonic', clock)
-    monkeypatch.setattr(voice.trace, 'get_tracer', lambda name: SimpleNamespace(start_span=start_span))
-
-    def start_span(*args, **kwargs):
-        state['root'] = original_tracer.start_span(*args, **kwargs)
-        return state['root']
-
     class Track:
         kind = 'audio'
 
@@ -382,14 +375,9 @@ async def test_trial_waits_for_connected_finality_and_task_cleanup(monkeypatch, 
 
     class Reader:
         def read(self):
-            root = state['root'].get_span_context()
             result = copy.deepcopy(spans)
             for span in result:
-                span['traceId'] = f'{root.trace_id:032x}'
-                if span['name'] == 'benchmark.voice':
-                    span['spanId'] = f'{root.span_id:016x}'
-                else:
-                    span['parentSpanId'] = f'{root.span_id:016x}'
+                span.update(traceId=state['trace_id'], parentSpanId=state['root_span_id'])
             if state['active'] == 0:
                 state['cleanup_reads'] += 1
                 if late_cleanup or state['cleanup_reads'] == 1:
@@ -402,7 +390,9 @@ async def test_trial_waits_for_connected_finality_and_task_cleanup(monkeypatch, 
         return current
 
     async def exchange(*args, **kwargs):
-        assert kwargs['trace_header'].split('-')[1] == f"{state['root'].get_span_context().trace_id:032x}"
+        version, state['trace_id'], state['root_span_id'], flags = kwargs['trace_header'].split('-')
+        assert version == '00' and flags == '01'
+        assert len(bytes.fromhex(state['trace_id'])) == 16 and len(bytes.fromhex(state['root_span_id'])) == 8
         return 'answer'
 
     async def sleep(delay):
@@ -425,9 +415,7 @@ async def test_trial_waits_for_connected_finality_and_task_cleanup(monkeypatch, 
     monkeypatch.setattr(voice, 'health', health)
     monkeypatch.setattr(transport, 'exchange_sdp', exchange)
     monkeypatch.setattr(voice.asyncio, 'sleep', sleep)
-    if cleanup_failure == 'flush':
-        monkeypatch.setattr(provider, 'force_flush', lambda **kwargs: False)
-    result = await voice.trial(SimpleNamespace(hub_url='http://test', timeout_seconds=1), Fixture.load(wav), Reader(), None, provider, False)
+    result = await voice.trial(SimpleNamespace(hub_url='http://test', timeout_seconds=1), Fixture.load(wav), Reader(), None, False)
     assert result['outcome'] == ('failed' if disconnect or late_cleanup or cleanup_failure in ('receive', 'tracks') else 'success'), result
     if result['outcome'] == 'success':
         assert result['received_frames'] == 1
@@ -441,16 +429,15 @@ async def test_trial_waits_for_connected_finality_and_task_cleanup(monkeypatch, 
         assert 'deadline' in result['reason']
     elif cleanup_failure in ('receive', 'tracks'):
         assert result['reason'] == 'EvidenceError: ' + ('receive sink ended' if cleanup_failure == 'receive' else 'unexpected return audio tracks')
-    provider.shutdown()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('shutdown_ok', [False, True])
-async def test_offline_preserves_execution_result_and_allows_late_trace(monkeypatch, tmp_path, wav, evidence, capsys, shutdown_ok):
+@pytest.mark.parametrize('execution_ok', [False, True])
+async def test_offline_preserves_execution_result_and_allows_late_trace(monkeypatch, tmp_path, wav, evidence, capsys, execution_ok):
     import benchmarks.voice as voice
     sample, spans = evidence
     capture = tmp_path / 'traces'
-    capture.write_bytes(record(spans[:-1] if shutdown_ok else spans))
+    capture.write_bytes(record(spans[:-1] if execution_ok else spans))
     deployment = tmp_path / 'deployment.json'
     deployment.write_text(json.dumps({k: dict(host=k, model='test', os='test', cpu='test') for k in ('pi', 'dedicated')}))
     args = SimpleNamespace(wav=wav, deployment=deployment, run_dir=tmp_path / 'run', traces=capture,
@@ -460,22 +447,22 @@ async def test_offline_preserves_execution_result_and_allows_late_trace(monkeypa
         return healthy()
 
     async def trial(*args):
+        if not execution_ok:
+            raise RuntimeError('trial failed')
         return sample
 
-    monkeypatch.setattr(voice.otel, 'init', lambda *args: object())
-    monkeypatch.setattr(voice.otel, 'shutdown', lambda provider: shutdown_ok)
     monkeypatch.setattr(voice, 'health', health)
     monkeypatch.setattr(voice, 'trial', trial)
     assert await voice.run(args) == 1
     capsys.readouterr()
-    if shutdown_ok:
+    if execution_ok:
         with capture.open('ab') as out:
             out.write(record(spans[-1:]))
-    assert main(['summarize', '--run-dir', str(args.run_dir), '--traces', str(capture)]) == (0 if shutdown_ok else 1)
+    assert main(['summarize', '--run-dir', str(args.run_dir), '--traces', str(capture)]) == (0 if execution_ok else 1)
     summary = json.loads(capsys.readouterr().out)
-    assert summary['complete'] is shutdown_ok
-    if not shutdown_ok:
-        assert 'shutdown incomplete' in summary['reason']
+    assert summary['complete'] is execution_ok
+    if not execution_ok:
+        assert 'trial failed' in summary['reason']
 
 
 def test_offline_requires_final_publication(tmp_path, evidence, capsys):

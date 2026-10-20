@@ -102,7 +102,7 @@ def test_real_webrtc_grpc_graph_collector(tmp_path):
             assert int(session['outbound.opus_forward_count']) > 0
             assert int(session['outbound.pcm_encode_count']) == 0
             assert sample['received_frames'] > 0 and sample['health_after']['active_devices'] == 0
-            assert {s['resource']['service.name'] for group in groups.values() for s in group} == {'naila.hub', 'naila.ai', 'naila.benchmark'}
+            assert {s['resource']['service.name'] for group in groups.values() for s in group} == {'naila.hub', 'naila.ai'}
         after = healthy()
         assert after['vad_onsets'] - before['vad_onsets'] == after['vad_ends'] - before['vad_ends'] == 2
         assert after['grpc_reconnects'] == before['grpc_reconnects']
@@ -111,7 +111,7 @@ def test_real_webrtc_grpc_graph_collector(tmp_path):
                                     '--traces', str(tmp_path / 'traces.jsonl')], cwd=ROOT, env=environment, capture_output=True, text=True, timeout=10)
         assert recomputed.returncode == 0, recomputed.stderr
         assert json.loads(recomputed.stdout) == summary
-        print('2 joined trials; 3 services; real WebRTC/Opus + gRPC + graph + collector 0.137.0; zero drops/reconnects; offline summary identical')
+        print('2 joined trials; 2 services; real WebRTC/Opus + gRPC + graph + collector 0.137.0; zero drops/reconnects; offline summary identical')
     finally:
         for process in reversed(processes):
             process.send_signal(signal.SIGINT) if process.poll() is None else None

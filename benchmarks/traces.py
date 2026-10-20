@@ -67,7 +67,7 @@ def grouped(snapshot, trace_id):
     return groups
 
 
-REQUIRED = ('benchmark.voice', 'hub.connect', 'hub.session', 'hub.webrtc.receive',
+REQUIRED = ('hub.connect', 'hub.session', 'hub.webrtc.receive',
             'hub.utterance', 'hub.response', 'ai.turn', 'stt', 'llm', 'tts')
 
 
@@ -127,12 +127,10 @@ def validate(snapshot, sample, cleanup=True):
             milliseconds(attrs, prefix + '.sum')
         if int(session.get('outbound.opus_forward_count', 0)) + int(session.get('outbound.pcm_encode_count', 0)) < 1:
             raise EvidenceError('missing actual outbound codec')
-        root = groups['benchmark.voice'][0]
-        if root['spanId'] != sample['root_span_id'] or root.get('parentSpanId'):
-            raise EvidenceError('wrong trace root')
-        ids = {s['spanId'] for spans in groups.values() for s in spans}
+        root = sample['root_span_id']
+        ids = {root} | {s['spanId'] for spans in groups.values() for s in spans}
         for spans in groups.values():
             for span in spans:
-                if span is not root and span.get('parentSpanId') not in ids:
+                if span['spanId'] != root and span.get('parentSpanId') not in ids:
                     raise EvidenceError('missing ancestry')
     return groups

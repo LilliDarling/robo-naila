@@ -20,24 +20,24 @@ def test_disabled_creates_no_exporter_or_thread(monkeypatch):
     monkeypatch.delenv("NAILA_OTEL_ENABLED", raising=False)
     before = threading.enumerate()
     with patch("opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter") as exporter:
-        assert otel.init() is None
+        assert otel.init(enabled=False, endpoint=None) is None
         exporter.assert_not_called()
     assert threading.enumerate() == before
     monkeypatch.setenv("NAILA_OTEL_ENABLED", "1")
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", raising=False)
     with pytest.raises(ValueError, match="explicit"):
-        otel.init()
+        otel.init(enabled=True, endpoint=None)
 
 
 def test_explicit_settings_override_environment(monkeypatch):
     monkeypatch.setenv("NAILA_OTEL_ENABLED", "1")
     with patch("opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter") as exporter:
-        assert otel.init(enabled=False) is None
+        assert otel.init(enabled=False, endpoint=None) is None
         exporter.assert_not_called()
     monkeypatch.delenv("NAILA_OTEL_ENABLED")
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", raising=False)
     with pytest.raises(ValueError, match="explicit"):
-        otel.init(enabled=True)
+        otel.init(enabled=True, endpoint=None)
 
 
 def test_missing_and_invalid_context():
