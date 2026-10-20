@@ -233,3 +233,30 @@ async def test_stream_cancellation_while_waiting_for_pool(capture):
     span, = capture.get_finished_spans()
     assert span.attributes["outcome"] == "cancelled"
     assert "llm.first_output_ms" not in span.attributes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('streaming', [False, True])
+@pytest.mark.parametrize('usage', [None, {'completion_tokens': 17, 'prompt_tokens': 43},
+                                  {'completion_tokens': -1, 'prompt_tokens': True}])
+async def test_exact_backend_usage_or_explicit_absence(capture, streaming, usage):
+    service = LLMService()
+    service.is_ready = True
+    def model(*args, **options):
+        assert options['temperature'] == .7
+        response = {'choices': [{'text': 'Several tokens in one chunk.'}], 'usage': usage}
+        return iter([{'choices': response['choices']}, {'choices': [], 'usage': usage}]) if streaming else response
+    service.model = model
+    if streaming:
+        assert [s async for s in service.generate_chat_stream([])] == ['Several tokens in one chunk.']
+    else:
+        assert await service.generate_chat([]) == 'Several tokens in one chunk.'
+    span, = capture.get_finished_spans()
+    assert span.attributes['outcome'] == 'success'
+    for key in ('completion_tokens', 'prompt_tokens'):
+        if usage and type(usage[key]) is int and usage[key] >= 0:
+            assert span.attributes['llm.' + key] == usage[key]
+            assert span.attributes['llm.' + key + '.unavailable_reason'] == ''
+        else:
+            assert 'llm.' + key not in span.attributes
+            assert span.attributes['llm.' + key + '.unavailable_reason']

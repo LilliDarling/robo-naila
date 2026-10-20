@@ -146,6 +146,24 @@ n/mean/min/max/nearest-rank p50/p95 (including n=1), null plus a reason for abse
 populations, TTS cache hits/misses and per-trial mean VAD/decode/send populations.
 Overlapping model stages are never added into a total. FPS is null for voice.
 
+The summary's `headline` order is time to first reply audio (`peer_first_audio_ms`),
+time to first model text (`llm.first_output_ms`), then `llm.tokens_per_second`.
+`llm` total duration remains in `stages` and is labelled in `diagnostic_stages`.
+Tokens/s is exact generated (`llm.completion_tokens`) tokens divided by the
+producer-owned LLM duration in seconds, including prompt processing and resource
+waits, excluding delayed streaming consumption/TTS. Token count populations
+(`llm.completion_tokens`, `llm.prompt_tokens`) use the same measured, successful,
+non-warmup trials; each population reports its own n. Missing usage is null with
+a reason, never a zero count. OTel omits unavailable numeric attributes and
+records `llm.<count>.unavailable_reason` on the span instead.
+The pinned llama-cpp-python 0.3.16 text-completion API reports exact `usage` for
+nonstreaming calls, but omits it from streaming chunks; those runs therefore
+have unavailable token populations/throughput unless the backend supplies usage.
+Chunks are not counted as tokens and no tokenizer estimates are made.
+Post-first-output throughput is not reported: this API does not give the exact
+token count at the first nonempty text delta, which may contain multiple tokens.
+Prompts, routing and sampling settings (including temperature 0.7) are unchanged.
+
 Focused checks, with no model downloads or hardware-speed assertions:
 
 ```sh

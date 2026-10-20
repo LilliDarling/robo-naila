@@ -218,6 +218,25 @@ def test_statistics_warmup_cache_and_failure_counts(evidence):
         distribution([float('nan')])
 
 
+@pytest.mark.parametrize('usage', [False, True])
+def test_token_populations_and_producer_throughput(evidence, usage):
+    sample, spans = evidence
+    llm = next(s for s in spans if s['name'] == 'llm')
+    if usage:
+        llm['attributes'] += attr(**{'llm.completion_tokens': 20, 'llm.prompt_tokens': 100,
+                                    'duration_ms': 2000, 'llm.first_output_ms': 500})
+    summary = summarize(dict(run_id='run', warmup=1, iterations=1),
+                        [dict(sample, warmup=True), sample], spans)
+    assert summary['headline'] == ['peer_first_audio_ms', 'llm.first_output_ms', 'llm.tokens_per_second']
+    assert summary['diagnostic_stages'] == ['llm']
+    for key, expected in [('completion_tokens', 20), ('prompt_tokens', 100), ('tokens_per_second', 10)]:
+        population = summary['stages']['llm.' + key]
+        assert population['n'] == int(usage)
+        assert population['mean'] == (expected if usage else None)
+        if not usage:
+            assert 'backend token usage' in population['reason']
+
+
 def healthy(**overrides):
     return dict(status='ok', grpc_connected=True, active_devices=0, ai_server={'health': 'healthy'},
                 tts_frames_dropped=0, grpc_reconnects=0, vad_onsets=0, vad_ends=0, **overrides)

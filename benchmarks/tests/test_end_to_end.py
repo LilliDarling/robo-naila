@@ -90,6 +90,10 @@ def test_real_webrtc_grpc_graph_collector(tmp_path):
         assert summary['complete'] and summary['measured_success'] == 1
         assert summary['stages']['stt']['n'] == summary['stages']['llm']['n'] == 1
         assert summary['stages']['tts']['n'] == 2
+        for key in ('llm.completion_tokens', 'llm.prompt_tokens', 'llm.tokens_per_second'):
+            assert summary['stages'][key]['n'] == 0  # Pinned streaming API supplies no usage.
+            assert summary['stages'][key]['mean'] is None
+            assert summary['stages'][key]['reason']
         samples = [json.loads(line) for line in (run_dir / 'samples.jsonl').read_text().splitlines()]
         assert len({sample['device_id'] for sample in samples}) == len({sample['trace_id'] for sample in samples}) == 2
         for sample in samples:

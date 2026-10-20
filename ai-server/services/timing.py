@@ -40,6 +40,9 @@ class Stage:
         # https://github.com/open-telemetry/opentelemetry-python/blob/v1.38.0/opentelemetry-sdk/src/opentelemetry/sdk/trace/__init__.py
         self.started = time.perf_counter()
         self.span = trace.get_tracer("naila").start_span(name, context=parent, attributes=attributes)
+        if name == "llm":
+            self.set(**{f"llm.{key}.unavailable_reason": "backend did not report exact usage"
+                        for key in ("completion_tokens", "prompt_tokens")})
         self.outcome = "empty"
         self.cancelled = threading.Event()
         # No-op tracing must preserve an extracted parent for downstream tasks.

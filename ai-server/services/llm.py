@@ -23,6 +23,17 @@ from utils import get_logger
 logger = get_logger(__name__)
 
 
+def _record_usage(response, record=label):
+    # 0.3.16 supplies usage only for nonstreaming text completions; chunks are
+    # not tokens. Never re-tokenize or infer counts from model state/chunk count.
+    # https://github.com/abetlen/llama-cpp-python/blob/v0.3.16/llama_cpp/llama.py#L1621-L1739
+    usage = response.get("usage") or {}
+    for name in ("completion_tokens", "prompt_tokens"):
+        value = usage.get(name)
+        if type(value) is int and value >= 0:
+            record(**{f"llm.{name}": value, f"llm.{name}.unavailable_reason": ""})
+
+
 class LLMService(BaseAIService):
     """Service for loading and running LLM inference"""
 
@@ -235,6 +246,7 @@ class LLMService(BaseAIService):
             )
 
             # Extract generated text with validation
+            _record_usage(response or {})
             if not response or not response.get('choices'):
                 logger.error("llm_invalid_response_structure")
                 return ""
@@ -248,15 +260,15 @@ class LLMService(BaseAIService):
 
             # Log performance
             inference_time = time.time() - start_time
-            tokens_generated = response['usage']['completion_tokens']
-            tokens_per_sec = tokens_generated / inference_time if inference_time > 0 else 0
+            tokens_generated = (response.get('usage') or {}).get('completion_tokens')
+            tokens_per_sec = tokens_generated / inference_time if tokens_generated is not None and inference_time > 0 else None
 
             if llm_config.LOG_PERFORMANCE_METRICS:
                 logger.info(
                     "llm_generation_performance",
                     inference_time_seconds=round(inference_time, 2),
                     tokens_generated=tokens_generated,
-                    tokens_per_second=round(tokens_per_sec, 1)
+                    tokens_per_second=round(tokens_per_sec, 1) if tokens_per_sec is not None else None
                 )
 
             if inference_time > llm_config.WARNING_INFERENCE_TIME_SECONDS:
@@ -352,7 +364,7 @@ class LLMService(BaseAIService):
         def _produce() -> int:
             """Iterate llama-cpp's blocking stream, segment into sentences on
             this thread, push complete sentences to the asyncio queue. Returns
-            total token count for performance logging."""
+            nonempty chunk count (not tokenizer tokens) for diagnostic logging."""
             buf = SentenceBuffer()
             tokens = 0
             sentences = 0
@@ -368,6 +380,7 @@ class LLMService(BaseAIService):
                     echo=False,
                     stream=True,
                 ):
+                    _record_usage(chunk, stage.set)
                     if not chunk.get("choices"):
                         continue
                     delta = chunk["choices"][0].get("text", "")
@@ -420,8 +433,8 @@ class LLMService(BaseAIService):
                 logger.info(
                     "llm_generation_performance",
                     inference_time_seconds=round(inference_time, 2),
-                    tokens_generated=total_tokens,
-                    tokens_per_second=round(tokens_per_sec, 1),
+                    output_chunks=total_tokens,
+                    output_chunks_per_second=round(tokens_per_sec, 1),
                     streaming=True,
                 )
             if inference_time > llm_config.WARNING_INFERENCE_TIME_SECONDS:

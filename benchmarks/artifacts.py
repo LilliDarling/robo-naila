@@ -34,6 +34,7 @@ def summarize(manifest, samples, snapshot, capture_error=None, *, execution_erro
         execution_error = execution_error or 'run finalization incomplete'
     populations = {name: [] for name in ('peer.connect_ms', 'peer_first_audio_ms', 'peer_input_to_first_audio_ms',
                    'stt', 'llm', 'tts', 'tts_cache_hit_ms', 'tts_cache_miss_ms', 'ai.turn', 'llm.first_output_ms', 'hub_connect_ms',
+                   'llm.completion_tokens', 'llm.prompt_tokens', 'llm.tokens_per_second',
                    'hub_response_first_send_ms', 'hub_response_final_send_ms',
                    'vad_ms_per_trial_mean', 'opus_decode_ms_per_trial_mean',
                    'receive_dispatch_ms_per_trial_mean', 'send_ms_per_trial_mean')}
@@ -69,6 +70,13 @@ def summarize(manifest, samples, snapshot, capture_error=None, *, execution_erro
                         value = attrs.get('duration_ms')
                         if value is not None:
                             populations[name].append(float(value))
+                        if name == 'llm':
+                            for key in ('llm.completion_tokens', 'llm.prompt_tokens'):
+                                if key in attrs:
+                                    populations[key].append(attrs[key])
+                            generated = attrs.get('llm.completion_tokens')
+                            if generated is not None and value is not None and value > 0:
+                                populations['llm.tokens_per_second'].append(generated * 1000 / value)
                         if name == 'tts':
                             hit = attrs.get('cache_hit')
                             cache['hit' if hit is True else 'miss' if hit is False else 'unknown'] += 1
@@ -90,10 +98,16 @@ def summarize(manifest, samples, snapshot, capture_error=None, *, execution_erro
         results.append(dict(trial_id=sample['trial_id'], warmup=sample['warmup'], complete=error is None, reason=error, observed=observed))
     success = sum(r['complete'] for r in results)
     expected = manifest['warmup'] + manifest['iterations']
+    stages = {k: distribution(v) for k, v in populations.items()}
+    for key in ('llm.completion_tokens', 'llm.prompt_tokens', 'llm.tokens_per_second'):
+        if not stages[key]['n']:
+            stages[key]['reason'] = 'exact backend token usage or positive LLM duration unavailable'
     return dict(schema_version=1, run_id=manifest['run_id'], complete=success == expected and not capture_error and not execution_error,
                 execution_finalized=execution_finalized, execution_error=execution_error,
                 attempted=len(samples), success=success, failed=len(samples)-success,
                 requested=expected, measured_success=sum(r['complete'] and not r['warmup'] for r in results),
                 required_trace_coverage=results, provenance=dict(manifest=manifest, resources=provenance),
-                stages={k: distribution(v) for k, v in populations.items()}, tts_cache=cache, fps=None,
+                headline=['peer_first_audio_ms', 'llm.first_output_ms', 'llm.tokens_per_second'],
+                diagnostic_stages=['llm'],
+                stages=stages, tts_cache=cache, fps=None,
                 reason=execution_error or capture_error, timing_scope='software peer; includes synthesized silence; not audible or physical-device latency')
