@@ -1,0 +1,2841 @@
+{
+  "schema_version": 1,
+  "run_id": "4836d394-f9d4-4d46-92b6-373b44bd81a3",
+  "complete": true,
+  "execution_finalized": true,
+  "execution_error": null,
+  "attempted": 22,
+  "success": 22,
+  "failed": 0,
+  "requested": 22,
+  "measured_success": 20,
+  "required_trace_coverage": [
+    {
+      "trial_id": "3357fc2c-c1f9-4561-bbf1-41cf383cb169",
+      "warmup": true,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-bd2ece33-d06d-4da4-bfca-97a1ceb0c6c8",
+          "conversation_id": "12",
+          "vad_ms.count": "412",
+          "vad_ms.sum": 41.56236800000002,
+          "vad_ms.max": 0.170499,
+          "vad_ms.mean": 0.10087953398058258,
+          "outbound_send_ms.count": "155",
+          "outbound_send_ms.sum": 23.186782,
+          "outbound_send_ms.max": 0.208703,
+          "outbound_send_ms.mean": 0.14959214193548387,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "155",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "412",
+          "opus_decode_ms.sum": 86.99885300000005,
+          "opus_decode_ms.max": 0.41981100000000005,
+          "opus_decode_ms.mean": 0.21116226456310694,
+          "receive_dispatch_ms.count": "412",
+          "receive_dispatch_ms.sum": 8.223180999999999,
+          "receive_dispatch_ms.max": 0.06492500000000001,
+          "receive_dispatch_ms.mean": 0.019959177184466017,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "2607e51c-d758-43e3-9d8d-1bf3678b4e7c",
+      "warmup": true,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-735bbbb1-2c0b-4212-bab2-54aa5afa427b",
+          "conversation_id": "13",
+          "vad_ms.count": "345",
+          "vad_ms.sum": 33.56165500000001,
+          "vad_ms.max": 0.139758,
+          "vad_ms.mean": 0.09728015942028988,
+          "outbound_send_ms.count": "134",
+          "outbound_send_ms.sum": 20.278820999999994,
+          "outbound_send_ms.max": 0.22140500000000002,
+          "outbound_send_ms.mean": 0.15133448507462682,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "134",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "345",
+          "opus_decode_ms.sum": 76.56624400000008,
+          "opus_decode_ms.max": 0.48377400000000004,
+          "opus_decode_ms.mean": 0.22193114202898576,
+          "receive_dispatch_ms.count": "345",
+          "receive_dispatch_ms.sum": 7.122323999999997,
+          "receive_dispatch_ms.max": 0.055944,
+          "receive_dispatch_ms.mean": 0.02064441739130434,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "41227765-dc1a-43b5-82bc-db8c296034b3",
+      "warmup": false,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-40e17f19-e797-45bc-b960-66eed028cb40",
+          "conversation_id": "14",
+          "vad_ms.count": "336",
+          "vad_ms.sum": 32.697139000000014,
+          "vad_ms.max": 0.155832,
+          "vad_ms.mean": 0.09731291369047623,
+          "outbound_send_ms.count": "123",
+          "outbound_send_ms.sum": 18.107609,
+          "outbound_send_ms.max": 0.200184,
+          "outbound_send_ms.mean": 0.14721633333333334,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "123",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "336",
+          "opus_decode_ms.sum": 74.66904700000005,
+          "opus_decode_ms.max": 0.428386,
+          "opus_decode_ms.mean": 0.2222293065476192,
+          "receive_dispatch_ms.count": "336",
+          "receive_dispatch_ms.sum": 6.808572999999998,
+          "receive_dispatch_ms.max": 0.060536,
+          "receive_dispatch_ms.mean": 0.020263610119047613,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "fd2d0c22-460e-4387-a7b6-5cfa597edaab",
+      "warmup": false,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-3f2127be-e26b-4e30-9248-9edf96ad4442",
+          "conversation_id": "15",
+          "vad_ms.count": "412",
+          "vad_ms.sum": 41.122187000000025,
+          "vad_ms.max": 0.163962,
+          "vad_ms.mean": 0.0998111334951457,
+          "outbound_send_ms.count": "192",
+          "outbound_send_ms.sum": 28.591465999999993,
+          "outbound_send_ms.max": 0.237498,
+          "outbound_send_ms.mean": 0.14891388541666664,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "192",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "412",
+          "opus_decode_ms.sum": 86.2814380000001,
+          "opus_decode_ms.max": 0.440256,
+          "opus_decode_ms.mean": 0.2094209660194177,
+          "receive_dispatch_ms.count": "412",
+          "receive_dispatch_ms.sum": 8.363330999999995,
+          "receive_dispatch_ms.max": 0.065667,
+          "receive_dispatch_ms.mean": 0.020299347087378627,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "50680459-b391-4fe8-adc6-72734ad41a39",
+      "warmup": false,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-2d340390-5779-4a5e-9515-da01823365df",
+          "conversation_id": "16",
+          "vad_ms.count": "416",
+          "vad_ms.sum": 40.38447799999999,
+          "vad_ms.max": 0.134869,
+          "vad_ms.mean": 0.09707807211538458,
+          "outbound_send_ms.count": "187",
+          "outbound_send_ms.sum": 28.354278999999995,
+          "outbound_send_ms.max": 0.39533,
+          "outbound_send_ms.mean": 0.15162716042780747,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "187",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "416",
+          "opus_decode_ms.sum": 88.9161529999999,
+          "opus_decode_ms.max": 0.439145,
+          "opus_decode_ms.mean": 0.2137407524038459,
+          "receive_dispatch_ms.count": "416",
+          "receive_dispatch_ms.sum": 8.374291,
+          "receive_dispatch_ms.max": 0.057759,
+          "receive_dispatch_ms.mean": 0.02013050721153846,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "3ee0d776-0081-4a07-80a4-dbb154dac1f3",
+      "warmup": false,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-00b8313c-2038-4e52-bf7f-7ab6eaf0df65",
+          "conversation_id": "17",
+          "vad_ms.count": "309",
+          "vad_ms.sum": 31.194783999999988,
+          "vad_ms.max": 0.15529500000000002,
+          "vad_ms.mean": 0.10095399352750806,
+          "outbound_send_ms.count": "123",
+          "outbound_send_ms.sum": 18.961469,
+          "outbound_send_ms.max": 0.217462,
+          "outbound_send_ms.mean": 0.15415828455284553,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "123",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "309",
+          "opus_decode_ms.sum": 69.87151000000003,
+          "opus_decode_ms.max": 0.424682,
+          "opus_decode_ms.mean": 0.2261213915857606,
+          "receive_dispatch_ms.count": "309",
+          "receive_dispatch_ms.sum": 6.2858950000000045,
+          "receive_dispatch_ms.max": 0.055852,
+          "receive_dispatch_ms.mean": 0.020342702265372183,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "7cfce7f3-a654-4da9-a2b2-f26fad4d9537",
+      "warmup": false,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-65607af2-fda2-4d97-830e-0340b065f845",
+          "conversation_id": "18",
+          "vad_ms.count": "327",
+          "vad_ms.sum": 32.719947,
+          "vad_ms.max": 0.13377699999999998,
+          "vad_ms.mean": 0.100061,
+          "outbound_send_ms.count": "118",
+          "outbound_send_ms.sum": 17.310164000000004,
+          "outbound_send_ms.max": 0.24564600000000003,
+          "outbound_send_ms.mean": 0.1466963050847458,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "118",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "327",
+          "opus_decode_ms.sum": 73.28850299999998,
+          "opus_decode_ms.max": 0.46897900000000003,
+          "opus_decode_ms.mean": 0.22412386238532103,
+          "receive_dispatch_ms.count": "327",
+          "receive_dispatch_ms.sum": 6.639392999999999,
+          "receive_dispatch_ms.max": 0.031259,
+          "receive_dispatch_ms.mean": 0.020303954128440365,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "3c3e5e24-70ee-4df6-aec1-d168d7abade7",
+      "warmup": false,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-ce87eb45-e610-420b-8a67-750cf97557f9",
+          "conversation_id": "19",
+          "vad_ms.count": "341",
+          "vad_ms.sum": 33.872284999999984,
+          "vad_ms.max": 0.140703,
+          "vad_ms.mean": 0.09933221407624629,
+          "outbound_send_ms.count": "128",
+          "outbound_send_ms.sum": 18.862415,
+          "outbound_send_ms.max": 0.229517,
+          "outbound_send_ms.mean": 0.1473626171875,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "128",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "341",
+          "opus_decode_ms.sum": 75.45109699999993,
+          "opus_decode_ms.max": 0.430201,
+          "opus_decode_ms.mean": 0.22126421407624614,
+          "receive_dispatch_ms.count": "341",
+          "receive_dispatch_ms.sum": 6.783270000000003,
+          "receive_dispatch_ms.max": 0.052814,
+          "receive_dispatch_ms.mean": 0.019892287390029333,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "5256083e-700c-4c88-9475-d0ed466f9642",
+      "warmup": false,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-91abe7d7-fe1b-464a-95dd-bad5e092b381",
+          "conversation_id": "20",
+          "vad_ms.count": "347",
+          "vad_ms.sum": 34.59634500000001,
+          "vad_ms.max": 0.145591,
+          "vad_ms.mean": 0.0997012824207493,
+          "outbound_send_ms.count": "136",
+          "outbound_send_ms.sum": 21.259074,
+          "outbound_send_ms.max": 0.22622,
+          "outbound_send_ms.mean": 0.1563167205882353,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "136",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "347",
+          "opus_decode_ms.sum": 77.10737399999996,
+          "opus_decode_ms.max": 0.446219,
+          "opus_decode_ms.mean": 0.2222114524495676,
+          "receive_dispatch_ms.count": "347",
+          "receive_dispatch_ms.sum": 6.809114999999998,
+          "receive_dispatch_ms.max": 0.040222,
+          "receive_dispatch_ms.mean": 0.019622809798270885,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "8b2b11e7-7ea1-43d1-8b8e-2a574ede8d53",
+      "warmup": false,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-241c64d7-162a-4fb7-ab9b-dd348f31bc13",
+          "conversation_id": "21",
+          "vad_ms.count": "310",
+          "vad_ms.sum": 30.372049000000004,
+          "vad_ms.max": 0.163573,
+          "vad_ms.mean": 0.09797435161290324,
+          "outbound_send_ms.count": "123",
+          "outbound_send_ms.sum": 17.280214999999995,
+          "outbound_send_ms.max": 0.185092,
+          "outbound_send_ms.mean": 0.14048955284552841,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "123",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "310",
+          "opus_decode_ms.sum": 70.64830899999995,
+          "opus_decode_ms.max": 0.437201,
+          "opus_decode_ms.mean": 0.2278977709677418,
+          "receive_dispatch_ms.count": "310",
+          "receive_dispatch_ms.sum": 6.269338999999998,
+          "receive_dispatch_ms.max": 0.067426,
+          "receive_dispatch_ms.mean": 0.02022367419354838,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "7f302753-b880-431f-83dc-cff88718b4d2",
+      "warmup": false,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-767465e4-ba77-4e84-a513-eca346a6be45",
+          "conversation_id": "22",
+          "vad_ms.count": "305",
+          "vad_ms.sum": 29.789581000000002,
+          "vad_ms.max": 0.136055,
+          "vad_ms.mean": 0.09767075737704918,
+          "outbound_send_ms.count": "106",
+          "outbound_send_ms.sum": 15.59861,
+          "outbound_send_ms.max": 0.22014699999999998,
+          "outbound_send_ms.mean": 0.14715669811320756,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "106",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "305",
+          "opus_decode_ms.sum": 69.77681400000002,
+          "opus_decode_ms.max": 0.41340499999999997,
+          "opus_decode_ms.mean": 0.22877643934426234,
+          "receive_dispatch_ms.count": "305",
+          "receive_dispatch_ms.sum": 6.055245999999999,
+          "receive_dispatch_ms.max": 0.029278,
+          "receive_dispatch_ms.mean": 0.019853265573770488,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "05cadbc1-344b-49b3-9213-fed1674b4e38",
+      "warmup": false,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-24c0d9a4-112d-4944-9b77-e110cb78077a",
+          "conversation_id": "23",
+          "vad_ms.count": "318",
+          "vad_ms.sum": 31.210407000000014,
+          "vad_ms.max": 0.180647,
+          "vad_ms.mean": 0.09814593396226419,
+          "outbound_send_ms.count": "110",
+          "outbound_send_ms.sum": 15.878966999999992,
+          "outbound_send_ms.max": 0.233351,
+          "outbound_send_ms.mean": 0.1443542454545454,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "110",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "318",
+          "opus_decode_ms.sum": 71.39804699999993,
+          "opus_decode_ms.max": 0.454535,
+          "opus_decode_ms.mean": 0.22452216037735828,
+          "receive_dispatch_ms.count": "318",
+          "receive_dispatch_ms.sum": 6.455702999999997,
+          "receive_dispatch_ms.max": 0.06466599999999999,
+          "receive_dispatch_ms.mean": 0.02030095283018867,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "215c911d-09ea-44bf-9cc8-2bd509d123cb",
+      "warmup": false,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-58f09839-5347-4427-a922-8d5b40cc4991",
+          "conversation_id": "24",
+          "vad_ms.count": "309",
+          "vad_ms.sum": 30.38570599999997,
+          "vad_ms.max": 0.190628,
+          "vad_ms.mean": 0.09833561812297725,
+          "outbound_send_ms.count": "109",
+          "outbound_send_ms.sum": 15.570359999999997,
+          "outbound_send_ms.max": 0.188981,
+          "outbound_send_ms.mean": 0.14284733944954126,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "109",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "309",
+          "opus_decode_ms.sum": 70.20131199999996,
+          "opus_decode_ms.max": 0.413461,
+          "opus_decode_ms.mean": 0.2271887119741099,
+          "receive_dispatch_ms.count": "309",
+          "receive_dispatch_ms.sum": 6.1686589999999955,
+          "receive_dispatch_ms.max": 0.060833,
+          "receive_dispatch_ms.mean": 0.01996329773462782,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "3ea252bd-3eea-4763-a5d1-a4b15a676495",
+      "warmup": false,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-990f055f-931e-4172-86dd-cbdb181bef1d",
+          "conversation_id": "25",
+          "vad_ms.count": "326",
+          "vad_ms.sum": 32.604880999999985,
+          "vad_ms.max": 0.15425899999999998,
+          "vad_ms.mean": 0.10001497239263799,
+          "outbound_send_ms.count": "116",
+          "outbound_send_ms.sum": 16.188761,
+          "outbound_send_ms.max": 0.253869,
+          "outbound_send_ms.mean": 0.13955828448275862,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "116",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "326",
+          "opus_decode_ms.sum": 71.61870399999998,
+          "opus_decode_ms.max": 0.42938600000000005,
+          "opus_decode_ms.mean": 0.21968927607361957,
+          "receive_dispatch_ms.count": "326",
+          "receive_dispatch_ms.sum": 6.5140819999999975,
+          "receive_dispatch_ms.max": 0.051111,
+          "receive_dispatch_ms.mean": 0.019981846625766863,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "f2bd5af0-aff4-4540-b314-06ec4d7c80dd",
+      "warmup": false,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-e8d6640d-8356-4565-a7f0-e3be413378de",
+          "conversation_id": "26",
+          "vad_ms.count": "463",
+          "vad_ms.sum": 45.822003000000024,
+          "vad_ms.max": 0.140444,
+          "vad_ms.mean": 0.09896760907127435,
+          "outbound_send_ms.count": "227",
+          "outbound_send_ms.sum": 33.58197899999998,
+          "outbound_send_ms.max": 0.235313,
+          "outbound_send_ms.mean": 0.14793823348017612,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "227",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "463",
+          "opus_decode_ms.sum": 96.16661100000005,
+          "opus_decode_ms.max": 0.417479,
+          "opus_decode_ms.mean": 0.20770326349892018,
+          "receive_dispatch_ms.count": "463",
+          "receive_dispatch_ms.sum": 9.285436000000008,
+          "receive_dispatch_ms.max": 0.06674000000000001,
+          "receive_dispatch_ms.mean": 0.020054937365010815,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "e70f4e33-9916-405a-89c9-ca2eae763162",
+      "warmup": false,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-82a96bca-01a0-451e-94ce-bf708820d15c",
+          "conversation_id": "27",
+          "vad_ms.count": "309",
+          "vad_ms.sum": 30.294465000000002,
+          "vad_ms.max": 0.134184,
+          "vad_ms.mean": 0.09804033980582524,
+          "outbound_send_ms.count": "123",
+          "outbound_send_ms.sum": 18.099993,
+          "outbound_send_ms.max": 0.21205400000000002,
+          "outbound_send_ms.mean": 0.14715441463414636,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "123",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "309",
+          "opus_decode_ms.sum": 70.70552700000003,
+          "opus_decode_ms.max": 0.423998,
+          "opus_decode_ms.mean": 0.22882047572815545,
+          "receive_dispatch_ms.count": "309",
+          "receive_dispatch_ms.sum": 6.309943999999996,
+          "receive_dispatch_ms.max": 0.06646200000000001,
+          "receive_dispatch_ms.mean": 0.020420530744336557,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "38edfdc5-d88c-4b17-9e64-0fb65b84a0f1",
+      "warmup": false,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-490caed3-bec3-4403-9fb0-050ccc934d7e",
+          "conversation_id": "28",
+          "vad_ms.count": "335",
+          "vad_ms.sum": 33.868922000000005,
+          "vad_ms.max": 0.138629,
+          "vad_ms.mean": 0.10110125970149256,
+          "outbound_send_ms.count": "124",
+          "outbound_send_ms.sum": 18.454472,
+          "outbound_send_ms.max": 0.20974,
+          "outbound_send_ms.mean": 0.14882638709677418,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "124",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "335",
+          "opus_decode_ms.sum": 73.33859300000006,
+          "opus_decode_ms.max": 0.418294,
+          "opus_decode_ms.mean": 0.21892117313432854,
+          "receive_dispatch_ms.count": "335",
+          "receive_dispatch_ms.sum": 6.791067000000003,
+          "receive_dispatch_ms.max": 0.061278000000000006,
+          "receive_dispatch_ms.mean": 0.020271841791044784,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "c42df1be-43fc-4392-8f5f-7960522d373d",
+      "warmup": false,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-e189de6d-b97a-4c47-bcf0-f90d99fdcd57",
+          "conversation_id": "29",
+          "vad_ms.count": "294",
+          "vad_ms.sum": 28.692964000000003,
+          "vad_ms.max": 0.138518,
+          "vad_ms.mean": 0.09759511564625852,
+          "outbound_send_ms.count": "96",
+          "outbound_send_ms.sum": 14.232153,
+          "outbound_send_ms.max": 0.22385100000000002,
+          "outbound_send_ms.mean": 0.14825159375,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "96",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "294",
+          "opus_decode_ms.sum": 67.89354100000003,
+          "opus_decode_ms.max": 0.433942,
+          "opus_decode_ms.mean": 0.23093041156462593,
+          "receive_dispatch_ms.count": "294",
+          "receive_dispatch_ms.sum": 5.8900160000000055,
+          "receive_dispatch_ms.max": 0.050815,
+          "receive_dispatch_ms.mean": 0.020034068027210902,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "5cc40c66-fee6-43ee-900c-62dfcb44e041",
+      "warmup": false,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-965972ba-0843-4817-86cf-8d32fc9b7178",
+          "conversation_id": "30",
+          "vad_ms.count": "397",
+          "vad_ms.sum": 38.58395800000001,
+          "vad_ms.max": 0.141685,
+          "vad_ms.mean": 0.09718881108312345,
+          "outbound_send_ms.count": "171",
+          "outbound_send_ms.sum": 24.931923,
+          "outbound_send_ms.max": 0.217684,
+          "outbound_send_ms.mean": 0.14580071929824562,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "171",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "397",
+          "opus_decode_ms.sum": 85.53487500000003,
+          "opus_decode_ms.max": 0.41218299999999997,
+          "opus_decode_ms.mean": 0.21545308564231744,
+          "receive_dispatch_ms.count": "397",
+          "receive_dispatch_ms.sum": 7.992479999999997,
+          "receive_dispatch_ms.max": 0.061648,
+          "receive_dispatch_ms.mean": 0.020132191435768255,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "80009eb8-befa-4b2a-89d3-84ac8e2e09f8",
+      "warmup": false,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-830e7be4-09b6-49ba-b2a8-52e54fd845cd",
+          "conversation_id": "31",
+          "vad_ms.count": "297",
+          "vad_ms.sum": 29.241095,
+          "vad_ms.max": 0.16074000000000002,
+          "vad_ms.mean": 0.09845486531986533,
+          "outbound_send_ms.count": "118",
+          "outbound_send_ms.sum": 16.97865100000001,
+          "outbound_send_ms.max": 0.197333,
+          "outbound_send_ms.mean": 0.14388687288135601,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "118",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "297",
+          "opus_decode_ms.sum": 68.63176900000003,
+          "opus_decode_ms.max": 0.446609,
+          "opus_decode_ms.mean": 0.23108339730639743,
+          "receive_dispatch_ms.count": "297",
+          "receive_dispatch_ms.sum": 5.951766,
+          "receive_dispatch_ms.max": 0.108092,
+          "receive_dispatch_ms.mean": 0.02003961616161616,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "17638d55-73fe-4844-939a-d3f123fb5d7f",
+      "warmup": false,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-cfd57fc1-8ae7-464a-9d80-cfdd0069c469",
+          "conversation_id": "32",
+          "vad_ms.count": "290",
+          "vad_ms.sum": 28.530033000000014,
+          "vad_ms.max": 0.16412800000000002,
+          "vad_ms.mean": 0.09837942413793108,
+          "outbound_send_ms.count": "109",
+          "outbound_send_ms.sum": 15.815312000000004,
+          "outbound_send_ms.max": 0.24261000000000002,
+          "outbound_send_ms.mean": 0.1450946055045872,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "109",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "290",
+          "opus_decode_ms.sum": 66.92433800000003,
+          "opus_decode_ms.max": 0.420609,
+          "opus_decode_ms.mean": 0.23077357931034495,
+          "receive_dispatch_ms.count": "290",
+          "receive_dispatch_ms.sum": 5.754451999999999,
+          "receive_dispatch_ms.max": 0.057388,
+          "receive_dispatch_ms.mean": 0.01984293793103448,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    },
+    {
+      "trial_id": "74339ca6-3dcc-4381-9fee-38f733d085bb",
+      "warmup": false,
+      "complete": true,
+      "reason": null,
+      "observed": {
+        "hub.session": {
+          "vad.onset_frames": "3",
+          "vad.hangover_frames": "25",
+          "vad.onset_policy_ms": "60",
+          "vad.hangover_policy_ms": "500",
+          "device_id": "benchmark-f337d7ae-37aa-487f-9850-d626defdc607",
+          "conversation_id": "33",
+          "vad_ms.count": "288",
+          "vad_ms.sum": 28.106666999999987,
+          "vad_ms.max": 0.19610999999999998,
+          "vad_ms.mean": 0.09759259374999996,
+          "outbound_send_ms.count": "109",
+          "outbound_send_ms.sum": 16.036176,
+          "outbound_send_ms.max": 0.204796,
+          "outbound_send_ms.mean": 0.14712088073394497,
+          "utterance_count": "1",
+          "multiple_utterances": false,
+          "outbound.opus_forward_count": "109",
+          "outbound.pcm_encode_count": "0",
+          "outbound.send_errors": "0",
+          "outcome": "ok"
+        },
+        "hub.webrtc.receive": {
+          "opus_decode_ms.count": "288",
+          "opus_decode_ms.sum": 66.20247100000009,
+          "opus_decode_ms.max": 0.42061000000000004,
+          "opus_decode_ms.mean": 0.22986969097222254,
+          "receive_dispatch_ms.count": "288",
+          "receive_dispatch_ms.sum": 5.6981199999999985,
+          "receive_dispatch_ms.max": 0.033777,
+          "receive_dispatch_ms.mean": 0.019785138888888883,
+          "decode_errors": "0",
+          "dispatch_errors": "0"
+        }
+      }
+    }
+  ],
+  "provenance": {
+    "manifest": {
+      "schema_version": 1,
+      "run_id": "4836d394-f9d4-4d46-92b6-373b44bd81a3",
+      "mode": "voice",
+      "warmup": 2,
+      "iterations": 20,
+      "timeout_seconds": 120,
+      "setup_seconds": 30,
+      "cleanup_seconds": 10,
+      "hub_url": "http://pi-hub:8080",
+      "wav": "/Users/j/code/robo-naila/benchmarks/fixtures/question.wav",
+      "traces": "/private/tmp/naila-capture.thIQKm/traces.jsonl",
+      "fixture_sha256": "bae868de66b94de22775930adf4cb80dc0ea93f4a168053665d7926c6ea5f5ce",
+      "padding_samples": 753,
+      "utc": "2026-10-20T01:38:20.935226+00:00",
+      "revision": "cc8a2bb7ea3db6218f6b874015de7960b3f1ea8b",
+      "dirty": true,
+      "peer": {
+        "host": "Mac.home.local",
+        "os": "macOS-26.6.2-arm64-arm-64bit",
+        "cpu": "arm",
+        "aiortc": "1.14.0",
+        "av": "16.1.0",
+        "codec": "Opus/48000",
+        "frame_samples": 960,
+        "collector_colocation": "dedicated machine by default; see deployment"
+      },
+      "deployment": {
+        "pi": {
+          "host": "hub",
+          "model": "Raspberry Pi 4 Model B Rev 1.5",
+          "os": "Debian GNU/Linux 13 (trixie), kernel 6.18.50+rpt-rpi-v8",
+          "cpu": "Cortex-A72 x4 @ 1.8 GHz, 7.6 GiB RAM"
+        },
+        "dedicated": {
+          "host": "dedicated-ai",
+          "model": "Mac14,13 (Mac Studio)",
+          "os": "macOS 27.0.1 (26A434)",
+          "cpu": "Apple M2 Max, 96 GiB"
+        },
+        "ai_grpc_url": "http://ai-server:50051",
+        "peer_host": "lead-mac (Mac16,12, Apple M4, macOS)",
+        "collector_host": "lead-mac",
+        "colocated_with_ai": false,
+        "settings": {
+          "vad": {
+            "onset_frames": 3,
+            "hangover_frames": 25
+          },
+          "stt": {
+            "model": "faster-whisper small.en",
+            "device": "cpu",
+            "compute_type": "int8",
+            "vad_filter": false
+          },
+          "llm": {
+            "model": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+            "backend": "llama.cpp Metal, all layers on GPU, 9 threads",
+            "context": 4096,
+            "max_tokens": 256,
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "top_k": 40,
+            "repeat_penalty": 1.1
+          },
+          "tts": {
+            "model": "Kokoro v1.0 onnx",
+            "voice": "bf_emma",
+            "sample_rate_hz": 24000,
+            "rate": 1.0
+          },
+          "unknown_reason": "none; values from operator-reported startup log, environment and config/llm.py defaults"
+        }
+      },
+      "effective_settings": {
+        "vad": {
+          "onset_frames": 3,
+          "hangover_frames": 25
+        },
+        "stt": {
+          "model": "faster-whisper small.en",
+          "device": "cpu",
+          "compute_type": "int8",
+          "vad_filter": false
+        },
+        "llm": {
+          "model": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+          "backend": "llama.cpp Metal, all layers on GPU, 9 threads",
+          "context": 4096,
+          "max_tokens": 256,
+          "temperature": 0.7,
+          "top_p": 0.9,
+          "top_k": 40,
+          "repeat_penalty": 1.1
+        },
+        "tts": {
+          "model": "Kokoro v1.0 onnx",
+          "voice": "bf_emma",
+          "sample_rate_hz": 24000,
+          "rate": 1.0
+        },
+        "unknown_reason": "none; values from operator-reported startup log, environment and config/llm.py defaults"
+      },
+      "initial_health": {
+        "status": "ok",
+        "uptime_secs": 2811,
+        "active_devices": 0,
+        "grpc_connected": true,
+        "frames_forwarded": 168,
+        "vad_onsets": 2,
+        "vad_ends": 2,
+        "tts_frames_routed": 271,
+        "tts_frames_dropped": 0,
+        "grpc_reconnects": 12,
+        "ai_server": {
+          "health": "healthy",
+          "server_version": "0.1.0",
+          "uptime_seconds": 9,
+          "max_concurrent_streams": 4,
+          "components": [
+            {
+              "name": "stt",
+              "health": "healthy",
+              "message": "ready"
+            },
+            {
+              "name": "llm",
+              "health": "healthy",
+              "message": "ready"
+            },
+            {
+              "name": "tts",
+              "health": "healthy",
+              "message": "ready"
+            },
+            {
+              "name": "vision",
+              "health": "healthy",
+              "message": "ready"
+            }
+          ],
+          "models": [
+            {
+              "name": "stt",
+              "model_id": "small.en",
+              "loaded": true,
+              "device": "mps"
+            },
+            {
+              "name": "llm",
+              "model_id": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+              "loaded": true,
+              "device": "mps"
+            },
+            {
+              "name": "tts",
+              "model_id": "kokoro-v1.0.onnx",
+              "loaded": true,
+              "device": "mps"
+            },
+            {
+              "name": "vision",
+              "model_id": "yolov8n.pt",
+              "loaded": true,
+              "device": "mps"
+            }
+          ],
+          "cpu_utilization": 0.158,
+          "memory_utilization": 0.147
+        }
+      }
+    },
+    "resources": {
+      "naila.hub": [
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        },
+        {
+          "service.name": "naila.hub",
+          "telemetry.sdk.version": "0.31.0",
+          "telemetry.sdk.name": "opentelemetry",
+          "service.instance.id": "bd302dd4-25af-4bf4-aeba-c481a62b24e2",
+          "telemetry.sdk.language": "rust"
+        }
+      ],
+      "naila.ai": [
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.ai",
+          "service.instance.id": "0debd797-f568-4210-a2d0-eeb55596b10a"
+        }
+      ],
+      "naila.benchmark": [
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        },
+        {
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.38.0",
+          "service.name": "naila.benchmark",
+          "service.instance.id": "dfa2f830-7264-42b4-b8ad-7291b031ca69"
+        }
+      ]
+    }
+  },
+  "headline": [
+    "peer_first_audio_ms",
+    "llm.first_output_ms",
+    "llm.tokens_per_second"
+  ],
+  "diagnostic_stages": [
+    "llm"
+  ],
+  "stages": {
+    "peer.connect_ms": {
+      "n": 20,
+      "mean": 127.5971313501941,
+      "min": 115.47999997856095,
+      "max": 140.62745799310505,
+      "p50": 125.35466603003442,
+      "p95": 137.0819170260802
+    },
+    "peer_first_audio_ms": {
+      "n": 20,
+      "mean": 698.0986520356964,
+      "min": 206.79791702423245,
+      "max": 1357.2112079709768,
+      "p50": 758.3455829881132,
+      "p95": 1139.6038749953732
+    },
+    "peer_input_to_first_audio_ms": {
+      "n": 20,
+      "mean": 3277.9429874557536,
+      "min": 2787.538000033237,
+      "max": 3938.144541985821,
+      "p50": 3337.6992080011405,
+      "p95": 3719.5435839821585
+    },
+    "stt": {
+      "n": 20,
+      "mean": 847.7802667001015,
+      "min": 778.2827499977429,
+      "max": 904.9872089999553,
+      "p50": 844.1049590001057,
+      "p95": 904.1004159989825
+    },
+    "llm": {
+      "n": 20,
+      "mean": 290.34880214967416,
+      "min": 226.43366599731962,
+      "max": 441.7140420009673,
+      "p50": 276.6135000019858,
+      "p95": 371.9262090016855
+    },
+    "tts": {
+      "n": 20,
+      "mean": 411.5745916004016,
+      "min": 0.34912499904748984,
+      "max": 873.3195000022533,
+      "p50": 494.2899999987276,
+      "p95": 753.4575419995235
+    },
+    "tts_cache_hit_ms": {
+      "n": 6,
+      "mean": 0.42378466666074627,
+      "min": 0.34912499904748984,
+      "max": 0.4874159967585001,
+      "p50": 0.4106660016987007,
+      "p95": 0.4874159967585001
+    },
+    "tts_cache_miss_ms": {
+      "n": 14,
+      "mean": 587.7820802862906,
+      "min": 453.09754199843155,
+      "max": 873.3195000022533,
+      "p50": 524.2582500031858,
+      "p95": 873.3195000022533
+    },
+    "ai.turn": {
+      "n": 20,
+      "mean": 4234.373406350096,
+      "min": 3284.845417001634,
+      "max": 6771.1173339994275,
+      "p50": 3874.5443750012782,
+      "p95": 5863.2504170018365
+    },
+    "llm.first_output_ms": {
+      "n": 20,
+      "mean": 66.18340829954832,
+      "min": 61.76120799864293,
+      "max": 78.02895900022122,
+      "p50": 63.04229200031841,
+      "p95": 77.73654199991142
+    },
+    "hub_connect_ms": {
+      "n": 20,
+      "mean": 5.9774683,
+      "min": 5.842364,
+      "max": 6.0982780000000005,
+      "p50": 5.9911900000000005,
+      "p95": 6.079028999999999
+    },
+    "llm.completion_tokens": {
+      "n": 0,
+      "mean": null,
+      "min": null,
+      "max": null,
+      "p50": null,
+      "p95": null,
+      "reason": "exact backend token usage or positive LLM duration unavailable"
+    },
+    "llm.prompt_tokens": {
+      "n": 0,
+      "mean": null,
+      "min": null,
+      "max": null,
+      "p50": null,
+      "p95": null,
+      "reason": "exact backend token usage or positive LLM duration unavailable"
+    },
+    "llm.tokens_per_second": {
+      "n": 0,
+      "mean": null,
+      "min": null,
+      "max": null,
+      "p50": null,
+      "p95": null,
+      "reason": "exact backend token usage or positive LLM duration unavailable"
+    },
+    "hub_response_first_send_ms": {
+      "n": 20,
+      "mean": 1590.3190001,
+      "min": 1092.993162,
+      "max": 2237.044785,
+      "p50": 1655.0408009999999,
+      "p95": 2024.948086
+    },
+    "hub_response_final_send_ms": {
+      "n": 20,
+      "mean": 4214.755828,
+      "min": 3265.935979,
+      "max": 6750.922963,
+      "p50": 3853.938865,
+      "p95": 5842.453735
+    },
+    "vad_ms_per_trial_mean": {
+      "n": 20,
+      "mean": 0.09868561306545562,
+      "min": 0.09707807211538458,
+      "max": 0.10110125970149256,
+      "p50": 0.09833561812297725,
+      "p95": 0.10095399352750806
+    },
+    "opus_decode_ms_per_trial_mean": {
+      "n": 20,
+      "mean": 0.22303706906810913,
+      "min": 0.20770326349892018,
+      "max": 0.23108339730639743,
+      "p50": 0.22412386238532103,
+      "p95": 0.23093041156462593
+    },
+    "receive_dispatch_ms_per_trial_mean": {
+      "n": 20,
+      "mean": 0.020087975865144526,
+      "min": 0.019622809798270885,
+      "max": 0.020420530744336557,
+      "p50": 0.020054937365010815,
+      "p95": 0.020342702265372183
+    },
+    "send_ms_per_trial_mean": {
+      "n": 20,
+      "mean": 0.1470385567157973,
+      "min": 0.13955828448275862,
+      "max": 0.1563167205882353,
+      "p50": 0.14715441463414636,
+      "p95": 0.15415828455284553
+    }
+  },
+  "tts_cache": {
+    "hit": 6,
+    "miss": 14,
+    "unknown": 0
+  },
+  "fps": null,
+  "reason": null,
+  "timing_scope": "software peer; includes synthesized silence; not audible or physical-device latency"
+}
