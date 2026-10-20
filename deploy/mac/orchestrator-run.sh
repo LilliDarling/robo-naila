@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Run the AI server on this machine; the remote hub connects to TCP 50051.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT/ai-server"
 # Machine-local settings (e.g. NAILA_BENCHMARK) live in the gitignored .env; they win over the defaults below.
+# shellcheck source=/dev/null
 if [[ -f .env ]]; then set -a; source .env; set +a; fi
 export GRPC_HOST="${GRPC_HOST:-0.0.0.0}"
 export GRPC_PORT="${GRPC_PORT:-50051}"

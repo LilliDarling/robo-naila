@@ -2,7 +2,7 @@
 # Loopback TCP relay for trace export: LISTEN -> TARGET.
 # Runs as a root LaunchDaemon because macOS Local Network privacy blocks LAN connections from
 # daemons with a UserName (errno 65, "No route to host"). The AI server stays unprivileged and
-# exports to the loopback listener. Usage: otlp-relay.pl 127.0.0.1:4318 192.168.1.239:4318
+# exports to the loopback listener. Usage: otlp-relay.pl 127.0.0.1:4318 COLLECTOR_HOST:4318
 use strict;
 use warnings;
 use IO::Socket::INET;

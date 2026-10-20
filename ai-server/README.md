@@ -139,7 +139,7 @@ each module documents its own env vars.
 ### Mac orchestrator with a remote hub
 
 After installing dependencies and models, start a local MQTT broker with
-`mosquitto -p 1883`, then run `./scripts/orchestrator-run.sh` from the repository
+`mosquitto -p 1883`, then run `./deploy/mac/orchestrator-run.sh` from the repository
 root. The launcher binds gRPC to `0.0.0.0:50051`, uses CPU/int8 Whisper with
 hub-side VAD, and preserves the installed native LLM build. It expects the
 CTranslate2 Whisper model in `ai-server/models/stt/small.en` (override
@@ -155,14 +155,14 @@ require `grpc_connected: true` and healthy model status under `ai_server`.
 This checks connectivity and readiness; a real audio round trip is a separate
 check. Recheck the Mac's LAN address after network changes.
 
-`sudo bash scripts/install-daemons.sh` runs mosquitto and the server as launchd
-daemons. macOS Local Network privacy blocks outgoing LAN connections from a
+`sudo RUN_USER=your-user bash deploy/mac/install.sh` runs mosquitto and the server as launchd
+daemons (see [Mac deployment options](../deploy/mac/README.md)). macOS Local Network privacy blocks outgoing LAN connections from a
 daemon that runs as a user (`[Errno 65] No route to host`); incoming gRPC is
 unaffected. To export traces to a collector on another machine, set
 `NAILA_OTLP_RELAY_TARGET=<collector-ip>:4318` and
 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces` in
 `ai-server/.env`, then re-run the installer. It adds a root loopback relay
-(`scripts/otlp-relay.pl`), which macOS exempts, while the server stays unprivileged.
+(`deploy/mac/otlp-relay.pl`), which macOS exempts, while the server stays unprivileged.
 
 ## Communication
 
