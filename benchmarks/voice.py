@@ -9,11 +9,10 @@ import time
 from uuid import uuid4
 
 import aiohttp
-from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration
 from opentelemetry import trace
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 import telemetry as otel
-from audio_client.http import exchange_sdp
+from audio_client.webrtc import WebRTCClient
 from audio_client.profile import get_profile
 
 from .artifacts import summarize, write_json
@@ -59,24 +58,9 @@ async def wait_for(predicate, deadline):
 
 async def trial(args, fixture, reader, session, provider, warmup, previous=None):
     sample = dict(trial_id=str(uuid4()), device_id='benchmark-' + str(uuid4()), warmup=warmup, outcome='failed')
-    pc = RTCPeerConnection(RTCConfiguration(iceServers=[]))
     replay, sink = ReplayTrack(fixture), Sink()
-    pc.addTrack(replay)
-    connected, broken = asyncio.Event(), asyncio.Event()
-    receivers = []
-
-    @pc.on('connectionstatechange')
-    async def state_changed():
-        if pc.connectionState == 'connected':
-            connected.set()
-        elif pc.connectionState in ('failed', 'disconnected', 'closed'):
-            broken.set()
-
-    @pc.on('track')
-    def track_received(track):
-        if track.kind == 'audio':
-            receivers.append(asyncio.create_task(sink.consume(track)))
-
+    client = WebRTCClient(args.hub_url, sample['device_id'], None, session,
+                          profile=get_profile('mac'), source=replay, on_audio=sink)
     root = trace.get_tracer('naila.benchmark').start_span('benchmark.voice', context=otel.extract(''))
     sample.update(trace_id=f'{root.get_span_context().trace_id:032x}', root_span_id=f'{root.get_span_context().span_id:016x}')
     baseline = None
@@ -91,25 +75,21 @@ async def trial(args, fixture, reader, session, provider, warmup, previous=None)
             TraceContextTextMapPropagator().inject(headers)
             start = time.monotonic()
             async with asyncio.timeout(30):
-                offer = await pc.createOffer()
-                await pc.setLocalDescription(offer)
-                answer = await exchange_sdp(session, args.hub_url, sample['device_id'], pc.localDescription.sdp,
-                                            get_profile('mac'), trace_header=headers['traceparent'])
-                await pc.setRemoteDescription(RTCSessionDescription(sdp=answer, type='answer'))
+                await client.connect(trace_header=headers['traceparent'])
                 async def ready():
-                    if broken.is_set():
+                    if client.broken.is_set():
                         raise EvidenceError('connection failed during setup')
-                    return connected.is_set() and pc.connectionState == 'connected'
+                    return client.connected.is_set()
                 await wait_for(ready, start + 30)
             sample['peer.connect_ms'] = (time.monotonic() - start) * 1000
             replay.connected()
             # Bounded replay plus post-input deadline; failures remain active after readiness.
             async def complete():
-                if broken.is_set():
+                if client.broken.is_set():
                     raise EvidenceError('peer disconnected')
-                if len(receivers) > 1:
+                if len(client.receive_tasks) > 1:
                     raise EvidenceError('unexpected return audio tracks')
-                if any(t.done() for t in receivers):
+                if any(t.done() for t in client.receive_tasks):
                     raise EvidenceError('receive sink ended')
                 current = await health(session, args.hub_url)
                 check_health(current, baseline, active=1)
@@ -136,12 +116,9 @@ async def trial(args, fixture, reader, session, provider, warmup, previous=None)
     finally:
         try:
             async with asyncio.timeout(5):
-                await pc.close()
+                await client.close()
         except Exception as exc:
             sample.setdefault('reason', 'peer cleanup failed: ' + type(exc).__name__)
-        for task in receivers:
-            task.cancel()
-        await asyncio.gather(*receivers, return_exceptions=True)
         root.end()
         if not await asyncio.to_thread(provider.force_flush, timeout_millis=5000):
             sample.setdefault('reason', 'root export flush incomplete')

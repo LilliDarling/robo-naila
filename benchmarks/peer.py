@@ -79,9 +79,7 @@ class Sink:
         self.first = None
         self.count = 0
 
-    async def consume(self, track):
-        while True:
-            await track.recv()
-            if self.first is None:
-                self.first = time.monotonic()
-            self.count += 1
+    def __call__(self, frame):
+        if self.first is None:
+            self.first = time.monotonic()
+        self.count += 1

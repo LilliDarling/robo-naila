@@ -306,14 +306,17 @@ def test_offline_summary_is_read_only_and_truncation_fails(evidence, tmp_path, c
 @pytest.mark.parametrize('disconnect,late_cleanup,cleanup_failure', [
     (False, False, None), (True, False, None), (False, True, None),
     (True, True, None), (True, False, 'close'), (True, False, 'flush'),
+    (False, False, 'receive'), (False, False, 'tracks'),
 ])
 async def test_trial_waits_for_connected_finality_and_task_cleanup(monkeypatch, wav, evidence, disconnect, late_cleanup, cleanup_failure):
     import benchmarks.voice as voice
+    import audio_client.webrtc as transport
     from opentelemetry.sdk.trace import TracerProvider
     sample, spans = evidence
     provider = TracerProvider(shutdown_on_exit=False)
     original_tracer = provider.get_tracer('test')
-    state = {'active': 0, 'cleanup_reads': 0, 'root': None}
+    state = {'active': 0, 'cleanup_reads': 0, 'root': None, 'frame': asyncio.Event()}
+    yield_loop = asyncio.sleep
     clock = Clock()
     monkeypatch.setattr(voice.time, 'monotonic', clock)
     monkeypatch.setattr(voice.trace, 'get_tracer', lambda name: SimpleNamespace(start_span=start_span))
@@ -322,11 +325,22 @@ async def test_trial_waits_for_connected_finality_and_task_cleanup(monkeypatch, 
         state['root'] = original_tracer.start_span(*args, **kwargs)
         return state['root']
 
+    class Track:
+        kind = 'audio'
+
+        async def recv(self):
+            await state['frame'].wait()
+            state['frame'].clear()
+            if cleanup_failure == 'receive':
+                raise transport.MediaStreamError
+            return object()
+
     class Peer:
         connectionState = 'new'
+        iceGatheringState = 'complete'
         localDescription = SimpleNamespace(sdp='offer')
 
-        def __init__(self, config):
+        def __init__(self, configuration):
             self.handlers = {}
             state['peer'] = self
 
@@ -344,6 +358,8 @@ async def test_trial_waits_for_connected_finality_and_task_cleanup(monkeypatch, 
 
         async def setRemoteDescription(self, answer):
             state['active'] = 1  # SDP answer alone must not start scored input.
+            for _ in range(2 if cleanup_failure == 'tracks' else 1):
+                self.handlers['track'](Track())
 
         async def close(self):
             state['active'] = 0
@@ -368,11 +384,11 @@ async def test_trial_waits_for_connected_finality_and_task_cleanup(monkeypatch, 
 
     async def health(session, url):
         current = healthy()
-        current.update(active_devices=state['active'], vad_onsets=int(state['track'].end is not None), vad_ends=int(state['track'].end is not None))
+        current.update(active_devices=state['active'], vad_onsets=int(getattr(state.get('track'), 'end', None) is not None), vad_ends=int(getattr(state.get('track'), 'end', None) is not None))
         return current
 
     async def exchange(*args, **kwargs):
-        assert kwargs['trace_header'].startswith('00-')
+        assert kwargs['trace_header'].split('-')[1] == f"{state['root'].get_span_context().trace_id:032x}"
         return 'answer'
 
     async def sleep(delay):
@@ -388,29 +404,29 @@ async def test_trial_waits_for_connected_finality_and_task_cleanup(monkeypatch, 
                 await peer.handlers['connectionstatechange']()
             else:
                 state['track'].first, state['track'].end = 0, clock.now - .02
-                state['sink'].first, state['sink'].count = clock.now, 1
+                state['frame'].set()
+                await yield_loop(0)
 
-    real_sink = voice.Sink
-
-    def sink():
-        state['sink'] = real_sink()
-        return state['sink']
-
-    monkeypatch.setattr(voice, 'RTCPeerConnection', Peer)
-    monkeypatch.setattr(voice, 'Sink', sink)
+    monkeypatch.setattr(transport, 'RTCPeerConnection', Peer)
     monkeypatch.setattr(voice, 'health', health)
-    monkeypatch.setattr(voice, 'exchange_sdp', exchange)
+    monkeypatch.setattr(transport, 'exchange_sdp', exchange)
     monkeypatch.setattr(voice.asyncio, 'sleep', sleep)
     if cleanup_failure == 'flush':
         monkeypatch.setattr(provider, 'force_flush', lambda **kwargs: False)
     result = await voice.trial(SimpleNamespace(hub_url='http://test', timeout_seconds=1), Fixture.load(wav), Reader(), None, provider, False)
-    assert result['outcome'] == ('failed' if disconnect or late_cleanup else 'success'), result
-    if not disconnect:
+    assert result['outcome'] == ('failed' if disconnect or late_cleanup or cleanup_failure in ('receive', 'tracks') else 'success'), result
+    if result['outcome'] == 'success':
+        assert result['received_frames'] == 1
+        assert result['peer.connect_ms'] == pytest.approx(100)
+        assert result['peer_first_audio_ms'] == pytest.approx(20)
+    if not disconnect and cleanup_failure != 'tracks':
         assert state['cleanup_reads'] >= 2
     if disconnect:
         assert result['reason'] == 'EvidenceError: peer disconnected'
     elif late_cleanup:
         assert 'deadline' in result['reason']
+    elif cleanup_failure in ('receive', 'tracks'):
+        assert result['reason'] == 'EvidenceError: ' + ('receive sink ended' if cleanup_failure == 'receive' else 'unexpected return audio tracks')
     provider.shutdown()
 
 
