@@ -22,7 +22,7 @@ webrtc-vad = "0.4.0"
 
 opentelemetry = "=0.31.0"
 opentelemetry_sdk = { version = "=0.31.0", features = ["trace"] }
-opentelemetry-otlp = { version = "=0.31.0", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client"] }
+opentelemetry-otlp = { version = "=0.31.0", default-features = false, features = ["trace", "grpc-tonic"] }
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]

@@ -12,13 +12,15 @@ Start a fresh capture from the repository root:
 ```sh
 export NAILA_CAPTURE_DIR="$(mktemp -d /tmp/naila-capture.XXXXXX)"
 export NAILA_COLLECTOR_ENDPOINT=COLLECTOR_LAN_IP:4318
+export NAILA_COLLECTOR_GRPC_ENDPOINT=COLLECTOR_LAN_IP:4317
 otelcol-contrib --config benchmarks/collector.yaml
 ```
 
 On the [Pi hub](../deploy/pi/README.md) and [AI server](../deploy/mac/README.md),
-set `NAILA_OTEL_ENABLED=1` and
-`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://COLLECTOR_LAN_IP:4318/v1/traces`.
-On the AI server also set `NAILA_BENCHMARK=1` for tracing and in-memory history;
+set `NAILA_OTEL_ENABLED=1`. Set `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` to
+`http://COLLECTOR_LAN_IP:4317` on the hub (OTLP/gRPC, no `/v1/traces`) and
+`http://COLLECTOR_LAN_IP:4318/v1/traces` on the AI server (OTLP/HTTP). Allow both
+collector TCP ports through the firewall. On the AI server also set `NAILA_BENCHMARK=1` for tracing and in-memory history;
 an explicit `NAILA_MEMORY_DB_PATH` overrides that history default. Restart both
 services after changing their environment. Only this peer may use the stack.
 The peer generates a sampled traceparent without an SDK or exporter.

@@ -50,7 +50,9 @@ system jobs; uninstall removes those jobs and the root-owned relay copy.
 macOS Local Network privacy can block outgoing LAN connections from user
 LaunchDaemons (`errno 65`, "No route to host"). Incoming gRPC remains unaffected.
 The root loopback relay bypasses that restriction while the AI server remains
-unprivileged. For a remote trace collector, set `NAILA_OTLP_RELAY_TARGET=COLLECTOR_HOST:4318`
+unprivileged. The AI server uses OTLP/HTTP on 4318; hub traces use OTLP/gRPC
+on 4317 directly from the Pi, with both collector listeners enabled.
+For a remote AI trace collector, set `NAILA_OTLP_RELAY_TARGET=COLLECTOR_HOST:4318`
 and `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces` in
 `ai-server/.env`, then rerun installation. Without a relay target only MQTT and
 the AI server are installed. The optional root relay listens only on loopback;

@@ -40,10 +40,14 @@ def test_real_webrtc_grpc_graph_collector(tmp_path):
     with socket.socket() as reservation:
         reservation.bind(('127.0.0.1', 0))
         collector_port = reservation.getsockname()[1]
+    with socket.socket() as reservation:
+        reservation.bind(('127.0.0.1', 0))
+        grpc_port = reservation.getsockname()[1]
     # The collector owns its bind; a contender exits rather than sharing capture.
     environment = dict(os.environ, NAILA_OTEL_ENABLED='1', NAILA_MEMORY_DB_PATH=':memory:',
                        OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=f'http://127.0.0.1:{collector_port}/v1/traces',
-                       NAILA_COLLECTOR_ENDPOINT=f'127.0.0.1:{collector_port}', NAILA_CAPTURE_DIR=str(tmp_path),
+                       NAILA_COLLECTOR_ENDPOINT=f'127.0.0.1:{collector_port}',
+                       NAILA_COLLECTOR_GRPC_ENDPOINT=f'127.0.0.1:{grpc_port}', NAILA_CAPTURE_DIR=str(tmp_path),
                        PYTHONPATH=os.pathsep.join(map(str, (ROOT, ROOT / 'ai-server', ROOT / 'devices/audio-client'))),
                        HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1')
     processes, logs = [], []
@@ -62,7 +66,8 @@ def test_real_webrtc_grpc_graph_collector(tmp_path):
         ready = tmp_path / 'ai-ready.json'
         start('ai', [str(ROOT / 'ai-server/.venv/bin/python'), str(Path(__file__).with_name('stub_ai.py')), str(ready)])
         port = eventually(lambda: json.loads(ready.read_text())['port'], processes)
-        start('hub', [HUB], dict(environment, NAILA_AI_GRPC_URL=f'http://127.0.0.1:{port}'))
+        start('hub', [HUB], dict(environment, NAILA_AI_GRPC_URL=f'http://127.0.0.1:{port}',
+                                 OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=f'http://127.0.0.1:{grpc_port}'))
 
         def healthy():
             with urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=1) as response:

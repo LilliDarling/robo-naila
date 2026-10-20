@@ -74,7 +74,9 @@ async def test_replay_connection_clock_and_exact_handoffs(wav, start, overshoot)
     assert track.first is None
     clock.now = start or clock.now
     track.connected()
-    leading_until = track.ready_at
+    leading_until = clock.now + .5
+    assert track.ready_at == pytest.approx(leading_until)
+    first_deadline = track.next_at if track.next_at is not None else clock.now
     frames, handoffs = [], []
     while not track.finished.is_set():
         frame = await track.recv()
@@ -82,7 +84,7 @@ async def test_replay_connection_clock_and_exact_handoffs(wav, start, overshoot)
         if track.first is not None:
             frames.append(bytes(frame.planes[0]))
     assert b''.join(frames) == fixture.pcm
-    assert handoffs == pytest.approx([handoffs[0] + i * .02 for i in range(len(handoffs))])
+    assert handoffs == pytest.approx([first_deadline + overshoot + i * .02 for i in range(len(handoffs))])
     assert track.first >= leading_until and track.cursor == len(fixture.pcm)
     assert track.end == pytest.approx(track.first + len(frames) * .02)
     assert track.next_at == pytest.approx(track.pts / 48000 + start)

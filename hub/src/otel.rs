@@ -17,17 +17,17 @@ pub fn init() -> Result<Option<SdkTracerProvider>, Box<dyn std::error::Error + S
     if std::env::var("NAILA_OTEL_ENABLED").as_deref() != Ok("1") {
         return Ok(None);
     }
-    // Explicit full traces URL, e.g. http://collector:4318/v1/traces.
+    // OTLP/gRPC endpoint, e.g. http://collector:4317 (no /v1/traces).
     let endpoint = std::env::var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")?;
     if endpoint.is_empty() {
-        return Err("explicit OTLP/HTTP traces endpoint required".into());
+        return Err("explicit OTLP/gRPC endpoint required".into());
     }
     let exporter = opentelemetry_otlp::SpanExporter::builder()
-        .with_http()
+        .with_tonic()
         .with_endpoint(endpoint)
         .with_timeout(Duration::from_secs(2))
         .build()?;
-    // SDK owns synchronization, bounded queue and batching:
+    // Tonic uses the active Tokio runtime; SDK owns queue/batching:
     // https://docs.rs/opentelemetry_sdk/0.31.0/opentelemetry_sdk/trace/struct.BatchSpanProcessor.html
     let processor = BatchSpanProcessor::builder(exporter)
         .with_batch_config(

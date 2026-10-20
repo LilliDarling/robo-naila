@@ -2,6 +2,8 @@
 receivers:
   otlp:
     protocols:
+      grpc:
+        endpoint: ${env:NAILA_COLLECTOR_GRPC_ENDPOINT}
       http:
         endpoint: ${env:NAILA_COLLECTOR_ENDPOINT}
 exporters:
