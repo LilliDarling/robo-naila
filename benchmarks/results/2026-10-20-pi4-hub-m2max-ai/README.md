@@ -77,16 +77,11 @@ Reading these numbers:
 
 - `manifest.json` — run configuration, provenance and deployment facts.
 - `samples.jsonl` — one record per trial (warmups flagged).
-- `summary.json` — statistics as published by the run.
 - `traces.jsonl` — raw OTLP JSON capture from the collector (IDs and timings;
   no audio or text).
 
-Host addresses were replaced with role names (`pi-hub`, `ai-server`). Recompute
-the summary with:
-
-```sh
-PYTHONPATH="$PWD:$PWD/devices/audio-client:$PWD/ai-server" \
-  devices/audio-client/.venv/bin/python -m benchmarks summarize \
-  --run-dir benchmarks/results/2026-10-20-pi4-hub-m2max-ai \
-  --traces benchmarks/results/2026-10-20-pi4-hub-m2max-ai/traces.jsonl
-```
+Host addresses were replaced with role names (`pi-hub`, `ai-server`). The derived
+`summary.json` is not committed. The table above preserves the published results;
+raw trial and trace evidence remains available for analysis. The CLI `summarize`
+command requires the original execution-finalization record in `summary.json`,
+so it cannot certify this archive after that record was removed.

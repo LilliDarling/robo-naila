@@ -74,7 +74,8 @@ devices/audio-client/.venv/bin/python -m benchmarks summarize \
 Use a fresh capture for each invocation. The peer exclusively creates run-dir;
 existing directories exit 2 and are never resumed or overwritten. The collector
 owns capture-dir and traces.jsonl. Run artifacts are manifest.json, samples.jsonl
-and atomically published summary.json. Offline summary prints recomputed JSON to
+and atomically published summary.json. The [archived Pi/Mac run](results/2026-10-20-pi4-hub-m2max-ai/)
+keeps raw evidence and a results table; its derived summary.json is not committed. Offline summary prints recomputed JSON to
 stdout without changing any input. Exit 0 means complete execution and coverage;
 1 means failed execution/incomplete evidence; 2 means invalid setup/arguments.
 
