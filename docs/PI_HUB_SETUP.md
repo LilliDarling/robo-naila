@@ -11,6 +11,12 @@ The Pi routes to the Mac via Ethernet. Mac: MacBook Air M4, 16 GB, macOS 26.6.2,
 on the same LAN. Find its current address with the commands below.
 The operator already flashed this Pi: resume with SSH, not another card write.
 
+For Ethernet and Wi-Fi on the same subnet, host configuration lives in
+[`deploy/pi/`](../deploy/pi/), mirroring the Pi's `/etc` paths. With both DHCP
+connections active, run `sudo bash deploy/pi/install.sh` from the repo root.
+It installs scoped ARP/source routing; rollback is
+`sudo /root/naila-dual-uplink-backup/rollback.sh`.
+
 Verified on this pair at 2026-10-15 17:31 America/Boise: native release build
 passed in 23m 16s using Rust 1.99.1, protoc 3.21.12 and system Opus 1.5.2.
 Both Pi-local and Mac-to-Pi `/health` returned `grpc_connected: true`,

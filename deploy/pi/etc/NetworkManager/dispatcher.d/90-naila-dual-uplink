@@ -1,0 +1,52 @@
+#!/bin/bash
+# PROPOSAL ONLY. Install as root:root 0755 only after operator approval.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+nic=${1:-}
+action=${2:-}
+case "$nic" in
+    eth0) table=101; priority=10100;;
+    wlan0) table=102; priority=10200;;
+    *) exit 0;;
+esac
+case "$action" in
+    up|dhcp4-change|reapply) ;;
+    down)
+        ip -4 rule del priority "$priority" table "$table" 2>/dev/null || true
+        ip -4 route flush table "$table" 2>/dev/null || true
+        exit 0;;
+    *) exit 0;;
+esac
+# NM native ipv4.routing-rules uses explicit source prefixes. Supply the current
+# DHCP source, rather than pinning today's lease in a generated NM profile.
+# https://networkmanager.dev/docs/api/latest/settings-ipv4.html
+# NM supplies lease events/IP4_ADDRESS_0/IP4_GATEWAY and serializes this directory:
+# https://networkmanager.dev/docs/api/latest/NetworkManager-dispatcher.html
+case ${IP4_NUM_ADDRESSES:-0} in
+    1) ;;
+    0)
+        ip -4 rule del priority "$priority" table "$table" 2>/dev/null || true
+        ip -4 route flush table "$table" 2>/dev/null || true
+        exit 0;;
+    *) echo "naila: expected one IPv4 address on $nic; no change made" >&2; exit 1;;
+esac
+cidr=${IP4_ADDRESS_0%% *}
+route_info=$(python3 - "$cidr" "${IP4_GATEWAY:-}" <<'PY'
+import ipaddress, sys
+address = ipaddress.IPv4Interface(sys.argv[1])
+gateway = ipaddress.IPv4Address(sys.argv[2])
+if gateway.is_unspecified or gateway not in address.network:
+    raise ValueError('expected an on-link DHCP gateway')
+print(address.ip, address.network, gateway)
+PY
+)
+read -r source subnet gateway <<< "$route_info"
+# Tables/priorities are reserved for this hook; the normal main table is intact.
+ip -4 rule del priority "$priority" table "$table" 2>/dev/null || true
+ip -4 route flush table "$table" 2>/dev/null || true
+ip -4 route replace table "$table" "$subnet" dev "$nic" src "$source"
+ip -4 route replace table "$table" default via "$gateway" dev "$nic" src "$source"
+ip -4 rule add priority "$priority" from "$source/32" table "$table"
+# Reassert per-interface ARP settings when an interface appears after sysctl boot.
+sysctl -q -w "net.ipv4.conf.$nic.arp_ignore=1" "net.ipv4.conf.$nic.arp_announce=2"
+echo "naila: $source via $nic table $table, priority $priority" >&2
