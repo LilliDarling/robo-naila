@@ -1,198 +1,75 @@
-# Trace collection foundation
+# Voice pipeline benchmark
 
-Use a preinstalled **otelcol-contrib 0.137.0** on the dedicated machine.
-Start it manually once per fresh capture (no rotation or retention). From the
-repository root, select that machine's LAN address and create the directory
-atomically:
+Run one software audio-client peer against an isolated Pi hub and AI server.
+It replays the committed question through Opus/WebRTC and discards reply audio.
+No microphone, speaker or model environment is needed on the peer.
+
+## Collect traces and prepare services
+
+Use **otelcol-contrib 0.137.0** on a machine that can read the peer's capture file.
+Start a fresh capture from the repository root:
 
 ```sh
 export NAILA_CAPTURE_DIR="$(mktemp -d /tmp/naila-capture.XXXXXX)"
-export NAILA_COLLECTOR_ENDPOINT=192.168.1.10:4318
+export NAILA_COLLECTOR_ENDPOINT=COLLECTOR_LAN_IP:4318
 otelcol-contrib --config benchmarks/collector.yaml
 ```
 
-Keep the collector running while the services and fixture run. The collector is
-the only writer of `$NAILA_CAPTURE_DIR/traces.jsonl`; do not reuse the directory.
-Stop it manually after the exporters have shut down. The fixture runs on a host
-that can read this local capture file (normally the dedicated machine).
+On the [Pi hub](../deploy/pi/README.md) and [AI server](../deploy/mac/README.md),
+set `NAILA_OTEL_ENABLED=1` and
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://COLLECTOR_LAN_IP:4318/v1/traces`.
+On the AI server also set `NAILA_BENCHMARK=1` for tracing and in-memory history;
+an explicit `NAILA_MEMORY_DB_PATH` overrides that history default. Restart both
+services after changing their environment. Only this peer may use the stack.
+The peer generates a sampled traceparent without an SDK or exporter.
 
-For each instrumented process, set both:
+## Run and summarize
 
-```sh
-export NAILA_OTEL_ENABLED=1
-export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://192.168.1.10:4318/v1/traces
+Create deployment.json with actual host/model/OS/CPU facts for `pi` and
+`dedicated` (the AI host), plus peer/collector placement and effective settings:
+
+```json
+{"pi": {"host": "PI", "model": "MODEL", "os": "OS", "cpu": "CPU"},
+ "dedicated": {"host": "AI", "model": "MODEL", "os": "OS", "cpu": "CPU"},
+ "peer_host": "PEER", "collector_host": "COLLECTOR", "colocated_with_ai": false,
+ "settings": {"vad": {}, "stt": {}, "llm": {}, "tts": {}}}
 ```
 
-The endpoint is the full OTLP/HTTP traces URL, including `/v1/traces`. Omitting the
-enable flag creates no exporter worker or connection. Enabling without an
-explicit endpoint is a startup error. Export uses SDK bounded queues (2048 spans,
-256 per batch, 200ms schedule, 2s exporter timeout). Shutdown waits at most 5s.
-An outage or lost spans means incomplete benchmark coverage; audio does not wait
-for export. The later harness must enforce its trace collection deadline.
-
-The lightweight peer environment installs these same SDK/exporter pins with
-`cd devices/audio-client && uv sync --extra benchmark`; no model environment is
-needed for trace export.
-
-Manual APIs: Rust `hub::otel::{extract, inject, accepted_utterance}` and
-`opentelemetry::global::tracer`; Python `telemetry.{init,shutdown,extract,span,
-in_context,executor_call}`. Python `init(service_name)` defaults to `naila.ai`;
-fixture and deferred vision use `naila.benchmark` and `naila.vision-benchmark`.
-For the lightweight fixture, put `$PWD/ai-server` on `PYTHONPATH` and
-`import telemetry as otel` directly, avoiding the AI package initializer; call
-`otel.init("naila.benchmark")`. The helper itself imports only stdlib and OTel.
-All processes use UUID `service.instance.id`. No automatic logging export or
-exception-text recording is installed. Mark errors/outcomes explicitly before
-handling fallbacks; executor producers end their own spans even if their
-consumer is cancelled. Use `record_exception=False` when using SDK span context
-managers directly.
-
-The parser fixture `tests/fixtures/collector-0.137.0-traces.jsonl` is actual
-uncompressed file-exporter output from that version, with generated test IDs
-and no media/text payload. Consume complete newline-delimited OTLP JSON records;
-retain trailing fragments and deduplicate by `(traceId, spanId)` in the harness.
-See the pinned [file exporter configuration](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/v0.137.0/exporter/fileexporter/README.md).
-
-## Voice fixture and offline summary
-
-YOLO/vision is deferred to #46. Only `voice` and `summarize` are implemented.
-From repository root, install the existing audio-client environment and expose
-both the repository and standalone telemetry helper (no third environment):
+Record actual model, device, compute, sampling, voice and VAD settings; unknown
+values must be explicit. Keep historical manifests unchanged. From repo root:
 
 ```sh
-uv sync --locked --extra benchmark --project devices/audio-client
-export PYTHONPATH="$PWD:$PWD/devices/audio-client:$PWD/ai-server"
+uv sync --locked --project devices/audio-client
+export PYTHONPATH="$PWD:$PWD/devices/audio-client"
 devices/audio-client/.venv/bin/python -m benchmarks voice \
-  --hub-url http://PI:8080 --wav /path/question.wav \
+  --hub-url http://PI:8080 --wav benchmarks/fixtures/question.wav \
   --run-dir /path/new-run --traces "$NAILA_CAPTURE_DIR/traces.jsonl" \
-  --deployment /path/deployment.json --warmup 2 --iterations 20 \
-  --timeout-seconds 120
+  --deployment deployment.json --warmup 2 --iterations 20 --timeout-seconds 120
 devices/audio-client/.venv/bin/python -m benchmarks summarize \
   --run-dir /path/new-run --traces "$NAILA_CAPTURE_DIR/traces.jsonl"
 ```
 
-Use a fresh capture for each invocation. The peer exclusively creates run-dir;
-existing directories exit 2 and are never resumed or overwritten. The collector
-owns capture-dir and traces.jsonl. Run artifacts are manifest.json, samples.jsonl
-and atomically published summary.json. The [archived Pi/Mac run](results/2026-10-20-pi4-hub-m2max-ai/)
-keeps a manifest and results table; summary.json is not committed.
-Its removed samples.jsonl and traces.jsonl remain in git history at `3e54959`.
-Offline summary prints recomputed JSON to stdout without changing any input. Exit 0 means complete execution and coverage;
-1 means failed execution/incomplete evidence; 2 means invalid setup/arguments.
+Use a new run directory and capture each time. Stop the collector after the run.
+Runs publish manifest.json, samples.jsonl and an atomic summary.json finalization
+record. Offline summary prints JSON without changing inputs: exit 0 is complete,
+1 failed/incomplete, 2 invalid setup. Late traces may resolve coverage gaps but
+cannot erase execution errors or replace a missing finalization record. After a
+timeout/cancellation restart the isolated AI process: native work can outlive it.
 
-On the intended Pi, run the normal release hub with `NAILA_AI_GRPC_URL` set to
-the dedicated machine's gRPC address. On that machine run the real orchestration
-server in benchmark mode: set `NAILA_BENCHMARK=1` and
-`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` in its environment. Benchmark mode enables tracing and defaults conversation memory to `:memory:`, so benchmark
-turns never reach stored history; an explicit `NAILA_MEMORY_DB_PATH` still wins.
-Unset it to return to normal operation. Enable tracing in the hub and the peer as
-above. The peer/collector host must be off the Pi, normally the
-same dedicated machine; their CPU work can affect results. Only this peer may
-use this isolated stack. Health is readiness evidence, not a reservation lock.
-After a timeout/cancellation, restart the isolated AI process before rerunning:
-native model work can outlive coroutine cancellation. There are no retries.
+Input is mono PCM16 48kHz WAV, 0.5–30s, with one general question.
+Success requires completed turn/response traces, decoded receipt and hub cleanup;
+silence, fallback, multiple utterances and premature replies fail.
+The headline is fixture-end to first decoded reply, model time to first text,
+then exact backend tokens/s (null when unavailable). Input-to-reply is separate.
+Warmups are excluded; these software timings include codecs/network/VAD and are
+not audible or physical-device latency. Host clocks are never subtracted.
 
-`--deployment` preserves operator-collected configuration/status facts. For each
-of `pi` and `dedicated`, provide `host`, `model`, `os`, and `cpu`, with actual
-values from that machine's configuration/status (for example hostname, uname,
-Pi device-tree model and lscpu; macOS system_profiler/sysctl). Also record the
-AI gRPC endpoint, peer and collector host identities and co-location, and the
-effective model settings. Example shape (replace placeholders with actual facts):
+## Checks
 
-```json
-{
-  "pi": {"host": "PI", "model": "MODEL", "os": "OS", "cpu": "CPU"},
-  "dedicated": {"host": "AI", "model": "MODEL", "os": "OS", "cpu": "CPU"},
-  "ai_grpc_url": "http://AI:50051",
-  "peer_host": "AI", "collector_host": "AI", "colocated_with_ai": true,
-  "settings": {
-    "vad": {"onset_frames": 3, "hangover_frames": 25},
-    "stt": {"model": null, "compute_type": null},
-    "llm": {"model": null, "context": null, "max_tokens": null, "temperature": null},
-    "tts": {"voice": null, "rate": null},
-    "unknown_reason": "Replace nulls from deployment config/status where available"
-  }
-}
-```
-
-The manifest includes source revision/dirty state, immutable WAV SHA-256,
-padding, peer host/libraries/Opus configuration and initial health/model/backend
-status. Summary retains unique resources per service and compact trial coverage;
-manifest facts and outbound codec attributes stay in manifest.json and traces.jsonl.
-The #38 operator amendment sets the hub default to 25 hangover frames (500ms),
-with onset 3 and VeryAggressive mode unchanged. Keep `fixtures/question.wav`
-unchanged. Record the effective deployed settings in each new deployment file;
-an older running hub still uses its original default until explicitly deployed.
-Do not rewrite deployment metadata archived with earlier runs.
-Unknown configuration must be explicit; GPU installation never implies every
-model runs there. No model-file hashing, prompts, recordings or recognized text
-are saved. Required deployment identities must be present for acceptance.
-
-Input must be mono PCM16 48kHz WAV, 0.5–30 seconds, containing exactly one spoken
-general question that takes the real LLM path. Read/hash/replay share immutable
-bytes. No microphone, speaker, PortAudio stream or AEC opens. Each fresh peer
-waits for actual WebRTC connection, sends 500ms leading silence, replays 960-sample
-frames with monotonic pacing and pads only the final partial frame. The sink
-timestamps/discards decoded frames. Silence, action/fallback/empty recognition,
-a second utterance or a response before input end fails; amplitude and quiet
-gaps never determine completion. Root/turn/final response evidence and decoded
-receipt are required. After closing, completed hub task/track spans and zero
-active devices gate the next unique peer; delayed cleanup fails the run.
-
-`peer_first_audio_ms` measures fixture end through first decoded return;
-`peer_input_to_first_audio_ms` begins at first fixture-frame handoff instead.
-Connection setup is separate. These intervals include both network legs,
-codecs, VAD/server work and synthesized leading silence: **they are not audible
-response or physical-device latency**. No host clocks are subtracted, and
-collection/export delays do not score. Warmups are excluded. Summaries report
-n/mean/min/max/nearest-rank p50/p95 (including n=1), null plus a reason for absent
-populations, TTS cache hits/misses and per-trial mean VAD/decode/send populations.
-Overlapping model stages are never added into a total.
-
-The summary's `headline` order is time to first reply audio (`peer_first_audio_ms`),
-time to first model text (`llm.first_output_ms`), then `llm.tokens_per_second`.
-`llm` total duration remains in `stages` and is labelled in `diagnostic_stages`.
-Tokens/s is exact generated (`llm.completion_tokens`) tokens divided by the
-producer-owned LLM duration in seconds, including prompt processing and resource
-waits, excluding delayed streaming consumption/TTS. Token count populations
-(`llm.completion_tokens`, `llm.prompt_tokens`) use the same measured, successful,
-non-warmup trials; each population reports its own n. Missing usage is null with
-a reason, never a zero count. OTel omits unavailable numeric attributes and
-records `llm.<count>.unavailable_reason` on the span instead.
-The pinned llama-cpp-python 0.3.16 text-completion API reports exact `usage` for
-nonstreaming calls, but omits it from streaming chunks; those runs therefore
-have unavailable token populations/throughput unless the backend supplies usage.
-Chunks are not counted as tokens and no tokenizer estimates are made.
-Post-first-output throughput is not reported: this API does not give the exact
-token count at the first nonempty text delta, which may contain multiple tokens.
-Prompts, routing and sampling settings (including temperature 0.7) are unchanged.
-
-Focused checks, with no model downloads or hardware-speed assertions:
-
-```sh
-PYTHONPATH="$PWD:$PWD/devices/audio-client:$PWD/ai-server" \
-  devices/audio-client/.venv/bin/python -m pytest -q \
-  benchmarks/tests devices/audio-client/tests/test_http.py
-```
-
-`cargo test -p hub` also uses the installed benchmark Python environment above
-to encode the unchanged question with aiortc, then tests the actual Rust Opus
-decoder and production VAD. The 25-frame default must yield one START/END;
-an explicit 15-frame control must reproduce two utterances.
-
-For the full local stub-model transport gate, first build the normal release hub
-with `cargo build -p hub --release`. With the preinstalled pinned collector,
-run the same focused pytest command with these additional environment variables:
-`NAILA_TEST_HUB="$PWD/target/release/hub"` and
-`NAILA_TEST_COLLECTOR=/path/to/otelcol-contrib` (version 0.137.0).
-The opt-in integration test uses localhost port 8080, starts its own isolated
-AI/collector/hub test processes, and retains diagnostic artifacts under pytest's
-temporary directory. It exercises the real graph with native model doubles,
-then checks two sequential joined trials and identical offline summarization.
-Without those variables, only that transport test is skipped.
-
-Atomic summary publication also records execution finalization. Offline
-summarization requires that record and preserves its `execution_error` (including
-failed exporter shutdown); complete traces cannot erase an execution failure.
-A missing/unfinalized summary means incomplete execution. Trace-only coverage
-failures can still be resolved by a later collector append, then recomputed.
+Run `devices/audio-client/.venv/bin/python -m pytest -q benchmarks/tests` with the
+PYTHONPATH above. `cargo test -p hub` also exercises this fixture through Opus/VAD.
+For the full graph/transport test, build `cargo build -p hub --release`, then set
+`NAILA_TEST_HUB="$PWD/target/release/hub"` and `NAILA_TEST_COLLECTOR=/path/to/otelcol-contrib`
+when running pytest; only its stub AI process needs the installed ai-server env.
+The [archived run](results/2026-10-20-pi4-hub-m2max-ai/) retains its manifest/table;
+removed samples.jsonl and traces.jsonl remain in git history at `3e54959`.

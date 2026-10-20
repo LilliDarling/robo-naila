@@ -22,7 +22,7 @@ omitting it preserves the loopback default. Include the `http://` scheme.
 The HTTP bind remains `0.0.0.0:8080`. The gRPC client reconnects automatically
 with exponential backoff (1s initial, 30s max) if the AI server is unavailable.
 
-For a Pi hub with orchestration on a separate Mac, see [Pi deployment](../docs/PI_HUB_SETUP.md).
+For a Pi hub with orchestration on a separate Mac, see [Pi deployment](../deploy/pi/README.md).
 
 ## HTTP Endpoints
 
@@ -162,26 +162,3 @@ applies to all peers and adds 200ms to the nominal endpoint hangover; it may
 merge nearby turns. Onset and classifier mode stay unchanged.
 
 Frames are suppressed during silence. On confirmed onset, buffered frames are flushed with a `Start` event. During speech, frames are forwarded with `Continue`. After hangover expires, a final `End` event is emitted.
-
-## Benchmark trace measurements
-
-Enable tracing as described in `benchmarks/README.md`. `/connect` exports
-`hub.connect` with monotonic `hub_connect_ms`; setup is separate from response.
-Task-owned `hub.webrtc.receive` spans export `opus_decode_ms` and
-`receive_dispatch_ms` populations. `hub.session` exports `vad_ms` and
-`outbound_send_ms`. Each population has `.count`, `.sum`, `.max` and, for a
-nonzero count, `.mean` in milliseconds. These are per-session populations,
-not individual-frame percentile samples. Decode and dispatch errors are explicit.
-Packet-arrival waiting is excluded from decoder cost; dispatch includes backpressure.
-
-Session attributes include actual `vad.onset_frames` / `vad.hangover_frames`,
-their separate nominal policy milliseconds, `utterance_count`, `multiple_utterances`,
-`outbound.opus_forward_count`, `outbound.pcm_encode_count` and `outbound.send_errors`.
-Empty final markers count as sends but not codec work. VAD START/END events carry
-Pi-local `elapsed_ms`. The first utterance alone owns the response timer.
-A successful `hub.response` exports `hub_response_first_send_ms` and
-`hub_response_final_send_ms`, from observed VAD END through successful real sends.
-An empty final alone is incomplete. A second START invalidates session timing,
-even if a response span already completed. Require session `outcome=ok`, zero
-receive errors, and the rest of the fixture/server coverage before accepting a trial.
-RTP sample-clock timestamps are never used to derive these durations.

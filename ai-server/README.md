@@ -136,33 +136,7 @@ STT_VAD_FILTER=false STT_DEVICE=cpu STT_COMPUTE_TYPE=int8 uv run python main.py
 Full config surface lives in `config/{stt,llm,tts,vision,mqtt,grpc}.py` —
 each module documents its own env vars.
 
-### Mac orchestrator with a remote hub
-
-After installing dependencies and models, start a local MQTT broker with
-`mosquitto -p 1883`, then run `./deploy/mac/orchestrator-run.sh` from the repository
-root. The launcher binds gRPC to `0.0.0.0:50051`, uses CPU/int8 Whisper with
-hub-side VAD, and preserves the installed native LLM build. It expects the
-CTranslate2 Whisper model in `ai-server/models/stt/small.en` (override
-`STT_MODEL_PATH` if needed); a whisper.cpp GGML file is incompatible.
-
-On the hub machine, set `NAILA_AI_GRPC_URL=http://<mac-lan-ip>:50051` before
-starting the hub build from PR #39. Restart an already-running hub to change
-its destination. The hub connects to the Mac, so the Mac does not need a hub
-address in its server configuration. MQTT can remain loopback-only.
-
-Wait for `grpc_server_started`, then check `http://<hub-host>:8080/health`:
-require `grpc_connected: true` and healthy model status under `ai_server`.
-This checks connectivity and readiness; a real audio round trip is a separate
-check. Recheck the Mac's LAN address after network changes.
-
-`sudo RUN_USER=your-user bash deploy/mac/install.sh` runs mosquitto and the server as launchd
-daemons (see [Mac deployment options](../deploy/mac/README.md)). macOS Local Network privacy blocks outgoing LAN connections from a
-daemon that runs as a user (`[Errno 65] No route to host`); incoming gRPC is
-unaffected. To export traces to a collector on another machine, set
-`NAILA_OTLP_RELAY_TARGET=<collector-ip>:4318` and
-`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces` in
-`ai-server/.env`, then re-run the installer. It adds a root loopback relay
-(`deploy/mac/otlp-relay.pl`), which macOS exempts, while the server stays unprivileged.
+For a Mac AI server with a remote Pi hub, see [Mac deployment](../deploy/mac/README.md).
 
 ## Communication
 
