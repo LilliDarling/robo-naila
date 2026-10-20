@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "run_id": "553b6b2a-9f0b-4581-81db-1a9dbf656138",
+  "mode": "voice",
+  "warmup": 2,
+  "iterations": 20,
+  "timeout_seconds": 120,
+  "setup_seconds": 30,
+  "cleanup_seconds": 10,
+  "hub_url": "http://pi-hub:8080",
+  "wav": "/Users/j/code/robo-naila/benchmarks/fixtures/question.wav",
+  "traces": "/private/tmp/naila-capture.sffwHP/traces.jsonl",
+  "fixture_sha256": "bae868de66b94de22775930adf4cb80dc0ea93f4a168053665d7926c6ea5f5ce",
+  "padding_samples": 753,
+  "utc": "2026-10-20T20:12:25.966471+00:00",
+  "revision": "52cde2b12f4328b9295ca698bf8566526094f010",
+  "dirty": false,
+  "peer": {
+    "host": "Mac.home.local",
+    "os": "macOS-26.6.2-arm64-arm-64bit",
+    "cpu": "arm",
+    "aiortc": "1.14.0",
+    "av": "16.1.0",
+    "codec": "Opus/48000",
+    "frame_samples": 960,
+    "collector_colocation": "dedicated machine by default; see deployment"
+  },
+  "deployment": {
+    "pi": {
+      "host": "hub",
+      "model": "Raspberry Pi 4 Model B Rev 1.5",
+      "os": "Debian GNU/Linux 13 (trixie), kernel 6.18.50+rpt-rpi-v8",
+      "cpu": "Cortex-A72 x4 @ 1.8 GHz, 7.6 GiB RAM"
+    },
+    "dedicated": {
+      "host": "dedicated-ai",
+      "model": "Mac14,13 (Mac Studio)",
+      "os": "macOS 27.0.1 (26A434)",
+      "cpu": "Apple M2 Max, 96 GiB"
+    },
+    "ai_grpc_url": "http://ai-server:50051",
+    "peer_host": "lead-mac (Mac16,12, Apple M4, macOS)",
+    "collector_host": "lead-mac",
+    "colocated_with_ai": false,
+    "settings": {
+      "vad": {
+        "onset_frames": 3,
+        "hangover_frames": 25
+      },
+      "stt": {
+        "model": "faster-whisper small.en",
+        "device": "cpu",
+        "compute_type": "int8",
+        "vad_filter": false
+      },
+      "llm": {
+        "model": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+        "backend": "llama.cpp Metal, all layers on GPU, 9 threads",
+        "context": 4096,
+        "max_tokens": 256,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "top_k": 40,
+        "repeat_penalty": 1.1
+      },
+      "tts": {
+        "model": "Kokoro v1.0 onnx",
+        "voice": "bf_emma",
+        "sample_rate_hz": 24000,
+        "rate": 1.0
+      },
+      "unknown_reason": "none; values from operator-reported startup log, environment and config/llm.py defaults"
+    }
+  },
+  "effective_settings": {
+    "vad": {
+      "onset_frames": 3,
+      "hangover_frames": 25
+    },
+    "stt": {
+      "model": "faster-whisper small.en",
+      "device": "cpu",
+      "compute_type": "int8",
+      "vad_filter": false
+    },
+    "llm": {
+      "model": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+      "backend": "llama.cpp Metal, all layers on GPU, 9 threads",
+      "context": 4096,
+      "max_tokens": 256,
+      "temperature": 0.7,
+      "top_p": 0.9,
+      "top_k": 40,
+      "repeat_penalty": 1.1
+    },
+    "tts": {
+      "model": "Kokoro v1.0 onnx",
+      "voice": "bf_emma",
+      "sample_rate_hz": 24000,
+      "rate": 1.0
+    },
+    "unknown_reason": "none; values from operator-reported startup log, environment and config/llm.py defaults"
+  },
+  "initial_health": {
+    "status": "ok",
+    "uptime_secs": 813,
+    "active_devices": 0,
+    "grpc_connected": true,
+    "frames_forwarded": 0,
+    "vad_onsets": 0,
+    "vad_ends": 0,
+    "tts_frames_routed": 0,
+    "tts_frames_dropped": 0,
+    "grpc_reconnects": 0,
+    "ai_server": {
+      "health": "healthy",
+      "server_version": "0.1.0",
+      "uptime_seconds": 168,
+      "max_concurrent_streams": 4,
+      "components": [
+        {
+          "name": "stt",
+          "health": "healthy",
+          "message": "ready"
+        },
+        {
+          "name": "llm",
+          "health": "healthy",
+          "message": "ready"
+        },
+        {
+          "name": "tts",
+          "health": "healthy",
+          "message": "ready"
+        },
+        {
+          "name": "vision",
+          "health": "healthy",
+          "message": "ready"
+        }
+      ],
+      "models": [
+        {
+          "name": "stt",
+          "model_id": "small.en",
+          "loaded": true,
+          "device": "mps"
+        },
+        {
+          "name": "llm",
+          "model_id": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+          "loaded": true,
+          "device": "mps"
+        },
+        {
+          "name": "tts",
+          "model_id": "kokoro-v1.0.onnx",
+          "loaded": true,
+          "device": "mps"
+        },
+        {
+          "name": "vision",
+          "model_id": "yolov8n.pt",
+          "loaded": true,
+          "device": "mps"
+        }
+      ],
+      "cpu_utilization": 0.016,
+      "memory_utilization": 0.209
+    }
+  }
+}
