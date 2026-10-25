@@ -12,6 +12,8 @@ import asyncio
 import io
 import time
 import wave
+from contextlib import aclosing
+from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import Optional
 
@@ -49,6 +51,34 @@ MAX_AUDIO_BUFFER_BYTES = 6 * 1024 * 1024
 # (~380-440ms) without dropping the shortest legitimate utterances seen
 # (~480ms for "How are you?").
 MIN_UTTERANCE_DURATION_MS = 450
+
+
+@dataclass
+class _StreamSource:
+    device: str
+    conversation: str
+    audio: bytearray = field(default_factory=bytearray)
+    rate: int = 48000
+    parent: object = field(default_factory=lambda: otel.extract(""))
+    target: Optional[int] = None
+    task: Optional[asyncio.Task] = None
+    generation: int = 0
+    queued: int = 0
+
+
+class _SourceOutput:
+    """Preserve the enqueue queue interface while freezing source generation."""
+
+    def __init__(self, queue, source):
+        self.queue, self.source, self.generation = queue, source, source.generation
+
+    async def put(self, output):
+        self.source.queued += 1
+        try:
+            await self.queue.put((self.source, self.generation, output))
+        except BaseException:
+            self.source.queued -= 1
+            raise
 
 
 def _pcm_to_wav(pcm_bytes: bytes, sample_rate: int, channels: int = 1, sample_width: int = 2) -> bytes:
@@ -202,208 +232,187 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         return response
 
     async def StreamConversation(self, request_iterator, context):
-        """Bidirectional streaming voice conversation.
+        """Multiplex sources keyed by device, with one active conversation each.
 
-        Receives AudioInput messages from the Hub, buffers speech audio,
-        and processes complete utterances through STT then the orchestration
-        graph. Streams TTS audio back as AudioOutput chunks.
-
-        Input reading and utterance processing run concurrently so that
-        SPEECH_EVENT_INTERRUPT can cancel an in-flight processing task.
+        START with a different conversation ID replaces that device's context,
+        settings, pending PCM, task and queued output. Late non-START frames for
+        other conversations are ignored. Unseen devices may begin with CONTINUE
+        or END for single-source compatibility; unknown INTERRUPT is ignored.
+        Evict contexts with no task, queued output or buffered PCM. Preferences
+        live only as long as that context; a later idle source starts at defaults.
+        There is no historical conversation registry after eviction.
         """
-        utterance_parent = otel.extract("")
-        audio_buffer = bytearray()
-        device_id = ""
-        conversation_id = ""
-        input_sample_rate = 48000
-        target_output_sample_rate: Optional[int] = None
-        processing_task: Optional[asyncio.Task] = None
-        output_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
-        _SENTINEL = object()
-
-        peer = context.peer()
-        logger.info("stream_opened", peer=peer)
-
-        # Send initial metadata immediately so the tonic client unblocks.
-        # Without this, grpc.aio may delay response headers until the first
-        # yield, causing a deadlock with bidirectional streaming clients.
+        sources = {}
+        output_queue = asyncio.Queue(maxsize=100)
+        finished = object()
+        device = conversation = ""
+        logger.info("stream_opened", peer=context.peer())
+        # Unblock tonic's bidirectional client before waiting for input.
         await context.send_initial_metadata(())
 
-        async def _read_inputs():
-            """Read the input stream and dispatch speech events."""
-            nonlocal audio_buffer, device_id, conversation_id, utterance_parent
-            nonlocal input_sample_rate, target_output_sample_rate, processing_task
+        def evict(source):
+            if (sources.get(source.device) is source and source.task is None
+                    and not source.queued and not source.audio):
+                del sources[source.device]
 
+        async def retire(source):
+            source.generation += 1
+            if source.task:
+                # Await retirement before replacement to keep owned work bounded.
+                source.task.cancel()
+                await asyncio.gather(source.task, return_exceptions=True)
+                source.task = None
+
+        async def process(source, sink, audio, rate, device, conversation, parent, target):
+            turn = Stage("ai.turn", parent=parent, output_queued=True)
             try:
-                async for audio_input in request_iterator:
-                    device_id = audio_input.device_id
-                    conversation_id = audio_input.conversation_id
-                    input_sample_rate = audio_input.sample_rate or 48000
-
-                    pcm_data = self._extract_audio(audio_input)
-                    event = audio_input.event
-
-                    if event == naila_pb2.SPEECH_EVENT_START:
-                        utterance_parent = otel.extract(audio_input.traceparent)
-                        audio_buffer.clear()
-                        if pcm_data:
-                            audio_buffer.extend(pcm_data)
-
-                        # Read SessionConfig from the first START message.
-                        if target_output_sample_rate is None and audio_input.HasField("session_config"):
-                            sc = audio_input.session_config
-                            if sc.preferred_output_sample_rate:
-                                target_output_sample_rate = sc.preferred_output_sample_rate
-                                logger.info(
-                                    "session_config",
-                                    device_id=device_id,
-                                    preferred_output_sample_rate=target_output_sample_rate,
-                                    supported_output_codecs=[
-                                        naila_pb2.AudioCodec.Name(c)
-                                        for c in sc.supported_output_codecs
-                                    ],
-                                )
-
-                        logger.debug(
-                            "speech_start",
-                            device_id=device_id,
-                            conversation_id=conversation_id,
-                        )
-
-                    elif event == naila_pb2.SPEECH_EVENT_CONTINUE:
-                        if pcm_data:
-                            if len(audio_buffer) + len(pcm_data) > MAX_AUDIO_BUFFER_BYTES:
-                                logger.warning(
-                                    "audio_buffer_overflow",
-                                    device_id=device_id,
-                                    conversation_id=conversation_id,
-                                    buffer_size=len(audio_buffer),
-                                    incoming_size=len(pcm_data),
-                                    max_buffer_bytes=MAX_AUDIO_BUFFER_BYTES,
-                                    buffer_duration_ms=_pcm_duration_ms(
-                                        len(audio_buffer), input_sample_rate
-                                    ),
-                                    reason="buffer_limit_exceeded",
-                                )
-                                audio_buffer.clear()
-                                await output_queue.put(self._error_output(
-                                    device_id, conversation_id,
-                                    naila_pb2.ERROR_INTERNAL,
-                                    "Audio buffer limit exceeded, utterance discarded",
-                                ))
-                                continue
-                            audio_buffer.extend(pcm_data)
-
-                    elif event == naila_pb2.SPEECH_EVENT_END:
-                        if pcm_data:
-                            audio_buffer.extend(pcm_data)
-
-                        duration_ms = _pcm_duration_ms(
-                            len(audio_buffer), input_sample_rate
-                        )
-                        logger.info(
-                            "speech_end",
-                            device_id=device_id,
-                            conversation_id=conversation_id,
-                            audio_bytes=len(audio_buffer),
-                            duration_ms=duration_ms,
-                        )
-
-                        # Drop spurious short clips before they can cancel an
-                        # in-flight response. See MIN_UTTERANCE_DURATION_MS.
-                        if duration_ms < MIN_UTTERANCE_DURATION_MS:
-                            logger.info(
-                                "speech_end_discarded",
-                                device_id=device_id,
-                                conversation_id=conversation_id,
-                                duration_ms=duration_ms,
-                                threshold_ms=MIN_UTTERANCE_DURATION_MS,
-                                reason="below_min_duration",
-                            )
-                            audio_buffer.clear()
-                            continue
-
-                        turn = Stage("ai.turn", parent=utterance_parent, output_queued=True)
-
-                        # Cancel any prior processing before starting a new one
-                        if processing_task and not processing_task.done():
-                            processing_task.cancel()
-                            try:
-                                await processing_task
-                            except (asyncio.CancelledError, Exception):
-                                pass
-
-                        frozen_parent = utterance_parent
-                        frozen_audio = bytes(audio_buffer)
-                        audio_buffer.clear()
-
-                        processing_task = asyncio.create_task(
-                            otel.in_context(frozen_parent, self._timed_utterance(
-                                turn,
-                                output_queue,
-                                frozen_audio,
-                                input_sample_rate,
-                                device_id,
-                                conversation_id,
-                                context,
-                                target_output_sample_rate=target_output_sample_rate,
-                            ))
-                        )
-
-                    elif event == naila_pb2.SPEECH_EVENT_INTERRUPT:
-                        logger.info(
-                            "speech_interrupt",
-                            device_id=device_id,
-                            conversation_id=conversation_id,
-                        )
-                        if processing_task and not processing_task.done():
-                            processing_task.cancel()
-                            try:
-                                await processing_task
-                            except (asyncio.CancelledError, Exception):
-                                pass
-                            processing_task = None
-                        audio_buffer.clear()
+                await otel.in_context(parent, self._timed_utterance(
+                    turn, sink, audio, rate, device, conversation, context,
+                    target_output_sample_rate=target,
+                ))
+            except Exception:
+                logger.exception("utterance_processing_failed", device_id=device)
+                await sink.put(self._error_output(
+                    device, conversation, naila_pb2.ERROR_INTERNAL,
+                    "Utterance processing failed",
+                ))
             finally:
-                # Wait for any in-flight processing to finish before closing
-                if processing_task and not processing_task.done():
-                    try:
-                        await processing_task
-                    except (asyncio.CancelledError, Exception):
-                        pass
-                await output_queue.put(_SENTINEL)
+                source.task = None
+                evict(source)
 
-        reader_task = asyncio.create_task(_read_inputs())
+        async def read_messages():
+            nonlocal device, conversation
+            async for message in request_iterator:
+                device, conversation = message.device_id, message.conversation_id
+                event = message.event
+                if event not in (naila_pb2.SPEECH_EVENT_START, naila_pb2.SPEECH_EVENT_CONTINUE,
+                                 naila_pb2.SPEECH_EVENT_END, naila_pb2.SPEECH_EVENT_INTERRUPT):
+                    continue
+                source = sources.get(device)
+                if source and source.conversation != conversation:
+                    if event != naila_pb2.SPEECH_EVENT_START:
+                        continue
+                    await retire(source)
+                    source = None
+                if source is None:
+                    if event == naila_pb2.SPEECH_EVENT_INTERRUPT:
+                        continue
+                    source = _StreamSource(device, conversation)
+                    sources[device] = source
+                if event == naila_pb2.SPEECH_EVENT_INTERRUPT:
+                    logger.info("speech_interrupt", device_id=device, conversation_id=conversation)
+                    await retire(source)
+                    source.audio.clear()
+                    evict(source)
+                    continue
+                if event == naila_pb2.SPEECH_EVENT_START:
+                    logger.debug("speech_start", device_id=device, conversation_id=conversation)
+                    source.audio.clear()
+                    source.rate = message.sample_rate or 48000
+                    source.parent = otel.extract(message.traceparent)
+                    if source.target is None and message.HasField("session_config"):
+                        config = message.session_config
+                        if config.preferred_output_sample_rate:
+                            source.target = config.preferred_output_sample_rate
+                            logger.info(
+                                "session_config", device_id=device,
+                                preferred_output_sample_rate=source.target,
+                                supported_output_codecs=[
+                                    naila_pb2.AudioCodec.Name(c)
+                                    for c in config.supported_output_codecs
+                                ],
+                            )
+                elif event in (naila_pb2.SPEECH_EVENT_CONTINUE, naila_pb2.SPEECH_EVENT_END):
+                    if not source.audio:
+                        source.rate = message.sample_rate or 48000
+                pcm = self._extract_audio(message) or b""
+                # Apply the same bound to START, CONTINUE and END, before copying.
+                if len(source.audio) + len(pcm) > MAX_AUDIO_BUFFER_BYTES:
+                    logger.warning("audio_buffer_overflow", device_id=device,
+                                   conversation_id=conversation, buffer_size=len(source.audio),
+                                   incoming_size=len(pcm), reason="buffer_limit_exceeded")
+                    source.audio.clear()
+                    await _SourceOutput(output_queue, source).put(self._error_output(
+                        device, conversation, naila_pb2.ERROR_INTERNAL,
+                        "Audio buffer limit exceeded, utterance discarded",
+                    ))
+                    continue
+                source.audio.extend(pcm)
+                if event != naila_pb2.SPEECH_EVENT_END:
+                    evict(source)
+                    continue
+                audio = bytes(source.audio)
+                duration_ms = _pcm_duration_ms(len(audio), source.rate)
+                logger.info("speech_end", device_id=device, conversation_id=conversation,
+                            audio_bytes=len(audio), duration_ms=duration_ms)
+                if duration_ms < MIN_UTTERANCE_DURATION_MS:
+                    logger.info("speech_end_discarded", device_id=device,
+                                conversation_id=conversation, duration_ms=duration_ms,
+                                threshold_ms=MIN_UTTERANCE_DURATION_MS, reason="below_min_duration")
+                    source.audio.clear()
+                    evict(source)
+                    continue
+                # Keep PCM until retirement finishes so old-task cleanup cannot
+                # evict the context between cancellation and the replacement task.
+                await retire(source)
+                source.audio.clear()
+                # Freeze all identity/settings before the reader accepts another frame.
+                source.task = asyncio.create_task(process(
+                    source, _SourceOutput(output_queue, source), audio,
+                    source.rate, device, conversation,
+                    source.parent, source.target,
+                ))
+            # Normal EOF drains every source while the writer keeps consuming.
+            await asyncio.gather(*(s.task for s in sources.values() if s.task))
 
+        async def cancel_workers():
+            tasks = [s.task for s in sources.values() if s.task]
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        async def read_inputs():
+            try:
+                await read_messages()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                await cancel_workers()
+                await output_queue.put(exc)
+            else:
+                await output_queue.put(finished)
+
+        reader = asyncio.create_task(read_inputs())
         try:
             while True:
                 item = await output_queue.get()
-                if item is _SENTINEL:
+                if item is finished:
                     break
-                yield item
+                if isinstance(item, Exception):
+                    raise item
+                source, generation, output = item
+                source.queued -= 1
+                evict(source)
+                if generation == source.generation:
+                    if context.cancelled():
+                        break
+                    yield output
+            await reader
         except asyncio.CancelledError:
-            logger.info("stream_cancelled", device_id=device_id)
-            reader_task.cancel()
-        except Exception as e:
-            logger.error(
-                "stream_error",
-                device_id=device_id,
-                error=str(e),
-                error_type=type(e).__name__,
-            )
-            reader_task.cancel()
+            logger.info("stream_cancelled", device_id=device, conversation_id=conversation)
+            raise
+        except Exception as exc:
+            logger.error("stream_error", device_id=device, conversation_id=conversation,
+                         error=str(exc), error_type=type(exc).__name__)
+            raise
         finally:
-            if not reader_task.done():
-                reader_task.cancel()
-                try:
-                    await reader_task
-                except (asyncio.CancelledError, Exception):
-                    pass
-            logger.info(
-                "stream_closed",
-                device_id=device_id,
-                conversation_id=conversation_id,
-            )
+            # Cancel the reader before awaiting it: its terminal queue put may
+            # be blocked while the consumer is closing with a full output queue.
+            reader.cancel()
+            await cancel_workers()
+            await asyncio.gather(reader, return_exceptions=True)
+            logger.info("stream_closed", device_id=device, conversation_id=conversation,
+                        source_count=len(sources))
 
     async def _timed_utterance(self, turn, *args, **kwargs):
         try:
@@ -439,18 +448,20 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         turn = current_turn()
         has_audio = False
         failed = False
-        async for output in self._process_utterance(
+        # aclosing ensures downstream tasks finish even if queue.put is cancelled.
+        async with aclosing(self._process_utterance(
             pcm_bytes, sample_rate, device_id, conversation_id, context,
             target_output_sample_rate=target_output_sample_rate,
-        ):
-            if context and context.cancelled():
-                logger.info("client_disconnected_during_enqueue", device_id=device_id)
-                if turn:
-                    turn.outcome = "cancelled"
-                return
-            has_audio = has_audio or bool(output.audio_opus or output.audio_pcm)
-            failed = failed or bool(output.error_code)
-            await queue.put(output)
+        )) as outputs:
+            async for output in outputs:
+                if context and context.cancelled():
+                    logger.info("client_disconnected_during_enqueue", device_id=device_id)
+                    if turn:
+                        turn.outcome = "cancelled"
+                    return
+                has_audio = has_audio or bool(output.audio_opus or output.audio_pcm)
+                failed = failed or bool(output.error_code)
+                await queue.put(output)
         if turn:
             turn.set(audio_nonempty=has_audio)
             if failed or not has_audio:
@@ -538,17 +549,7 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
         # those calls so we maintain pacing, sequence numbers, and the Opus
         # encoder's predictor state through sentence boundaries.
         #
-        # ── MULTI-DEVICE NOTE ─────────────────────────────────────────────
-        # Today this state is scoped per-utterance within a single gRPC stream
-        # (one device, one conversation). When we add multi-room/multi-device
-        # routing, this state needs to be per (device_id, conversation_id) —
-        # because the same AI server may be delivering different responses to
-        # rooms A and B simultaneously, each with its own pacing baseline,
-        # sequence number, and encoder. Likely shape: a dict keyed by
-        # device_id mapping to one of these state structs, plus a small
-        # registry of tts_queues so the gRPC writer knows which queue to
-        # drain for each outgoing AudioOutput message.
-        # ─────────────────────────────────────────────────────────────────
+        # Each pipeline invocation owns its delivery state and frozen identity.
         delivery_state = {
             "silence_prepended": False,   # True after first audio's silence prepend
             "pacing_start": None,         # monotonic timestamp of frame 0
@@ -718,8 +719,9 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                     device_id, conversation_id,
                     naila_pb2.ERROR_INTERNAL, str(e),
                 ))
-            finally:
-                await tts_queue.put(_DONE)
+            # Cancellation must skip the sentinel: a full queue has no consumer
+            # once this utterance is retired. Normal completion still drains it.
+            await tts_queue.put(_DONE)
 
         orchestration_task = asyncio.create_task(_run_orchestration())
 
@@ -735,9 +737,9 @@ class NailaAIServicer(naila_pb2_grpc.NailaAIServicer):
                     return
                 audio_produced = True
                 yield item
-        except asyncio.CancelledError:
+        finally:
             orchestration_task.cancel()
-            raise
+            await asyncio.gather(orchestration_task, return_exceptions=True)
 
         # If no audio was produced (TTS unavailable), send text-only final
         if not audio_produced:
