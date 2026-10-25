@@ -20,6 +20,8 @@ except ImportError:
 
 from config import stt as stt_config
 from services.base import BaseAIService
+from services.timing import measured, label
+import telemetry as otel
 from utils.retry import retry_on_failure
 from utils.resource_pool import ResourcePool
 from utils import get_logger
@@ -215,6 +217,7 @@ class STTService(BaseAIService):
         return "int8"
 
 
+    @measured("stt", "text", "transcription_time_ms")
     async def transcribe_audio(
         self,
         audio_data: bytes,
@@ -223,6 +226,7 @@ class STTService(BaseAIService):
     ) -> TranscriptionResult:
         """Transcribe audio data to text with resource pooling"""
         if not self.is_ready or self.model is None:
+            label("unavailable")
             logger.error("stt_model_not_loaded")
             return self._empty_result()
 
@@ -244,6 +248,7 @@ class STTService(BaseAIService):
             # Validate and preprocess audio
             is_valid, error_msg = self._validate_audio(audio_data, format)
             if not is_valid:
+                label("invalid_input")
                 logger.error("audio_validation_failed", error=error_msg)
                 return self._empty_result()
 
@@ -269,6 +274,7 @@ class STTService(BaseAIService):
             )
 
         except Exception as e:
+            label("error")
             logger.error("transcription_failed", error=str(e), error_type=type(e).__name__)
             return self._empty_result()
 
@@ -399,7 +405,7 @@ class STTService(BaseAIService):
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
             None,
-            lambda: model.transcribe(
+            otel.executor_call(lambda: model.transcribe(
                 audio_array,
                 language=language or stt_config.LANGUAGE,
                 beam_size=stt_config.BEAM_SIZE,
@@ -411,7 +417,7 @@ class STTService(BaseAIService):
                     "min_silence_duration_ms": stt_config.MIN_SILENCE_DURATION_MS,
                     "speech_pad_ms": stt_config.SPEECH_PAD_MS,
                 } if stt_config.VAD_FILTER else None,
-            )
+            ))
         )
 
     def _process_segments(self, segments_list) -> Tuple[List[Dict], str, float]:

@@ -1,0 +1,18 @@
+[Unit]
+Description=NAILA Rust hub
+# gRPC reconnects automatically while DHCP or the AI server is unavailable.
+After=network.target
+
+[Service]
+Type=simple
+User=hub
+WorkingDirectory=/home/hub/robo-naila
+EnvironmentFile=/etc/naila/hub.env
+ExecStart=/home/hub/robo-naila/target/release/hub
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,482 @@
+import asyncio
+import copy
+import hashlib
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+import wave
+
+import pytest
+
+from benchmarks.__main__ import main
+from benchmarks.artifacts import distribution, summarize, write_json
+from benchmarks.peer import Fixture, ReplayTrack
+from benchmarks.traces import EvidenceError, REQUIRED, TraceReader, validate
+from benchmarks.voice import check_health, wait_for
+
+
+@pytest.fixture
+def wav(tmp_path):
+    path = tmp_path / 'fixture.wav'
+    with wave.open(str(path), 'wb') as out:
+        out.setparams((1, 2, 48000, 0, 'NONE', ''))
+        out.writeframes(b'\x01\x02' * 24001)
+    return path
+
+
+@pytest.fixture
+def run_args(tmp_path, wav):
+    deployment = tmp_path / 'deployment.json'
+    deployment.write_text(json.dumps({k: dict(host=k, model='test', os='test', cpu='test') for k in ('pi', 'dedicated')}))
+    return SimpleNamespace(wav=wav, deployment=deployment, run_dir=tmp_path / 'run', traces=tmp_path / 'traces',
+                           hub_url='http://127.0.0.1:1', warmup=0, iterations=1, timeout_seconds=1)
+
+
+def test_immutable_fixture_and_padding(wav):
+    original = wav.read_bytes()
+    fixture = Fixture.load(wav)
+    wav.write_bytes(b'replacement')
+    assert fixture.sha256 == hashlib.sha256(original).hexdigest()
+    assert fixture.padding_samples == 959
+    assert fixture.pcm == b'\x01\x02' * 24001 + bytes(959 * 2)
+
+
+@pytest.mark.parametrize('params', [(2, 2, 48000), (1, 1, 48000), (1, 2, 16000)])
+def test_wav_format_rejected(tmp_path, params):
+    path = tmp_path / 'bad.wav'
+    with wave.open(str(path), 'wb') as out:
+        out.setparams((*params, 0, 'NONE', ''))
+        out.writeframes(bytes(96000))
+    with pytest.raises(ValueError, match='mono PCM16'):
+        Fixture.load(path)
+
+
+class Clock:
+    now = 0
+
+    def __call__(self):
+        return self.now
+
+    async def sleep(self, delay):
+        self.now += delay
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('start,overshoot', [(0, 0), (5, 0), (0, .001)])
+async def test_replay_connection_clock_and_exact_handoffs(wav, start, overshoot):
+    fixture, clock = Fixture.load(wav), Clock()
+    async def sleep(delay):
+        clock.now += delay + overshoot
+    track = ReplayTrack(fixture, clock, sleep)
+    for _ in range(35 if not start else 0):
+        assert bytes((await track.recv()).planes[0]) == bytes(1920)
+    assert track.first is None
+    clock.now = start or clock.now
+    track.connected()
+    leading_until = clock.now + .5
+    assert track.ready_at == pytest.approx(leading_until)
+    first_deadline = track.next_at if track.next_at is not None else clock.now
+    frames, handoffs = [], []
+    while not track.finished.is_set():
+        frame = await track.recv()
+        handoffs.append(clock.now)
+        if track.first is not None:
+            frames.append(bytes(frame.planes[0]))
+    assert b''.join(frames) == fixture.pcm
+    assert handoffs == pytest.approx([first_deadline + overshoot + i * .02 for i in range(len(handoffs))])
+    assert track.first >= leading_until and track.cursor == len(fixture.pcm)
+    assert track.end == pytest.approx(track.first + len(frames) * .02)
+    assert track.next_at == pytest.approx(track.pts / 48000 + start)
+
+
+@pytest.mark.asyncio
+async def test_canceled_recv_does_not_advance(wav):
+    clock = Clock()
+    entered = asyncio.Event()
+
+    async def blocked(delay):
+        entered.set()
+        await asyncio.Event().wait()
+
+    track = ReplayTrack(Fixture.load(wav), clock, blocked)
+    track.connected()
+    clock.now = 1
+    task = asyncio.create_task(track.recv())
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert track.cursor == track.pts == 0
+    track.sleep = clock.sleep
+    frames = [bytes((await track.recv()).planes[0]) for _ in range(len(track.fixture.pcm) // 1920)]
+    assert b''.join(frames) == track.fixture.pcm
+
+
+def record(spans):
+    return json.dumps({'resourceSpans': [{'resource': {'attributes': []}, 'scopeSpans': [{'spans': spans}]}]}).encode() + b'\n'
+
+
+def test_actual_collector_fixture():
+    reader = TraceReader(Path(__file__).parent / 'fixtures/collector-0.137.0-traces.jsonl')
+    spans = reader.read(final=True)
+    assert len(spans) == 3
+    assert len({s['traceId'] for s in spans}) == 1
+    assert {s['resource']['service.name'] for s in spans} == {'naila.hub', 'naila.ai'}
+
+
+def test_partial_duplicate_conflicting_truncated_capture(tmp_path):
+    path = tmp_path / 'traces'
+    span = dict(traceId='a' * 32, spanId='b' * 16, name='stt')
+    data = record([span])
+    path.write_bytes(data[:50])
+    reader = TraceReader(path)
+    assert reader.read() == ()
+    with path.open('ab') as out:
+        out.write(data[50:] + data)
+    snapshot = reader.read()
+    assert len(snapshot) == 1
+    snapshot[0]['name'] = 'mutated snapshot'
+    assert reader.read()[0]['name'] == 'stt'
+    with path.open('ab') as out:
+        out.write(record([dict(span, name='conflict')]))
+    with pytest.raises(EvidenceError, match='conflicting'):
+        reader.read()
+    path.write_bytes(data[:-1])
+    with pytest.raises(EvidenceError, match='trailing'):
+        TraceReader(path).read(final=True)
+
+
+def attr(**values):
+    return [{'key': k, 'value': {'boolValue' if isinstance(v, bool) else 'doubleValue' if isinstance(v, (float, int)) else 'stringValue': v}} for k, v in values.items()]
+
+
+@pytest.fixture
+def evidence():
+    sample = dict(trial_id='trial', trace_id='a' * 32, root_span_id='0000000000000001', warmup=False,
+                  outcome='success', received_frames=10, peer_first_audio_ms=100, peer_input_to_first_audio_ms=600,
+                  **{'peer.connect_ms': 20})
+    spans = []
+    for i, name in enumerate(REQUIRED, 2):
+        values = {'outcome': 'success', 'duration_ms': 10}
+        if name in ('hub.session', 'hub.response'):
+            values = {'outcome': 'ok'}
+        if name == 'hub.session':
+            values.update(utterance_count=1, multiple_utterances=False, **{'outbound.send_errors': 0, 'outbound.opus_forward_count': 1})
+            for field in ('vad_ms', 'outbound_send_ms'):
+                values.update({field + '.count': 10, field + '.sum': 5})
+        if name == 'hub.webrtc.receive':
+            values.update(decode_errors=0, dispatch_errors=0)
+            for field in ('opus_decode_ms', 'receive_dispatch_ms'):
+                values.update({field + '.count': 10, field + '.sum': 5})
+        if name == 'ai.turn':
+            values['audio_nonempty'] = True
+        if name == 'tts':
+            values['cache_hit'] = True
+        if name == 'hub.response':
+            values.update(hub_response_first_send_ms=50, hub_response_final_send_ms=100)
+        spans.append(dict(traceId=sample['trace_id'], spanId=f'{i:016x}', parentSpanId=sample['root_span_id'],
+                          name=name, startTimeUnixNano='1000', endTimeUnixNano='2000', attributes=attr(**values)))
+    return sample, tuple(spans)
+
+
+def test_completion_requires_turn_and_cleanup(evidence):
+    sample, spans = evidence
+    with pytest.raises(EvidenceError, match='ai.turn'):
+        validate(tuple(s for s in spans if s['name'] != 'ai.turn'), sample, cleanup=False)
+    with pytest.raises(EvidenceError, match='hub.session'):
+        validate(tuple(s for s in spans if s['name'] != 'hub.session'), sample)
+    validate(spans, sample)
+    with pytest.raises(EvidenceError, match='missing ancestry'):
+        validate(spans, dict(sample, root_span_id='f' * 16))
+    with pytest.raises(EvidenceError, match='missing spans'):
+        validate(spans, dict(sample, trace_id='late-old-trace'))
+
+
+@pytest.mark.parametrize('stage,change', [('llm', {'outcome': 'fallback'}), ('ai.turn', {'outcome': 'cancelled'}),
+                                        ('hub.session', {'utterance_count': 2}), ('hub.webrtc.receive', {'decode_errors': 1})])
+def test_failed_or_multiple_turn_cannot_pass(evidence, stage, change):
+    sample, spans = evidence
+    spans = copy.deepcopy(spans)
+    span = next(s for s in spans if s['name'] == stage)
+    span['attributes'] += attr(**change)
+    with pytest.raises(EvidenceError):
+        validate(spans, sample)
+
+
+def test_statistics_warmup_cache_and_failure_counts(evidence):
+    sample, spans = evidence
+    manifest = dict(run_id='run', warmup=1, iterations=1)
+    summary = summarize(manifest, [dict(sample, warmup=True), sample], spans)
+    assert summary['complete']
+    assert summary['stages']['peer_first_audio_ms']['n'] == 1
+    assert summary['stages']['vad_ms_per_trial_mean']['mean'] == .5
+    assert summary['tts_cache'] == dict(hit=1, miss=0, unknown=0)
+    assert summary['stages']['tts_cache_hit_ms']['n'] == 1
+    assert summary['stages']['tts_cache_miss_ms']['n'] == 0
+    summary = summarize(manifest, [dict(sample, outcome='failed')], spans)
+    assert (summary['attempted'], summary['success'], summary['failed']) == (1, 0, 1)
+    assert not summary['complete']
+    assert distribution([10, 30])['p95'] == 30
+    assert distribution([])['mean'] is None
+    with pytest.raises(EvidenceError):
+        distribution([float('nan')])
+
+
+def test_summary_keeps_only_unique_resources_and_compact_coverage(evidence):
+    sample, spans = evidence
+    resources = [{'service.name': 'hub', 'instance': 'a', 'tags': ['pi']},
+                 {'service.name': 'hub', 'instance': 'b', 'tags': ['pi']},
+                 {'service.name': 'ai', 'instance': 'c'}]
+    for index, span in enumerate(spans):
+        span['resource'] = dict(resources[index % len(resources)])
+    summary = summarize(dict(run_id='run', warmup=1, iterations=1), [dict(sample, warmup=True), sample], spans)
+    assert summary['complete']
+    assert summary['provenance'] == {'resources': {'hub': resources[:2], 'ai': resources[2:]}}
+    assert all(set(result) == {'trial_id', 'warmup', 'complete', 'reason'} for result in summary['required_trace_coverage'])
+    assert 'fps' not in summary
+
+
+@pytest.mark.parametrize('usage', [False, True])
+def test_token_populations_and_producer_throughput(evidence, usage):
+    sample, spans = evidence
+    llm = next(s for s in spans if s['name'] == 'llm')
+    if usage:
+        llm['attributes'] += attr(**{'llm.completion_tokens': 20, 'llm.prompt_tokens': 100,
+                                    'duration_ms': 2000, 'llm.first_output_ms': 500})
+    summary = summarize(dict(run_id='run', warmup=1, iterations=1),
+                        [dict(sample, warmup=True), sample], spans)
+    assert summary['headline'] == ['peer_first_audio_ms', 'llm.first_output_ms', 'llm.tokens_per_second']
+    assert summary['diagnostic_stages'] == ['llm']
+    for key, expected in [('completion_tokens', 20), ('prompt_tokens', 100), ('tokens_per_second', 10)]:
+        population = summary['stages']['llm.' + key]
+        assert population['n'] == int(usage)
+        assert population['mean'] == (expected if usage else None)
+        if not usage:
+            assert 'backend token usage' in population['reason']
+
+
+def healthy(**overrides):
+    return dict(status='ok', grpc_connected=True, active_devices=0, ai_server={'health': 'healthy'},
+                tts_frames_dropped=0, grpc_reconnects=0, vad_onsets=0, vad_ends=0, **overrides)
+
+
+@pytest.mark.parametrize('key,value', [('active_devices', 1), ('grpc_connected', False), ('tts_frames_dropped', 1),
+                                     ('grpc_reconnects', 1), ('vad_onsets', 2)])
+def test_readiness_is_advisory_and_every_counter_is_checked(key, value):
+    before = healthy()
+    after = dict(before, **{key: value})
+    with pytest.raises(EvidenceError):
+        check_health(after, before)
+
+
+@pytest.mark.asyncio
+async def test_deadline_and_completion_gate(monkeypatch):
+    clock = Clock()
+    monkeypatch.setattr('benchmarks.voice.time.monotonic', clock)
+    monkeypatch.setattr('benchmarks.voice.asyncio.sleep', clock.sleep)
+    calls = []
+
+    async def pending():
+        calls.append(clock.now)
+        return False
+
+    with pytest.raises(EvidenceError, match='deadline'):
+        await wait_for(pending, .3)
+    assert clock.now == .3
+    assert len(calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_two_directory_contenders_leave_existing_contents(run_args):
+    from benchmarks.voice import run
+    args, directory = run_args, run_args.run_dir
+    first, second = await asyncio.gather(run(args), run(args), return_exceptions=True)
+    assert first == 1
+    assert isinstance(second, FileExistsError)
+    original = (directory / 'manifest.json').read_bytes()
+    with pytest.raises(FileExistsError):
+        await run(args)
+    assert (directory / 'manifest.json').read_bytes() == original
+
+
+@pytest.mark.parametrize('finalized', [False, True])
+def test_offline_finalization_read_only_and_truncation(evidence, tmp_path, capsys, finalized):
+    sample, spans = evidence
+    write_json(tmp_path / 'manifest.json', dict(run_id='run', warmup=0, iterations=1))
+    (tmp_path / 'samples.jsonl').write_text(json.dumps(sample) + '\n')
+    capture = tmp_path / 'traces'
+    capture.write_bytes(record(spans))
+    if finalized:
+        write_json(tmp_path / 'summary.json', {'execution_finalized': True, 'execution_error': None})
+    before = {p: p.read_bytes() for p in tmp_path.iterdir()}
+    assert main(['summarize', '--run-dir', str(tmp_path), '--traces', str(capture)]) == (0 if finalized else 1)
+    summary = json.loads(capsys.readouterr().out)
+    assert summary['complete'] is finalized
+    if not finalized:
+        assert 'finalization' in summary['reason']
+    assert {p: p.read_bytes() for p in tmp_path.iterdir()} == before
+    with capture.open('ab') as out:
+        out.write(b'{')
+    assert main(['summarize', '--run-dir', str(tmp_path), '--traces', str(capture)]) == 1
+    assert not json.loads(capsys.readouterr().out)['complete']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('disconnect,late_cleanup,cleanup_failure', [
+    (False, False, None), (True, False, None), (False, True, None),
+    (True, True, None), (True, False, 'close'),
+    (False, False, 'receive'), (False, False, 'tracks'),
+])
+async def test_trial_waits_for_connected_finality_and_task_cleanup(monkeypatch, wav, evidence, disconnect, late_cleanup, cleanup_failure):
+    import benchmarks.voice as voice
+    import audio_client.webrtc as transport
+    sample, spans = evidence
+    state = {'active': 0, 'cleanup_reads': 0, 'trace_id': None, 'root_span_id': None, 'frame': asyncio.Event()}
+    yield_loop = asyncio.sleep
+    clock = Clock()
+    monkeypatch.setattr(voice.time, 'monotonic', clock)
+    class Track:
+        kind = 'audio'
+
+        async def recv(self):
+            await state['frame'].wait()
+            state['frame'].clear()
+            if cleanup_failure == 'receive':
+                raise transport.MediaStreamError
+            return object()
+
+    class Peer:
+        connectionState = 'new'
+        iceGatheringState = 'complete'
+        localDescription = SimpleNamespace(sdp='offer')
+
+        def __init__(self, configuration):
+            self.handlers = {}
+            self.createOffer = AsyncMock(return_value=self.localDescription)
+            self.setLocalDescription = AsyncMock()
+            state['peer'] = self
+
+        def on(self, name):
+            return lambda callback: self.handlers.__setitem__(name, callback)
+
+        def addTrack(self, track):
+            state['track'] = track
+
+        async def setRemoteDescription(self, answer):
+            state['active'] = 1  # SDP answer alone must not start scored input.
+            for _ in range(2 if cleanup_failure == 'tracks' else 1):
+                self.handlers['track'](Track())
+
+        async def close(self):
+            state['active'] = 0
+            if cleanup_failure == 'close':
+                raise RuntimeError('close failed')
+
+    class Reader:
+        def read(self):
+            result = copy.deepcopy(spans)
+            for span in result:
+                span.update(traceId=state['trace_id'], parentSpanId=state['root_span_id'])
+            if state['active'] == 0:
+                state['cleanup_reads'] += 1
+                if late_cleanup or state['cleanup_reads'] == 1:
+                    return tuple(s for s in result if s['name'] != 'hub.session')
+            return result
+
+    async def health(session, url):
+        current = healthy()
+        current.update(active_devices=state['active'], vad_onsets=int(getattr(state.get('track'), 'end', None) is not None), vad_ends=int(getattr(state.get('track'), 'end', None) is not None))
+        return current
+
+    async def exchange(*args, **kwargs):
+        version, state['trace_id'], state['root_span_id'], flags = kwargs['trace_header'].split('-')
+        assert version == '00' and flags == '01'
+        assert len(bytes.fromhex(state['trace_id'])) == 16 and len(bytes.fromhex(state['root_span_id'])) == 8
+        return 'answer'
+
+    async def sleep(delay):
+        clock.now += delay
+        peer = state['peer']
+        if peer.connectionState == 'new':
+            assert state['track'].first is None and state['track'].ready_at is None
+            peer.connectionState = 'connected'
+            await peer.handlers['connectionstatechange']()
+        elif state['active']:
+            if disconnect:
+                peer.connectionState = 'disconnected'
+                await peer.handlers['connectionstatechange']()
+            else:
+                state['track'].first, state['track'].end = 0, clock.now - .02
+                state['frame'].set()
+                await yield_loop(0)
+
+    monkeypatch.setattr(transport, 'RTCPeerConnection', Peer)
+    monkeypatch.setattr(voice, 'health', health)
+    monkeypatch.setattr(transport, 'exchange_sdp', exchange)
+    monkeypatch.setattr(voice.asyncio, 'sleep', sleep)
+    result = await voice.trial(SimpleNamespace(hub_url='http://test', timeout_seconds=1), Fixture.load(wav), Reader(), None, False)
+    assert result['outcome'] == ('failed' if disconnect or late_cleanup or cleanup_failure in ('receive', 'tracks') else 'success'), result
+    if result['outcome'] == 'success':
+        assert result['received_frames'] == 1
+        assert result['peer.connect_ms'] == pytest.approx(100)
+        assert result['peer_first_audio_ms'] == pytest.approx(20)
+    if not disconnect and cleanup_failure != 'tracks':
+        assert state['cleanup_reads'] >= 2
+    if disconnect:
+        assert result['reason'] == 'EvidenceError: peer disconnected'
+    elif late_cleanup:
+        assert 'deadline' in result['reason']
+    elif cleanup_failure in ('receive', 'tracks'):
+        assert result['reason'] == 'EvidenceError: ' + ('receive sink ended' if cleanup_failure == 'receive' else 'unexpected return audio tracks')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('execution_ok', [False, True])
+async def test_offline_preserves_execution_result_and_allows_late_trace(monkeypatch, run_args, evidence, capsys, execution_ok):
+    import benchmarks.voice as voice
+    sample, spans = evidence
+    args, capture = run_args, run_args.traces
+    capture.write_bytes(record(spans[:-1] if execution_ok else spans))
+
+    async def trial(*args):
+        if not execution_ok:
+            raise RuntimeError('trial failed')
+        return sample
+
+    monkeypatch.setattr(voice, 'health', AsyncMock(return_value=healthy()))
+    monkeypatch.setattr(voice, 'trial', trial)
+    assert await voice.run(args) == 1
+    capsys.readouterr()
+    if execution_ok:
+        with capture.open('ab') as out:
+            out.write(record(spans[-1:]))
+    assert main(['summarize', '--run-dir', str(args.run_dir), '--traces', str(capture)]) == (0 if execution_ok else 1)
+    summary = json.loads(capsys.readouterr().out)
+    assert summary['complete'] is execution_ok
+    if not execution_ok:
+        assert 'trial failed' in summary['reason']
+
+
+@pytest.mark.parametrize('end', ['1000', '500', None, '0'])
+def test_span_end_presence_not_wall_clock_order(evidence, end):
+    sample, spans = evidence
+    stt = next(s for s in spans if s['name'] == 'stt')
+    stt.pop('endTimeUnixNano')
+    if end is not None:
+        stt['endTimeUnixNano'] = end
+    if end in (None, '0'):
+        with pytest.raises(EvidenceError, match='unfinished'):
+            validate(spans, sample)
+    else:
+        validate(spans, sample)
+
+
+@pytest.mark.parametrize('contents', [b'', b'not a RIFF container'])
+def test_malformed_wav_is_handled_setup_error(tmp_path, capsys, contents):
+    wav = tmp_path / 'bad.wav'
+    wav.write_bytes(contents)
+    assert main(['voice', '--hub-url', 'http://unused', '--wav', str(wav),
+                 '--run-dir', str(tmp_path / 'run'), '--traces', str(tmp_path / 'traces')]) == 2
+    assert 'setup error:' in capsys.readouterr().err
+    assert not (tmp_path / 'run').exists()

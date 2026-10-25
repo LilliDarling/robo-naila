@@ -4,6 +4,7 @@ import asyncio
 import logging
 from fractions import Fraction
 from typing import TYPE_CHECKING
+from collections.abc import Callable
 
 import aiohttp
 import av
@@ -71,34 +72,44 @@ class MicTrack(MediaStreamTrack):
 
 
 class WebRTCClient:
-    """Manages a single aiortc peer connection to the hub."""
+    """Manages a single aiortc peer connection to the hub.
+
+    Optional source/on_audio bypass mic capture and speaker playback. The callback
+    runs synchronously at decoded-frame receipt. connected/broken latch transport
+    transitions (including disconnection); receive_tasks exposes sink completion.
+    """
 
     def __init__(
         self,
         hub_url: str,
         device_id: str,
-        pipeline: AudioPipeline,
+        pipeline: AudioPipeline | None,
         session: aiohttp.ClientSession,
         metrics: DeviceMetrics | None = None,
         profile: DeviceProfile | None = None,
+        *,
+        source: MediaStreamTrack | None = None,
+        on_audio: Callable[[av.AudioFrame], None] | None = None,
     ) -> None:
         self._hub_url = hub_url
         self._device_id = device_id
         self._pipeline = pipeline
+        self._source, self._on_audio = source, on_audio
         self._session = session
         self._metrics = metrics
         self._profile = profile
         self._pc: RTCPeerConnection | None = None
         self._closed = asyncio.Event()
-        self._recv_task: asyncio.Task[None] | None = None
+        self.receive_tasks: list[asyncio.Task[None]] = []
+        self.connected, self.broken = asyncio.Event(), asyncio.Event()
 
-    async def connect(self) -> None:
+    async def connect(self, trace_header: str | None = None) -> None:
         """Create offer, exchange SDP with hub, start streaming."""
         # No ICE servers — local network only, matching hub RTCConfiguration.
         self._pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=[]))
 
         # Outbound: mic → hub.
-        mic_track = MicTrack(self._pipeline, self._metrics)
+        mic_track = self._source if self._source is not None else MicTrack(self._pipeline, self._metrics)
         self._pc.addTrack(mic_track)
 
         # Inbound: hub TTS → speaker.
@@ -106,13 +117,17 @@ class WebRTCClient:
         def on_track(track: MediaStreamTrack) -> None:
             log.info("received remote track: kind=%s", track.kind)
             if track.kind == "audio":
-                self._recv_task = asyncio.create_task(self._recv_tts(track))
+                self.receive_tasks.append(asyncio.create_task(self._recv_tts(track)))
 
         # Connection state monitoring.
         @self._pc.on("connectionstatechange")
         async def on_state_change() -> None:
             state = self._pc.connectionState
             log.info("connection state: %s", state)
+            if state == "connected":
+                self.connected.set()
+            elif state in ("failed", "disconnected", "closed"):
+                self.broken.set()
             if state in ("failed", "closed"):
                 self._closed.set()
 
@@ -125,7 +140,7 @@ class WebRTCClient:
 
         answer_sdp = await exchange_sdp(
             self._session, self._hub_url, self._device_id, self._pc.localDescription.sdp,
-            profile=self._profile,
+            profile=self._profile, trace_header=trace_header,
         )
         answer = RTCSessionDescription(sdp=answer_sdp, type="answer")
         await self._pc.setRemoteDescription(answer)
@@ -158,6 +173,9 @@ class WebRTCClient:
         try:
             while True:
                 frame: av.AudioFrame = await track.recv()
+                if self._on_audio is not None:
+                    self._on_audio(frame)
+                    continue
                 if not logged_format:
                     arr = frame.to_ndarray()
                     log.info(
@@ -205,13 +223,10 @@ class WebRTCClient:
     async def close(self) -> None:
         if self._metrics:
             self._metrics.connected = False
-        if self._recv_task is not None:
-            self._recv_task.cancel()
-            try:
-                await self._recv_task
-            except asyncio.CancelledError:
-                pass
-            self._recv_task = None
+        for task in self.receive_tasks:
+            task.cancel()
+        await asyncio.gather(*self.receive_tasks, return_exceptions=True)
+        self.receive_tasks.clear()
         if self._pc is not None:
             await self._pc.close()
             self._pc = None

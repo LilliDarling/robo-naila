@@ -572,6 +572,23 @@ class TestNAILAOrchestrationGraph:
         assert result["conversation_history"] == []
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("intent_confidence,dispatched", [(0.415, False), (0.49, True), (None, True)])
+    async def test_workflow_intent_gate_preserves_classifier_score(self, orchestrator, monkeypatch, intent_confidence, dispatched):
+        from agents.actions import registry
+        monkeypatch.setattr(registry, "_HANDLERS", {})
+        handler = AsyncMock(return_value="It's 60°F and overcast.")
+        registry.register("weather_query", handler)
+        async def process_input(state):
+            return {**state, "processed_text": "what color is the sky", "intent": "weather_query", "intent_confidence": intent_confidence}
+        orchestrator.input_processor.process.side_effect = process_input
+        orchestrator.response_generator.process.side_effect = lambda state, config=None: state
+        result = await orchestrator.run({"raw_input": "What color is the sky?", "input_type": "text", "confidence": 0.63})
+        assert result.get("action_handled", False) is dispatched
+        assert ("response_text" in result) is dispatched
+        assert result["intent_confidence"] == intent_confidence
+        assert handler.await_count == int(dispatched)
+
+    @pytest.mark.asyncio
     async def test_workflow_with_empty_state(self, orchestrator):
         """Test workflow handles empty/minimal state gracefully"""
         empty_state = {}

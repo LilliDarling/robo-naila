@@ -1,12 +1,5 @@
-"""Tests for memory configuration defaults.
-
-The default ``DB_PATH`` must be the same regardless of cwd at launch time —
-otherwise running ``main.py`` from different directories silently lands the
-conversation log in different files.
-"""
-
+"""Memory defaults are package-relative; explicit paths override benchmark mode."""
 import importlib
-import os
 from pathlib import Path
 
 import pytest
@@ -14,46 +7,31 @@ import pytest
 
 @pytest.fixture
 def reload_memory_config(monkeypatch):
-    """Reload ``config.memory`` after env mutation so module-level constants re-evaluate."""
-
-    def _reload(env: dict | None = None):
-        monkeypatch.delenv("NAILA_MEMORY_DB_PATH", raising=False)
+    def reload(env=None):
+        for key in ('NAILA_MEMORY_DB_PATH', 'NAILA_BENCHMARK'):
+            monkeypatch.delenv(key, raising=False)
         for key, value in (env or {}).items():
-            if value is None:
-                monkeypatch.delenv(key, raising=False)
-            else:
-                monkeypatch.setenv(key, value)
-        import config.memory as mod
-
-        return importlib.reload(mod)
-
-    return _reload
+            monkeypatch.setenv(key, value)
+        import config.benchmark as benchmark
+        import config.memory as memory
+        importlib.reload(benchmark)
+        return importlib.reload(memory)
+    return reload
 
 
-class TestMemoryConfigDefault:
-    def test_default_path_is_absolute(self, reload_memory_config):
-        mod = reload_memory_config()
-        assert os.path.isabs(mod.DB_PATH), (
-            "DB_PATH default must be absolute so it doesn't shift with cwd"
-        )
+def test_default_path_is_absolute_package_relative_and_cwd_stable(reload_memory_config, tmp_path, monkeypatch):
+    first = reload_memory_config().DB_PATH
+    assert Path(first).is_absolute()
+    assert Path(first).resolve().is_relative_to(Path(__file__).resolve().parents[2])
+    monkeypatch.chdir(tmp_path)
+    assert reload_memory_config().DB_PATH == first
 
-    def test_default_path_lives_under_ai_server_package(self, reload_memory_config):
-        mod = reload_memory_config()
-        package_dir = Path(__file__).resolve().parents[2]  # ai-server/
-        assert Path(mod.DB_PATH).resolve().is_relative_to(package_dir), (
-            f"DB_PATH {mod.DB_PATH} must live under {package_dir}"
-        )
 
-    def test_default_path_is_stable_across_cwd(self, reload_memory_config, tmp_path, monkeypatch):
-        first = reload_memory_config().DB_PATH
-        monkeypatch.chdir(tmp_path)
-        second = reload_memory_config().DB_PATH
-        assert first == second
-
-    def test_env_override_wins(self, reload_memory_config):
-        mod = reload_memory_config({"NAILA_MEMORY_DB_PATH": "/tmp/custom.db"})
-        assert mod.DB_PATH == "/tmp/custom.db"
-
-    def test_in_memory_override_passes_through(self, reload_memory_config):
-        mod = reload_memory_config({"NAILA_MEMORY_DB_PATH": ":memory:"})
-        assert mod.DB_PATH == ":memory:"
+@pytest.mark.parametrize('env,expected', [
+    ({'NAILA_MEMORY_DB_PATH': '/tmp/custom.db'}, '/tmp/custom.db'),
+    ({'NAILA_MEMORY_DB_PATH': ':memory:'}, ':memory:'),
+    ({'NAILA_BENCHMARK': '1'}, ':memory:'),
+    ({'NAILA_BENCHMARK': '1', 'NAILA_MEMORY_DB_PATH': '/tmp/custom.db'}, '/tmp/custom.db'),
+])
+def test_memory_path_overrides(reload_memory_config, env, expected):
+    assert reload_memory_config(env).DB_PATH == expected

@@ -136,6 +136,8 @@ STT_VAD_FILTER=false STT_DEVICE=cpu STT_COMPUTE_TYPE=int8 uv run python main.py
 Full config surface lives in `config/{stt,llm,tts,vision,mqtt,grpc}.py` —
 each module documents its own env vars.
 
+For a Mac AI server with a remote Pi hub, see [Mac deployment](../deploy/mac/README.md).
+
 ## Communication
 
 ### gRPC (real-time audio loop)

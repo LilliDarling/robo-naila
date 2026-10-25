@@ -47,6 +47,7 @@ pub struct TaggedFrame {
     pub conversation_id: Arc<str>,
     pub frame: AudioFrame,
     pub event: SpeechEvent,
+    pub trace_context: opentelemetry::Context,
 }
 
 /// TTS = Text-to-Speech

@@ -17,7 +17,12 @@ The hub starts two subsystems:
 - **HTTP signaling server** on `0.0.0.0:8080`
 - **gRPC client** connecting to `http://127.0.0.1:50051` (the AI server)
 
-Both addresses are currently hardcoded defaults. The gRPC client reconnects automatically with exponential backoff (1s initial, 30s max) if the AI server is unavailable.
+Set `NAILA_AI_GRPC_URL=http://<ai-host>:50051` to use a remote AI server;
+omitting it preserves the loopback default. Include the `http://` scheme.
+The HTTP bind remains `0.0.0.0:8080`. The gRPC client reconnects automatically
+with exponential backoff (1s initial, 30s max) if the AI server is unavailable.
+
+For a Pi hub with orchestration on a separate Mac, see [Pi deployment](../deploy/pi/README.md).
 
 ## HTTP Endpoints
 
@@ -148,7 +153,12 @@ Device mic → [Opus/RTP] → Hub inbound track → Opus decode → PCM 48kHz
 Voice activity detection uses `webrtc-vad` (libfvad) with a four-state machine: `Silence` → `MaybeSpeech` → `Speaking` → `MaybeSilence`. Defaults:
 
 - **Onset threshold:** 3 consecutive speech frames (60ms) before confirming speech
-- **Hangover threshold:** 15 consecutive silence frames (300ms) before ending an utterance
-- **Mode:** Quality (lowest false-positive rate)
+- **Hangover threshold:** 25 consecutive silence frames (500ms) before ending an utterance
+- **Mode:** VeryAggressive (unchanged)
+
+The #38 operator amendment raises hangover from 300ms to 500ms to bridge an
+internal pause in the unchanged benchmark question after Opus decoding. This
+applies to all peers and adds 200ms to the nominal endpoint hangover; it may
+merge nearby turns. Onset and classifier mode stay unchanged.
 
 Frames are suppressed during silence. On confirmed onset, buffered frames are flushed with a `Start` event. During speech, frames are forwarded with `Continue`. After hangover expires, a final `End` event is emitted.

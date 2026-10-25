@@ -46,3 +46,20 @@ async def test_exchange_sdp_error(hub_server_error):
     async with aiohttp.ClientSession() as session:
         with pytest.raises(RuntimeError, match="500"):
             await exchange_sdp(session, url, "pi-test", "offer")
+
+
+@pytest.mark.asyncio
+async def test_trace_header_is_optional_and_forwarded(aiohttp_server):
+    received = []
+
+    async def connect(request):
+        received.append(request.headers.get('traceparent'))
+        return web.json_response({'sdp': 'answer'})
+
+    app = web.Application()
+    app.router.add_post('/connect', connect)
+    server = await aiohttp_server(app)
+    async with aiohttp.ClientSession() as session:
+        await exchange_sdp(session, str(server.make_url('')).rstrip('/'), 'a', 'offer')
+        await exchange_sdp(session, str(server.make_url('')).rstrip('/'), 'b', 'offer', trace_header='00-test')
+    assert received == [None, '00-test']

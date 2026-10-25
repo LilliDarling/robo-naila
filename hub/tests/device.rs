@@ -8,11 +8,11 @@ use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use hub::audio::{AudioBus, SpeechEvent, TtsFrame};
+use hub::audio::{AudioBus, AudioFrame, SpeechEvent, TtsFrame};
 use hub::device::run_device;
 use hub::metrics::HubMetrics;
 use hub::vad::VadConfig;
-use support::{silence_frame, speech_frame, MockTransport};
+use support::{speech_frame, MockTransport};
 use webrtc_vad::VadMode;
 
 /// Small thresholds so tests complete quickly.
@@ -53,6 +53,7 @@ async fn frames_reach_bus_after_vad_onset() {
         cancel.clone(),
         Arc::clone(&device_tasks),
         Arc::clone(&metrics),
+        hub::otel::extract("00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"),
     ));
 
     // Send 3 speech frames to trigger onset, then a 4th to get a Continue.
@@ -74,6 +75,7 @@ async fn frames_reach_bus_after_vad_onset() {
     assert_eq!(received[0].device_id.as_ref(), "test-device");
     assert_eq!(received[0].conversation_id.as_ref(), "conv-1");
     assert_eq!(received[0].event, SpeechEvent::Start);
+    assert!(hub::otel::inject(&received[0].trace_context).contains("0123456789abcdef0123456789abcdef"));
 
     // Remaining frames should be Continue.
     for frame in &received[1..] {
@@ -107,6 +109,7 @@ async fn tts_routed_back_to_transport() {
         cancel.clone(),
         Arc::clone(&device_tasks),
         metrics,
+        opentelemetry::Context::new(),
     ));
 
     // Give the device task a moment to register its tts_sub entry.
@@ -158,6 +161,7 @@ async fn transport_close_triggers_cleanup() {
         cancel.clone(),
         Arc::clone(&device_tasks),
         metrics,
+        opentelemetry::Context::new(),
     ));
 
     // Wait for device task to register.
@@ -202,6 +206,7 @@ async fn cancel_token_stops_device() {
         cancel.clone(),
         Arc::clone(&device_tasks),
         metrics,
+        opentelemetry::Context::new(),
     ));
 
     // Wait for task to start.
@@ -236,6 +241,7 @@ async fn vad_hangover_emits_end_and_resets() {
         cancel.clone(),
         Arc::clone(&device_tasks),
         Arc::clone(&metrics),
+        opentelemetry::Context::new(),
     ));
 
     let timeout = std::time::Duration::from_secs(2);
@@ -250,7 +256,11 @@ async fn vad_hangover_emits_end_and_resets() {
     // still classify as speech and reset the hangover counter. 30 frames
     // (~600ms) is more than enough headroom for hangover_threshold=5.
     for _ in 0..30 {
-        handles.frame_tx.send(silence_frame()).await.unwrap();
+        handles.frame_tx.send(AudioFrame {
+            data: Bytes::from(vec![0; 960 * 2]), // 20ms of mono PCM16 at 48kHz.
+            sample_rate: 48_000,
+            timestamp: 0,
+        }).await.unwrap();
     }
 
     // Drain frames until we see End (or timeout).

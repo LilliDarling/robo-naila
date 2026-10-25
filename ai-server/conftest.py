@@ -73,17 +73,17 @@ def reset_caches():
     """Clear LRU caches between tests.
 
     Clears both before and after each test. The class-level @lru_cache on
-    InputProcessor._detect_intent uses (self, text) as its key — but Python
+    InputProcessor._classify_intent uses (self, text) as its key — but Python
     can recycle object ids across instances, so a cached result from an
     earlier processor instance can shadow a later one with the same id. Clear
     on both sides to guarantee isolation regardless of test order.
     """
     from agents.input_processor import InputProcessor
-    if hasattr(InputProcessor, '_detect_intent'):
-        InputProcessor._detect_intent.cache_clear()
+    if hasattr(InputProcessor, '_classify_intent'):
+        InputProcessor._classify_intent.cache_clear()
     yield
-    if hasattr(InputProcessor, '_detect_intent'):
-        InputProcessor._detect_intent.cache_clear()
+    if hasattr(InputProcessor, '_classify_intent'):
+        InputProcessor._classify_intent.cache_clear()
 
 
 @pytest.fixture

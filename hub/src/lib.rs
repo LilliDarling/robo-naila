@@ -5,3 +5,9 @@ pub mod http;
 pub mod metrics;
 pub mod vad;
 pub mod webrtc;
+pub mod otel;
+mod timing;
+
+#[cfg(test)]
+#[path = "../tests/support/telemetry.rs"]
+mod test_telemetry;

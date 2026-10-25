@@ -13,7 +13,7 @@ class TestInputProcessor:
     def processor(self, disable_hardware_optimization):
         """Create InputProcessor instance with mocked hardware.
 
-        Clears the class-level @lru_cache on _detect_intent after wiring up
+        Clears the class-level @lru_cache on _classify_intent after wiring up
         the mock. The cache key is (self, text); Python reuses object ids
         across instances, so a stale entry from a previous test's processor
         can shadow this one and silently return the wrong intent.
@@ -30,7 +30,7 @@ class TestInputProcessor:
                 "greeting": np.array([0.1, 0.2, 0.3]),
                 "time_query": np.array([0.2, 0.3, 0.4])
             }
-            InputProcessor._detect_intent.cache_clear()
+            InputProcessor._classify_intent.cache_clear()
             return processor
     
     @pytest.fixture 

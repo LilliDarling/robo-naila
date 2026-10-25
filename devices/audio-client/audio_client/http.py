@@ -17,6 +17,7 @@ async def exchange_sdp(
     device_id: str,
     offer_sdp: str,
     profile: DeviceProfile | None = None,
+    trace_header: str | None = None,
 ) -> str:
     """POST the SDP offer to the hub and return the SDP answer.
 
@@ -31,7 +32,8 @@ async def exchange_sdp(
         payload["preferred_output_sample_rate"] = profile.preferred_output_sample_rate
         payload["supported_output_codecs"] = [c.value for c in profile.supported_output_codecs]
 
-    async with session.post(url, json=payload) as resp:
+    headers = {"traceparent": trace_header} if trace_header else {}
+    async with session.post(url, json=payload, headers=headers) as resp:
         if resp.status != 200:
             body = await resp.text()
             raise RuntimeError(f"SDP exchange failed ({resp.status}): {body}")

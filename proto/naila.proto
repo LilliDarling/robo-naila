@@ -47,6 +47,9 @@ message AudioInput {
   // Client capabilities — set on first message with SPEECH_EVENT_START,
   // ignored on subsequent messages.
   SessionConfig session_config = 15;
+
+  // W3C parent context, meaningful on START only.
+  string traceparent = 16;
 }
 
 // Session configuration sent on the first message of a stream.

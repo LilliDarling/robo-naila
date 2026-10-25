@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from cachetools import TTLCache
 from agents.base import BaseAgent
 from config import llm as llm_config
+from services.timing import turn_outcome
 
 
 class ResponseGenerator(BaseAgent):
@@ -101,6 +102,7 @@ class ResponseGenerator(BaseAgent):
         response = ""
         streamed = False
         if action_handled:
+            turn_outcome("skipped_llm")
             response = state.get("response_text", "") or ""
         elif can_stream:
             try:
@@ -289,10 +291,12 @@ class ResponseGenerator(BaseAgent):
         # Handle visual query responses
         if visual_context:
             if result := visual_context.get("answer") or visual_context.get("description"):
+                turn_outcome("skipped_llm")
                 return result
 
         # Handle low confidence inputs
         if confidence < 0.3:
+            turn_outcome("skipped_llm")
             return self._generate_clarification_response(text, confidence)
 
         # Try LLM generation first if available
@@ -305,6 +309,7 @@ class ResponseGenerator(BaseAgent):
             except Exception as e:
                 self.logger.warning("llm_generation_failed", error=str(e), error_type=type(e).__name__, fallback="pattern-based")
 
+        turn_outcome("fallback")
         # Fallback to pattern-based responses
         self.logger.debug("pattern_response_used")
 

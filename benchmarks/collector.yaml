@@ -1,0 +1,18 @@
+# Validated with otelcol-contrib 0.137.0. Collector is the sole capture-file writer.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: ${env:NAILA_COLLECTOR_GRPC_ENDPOINT}
+      http:
+        endpoint: ${env:NAILA_COLLECTOR_ENDPOINT}
+exporters:
+  file:
+    path: ${env:NAILA_CAPTURE_DIR}/traces.jsonl
+    format: json
+    flush_interval: 100ms
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [file]
